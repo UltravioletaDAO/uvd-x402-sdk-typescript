@@ -1,0 +1,141 @@
+{
+  "name": "uvd-x402-sdk",
+  "version": "2.0.0",
+  "description": "x402 Payment SDK - Gasless crypto payments across 15 blockchains via Ultravioleta facilitator. Supports EVM, Solana, Fogo, Stellar, and NEAR.",
+  "author": "Ultravioleta DAO <developers@ultravioletadao.xyz>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ultravioletadao/uvd-x402-sdk"
+  },
+  "homepage": "https://402milly.xyz",
+  "keywords": [
+    "x402",
+    "crypto",
+    "payments",
+    "usdc",
+    "ethereum",
+    "solana",
+    "stellar",
+    "near",
+    "fogo",
+    "gasless",
+    "web3",
+    "blockchain",
+    "evm",
+    "svm",
+    "nep-366",
+    "eip-712",
+    "caip-2"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./evm": {
+      "import": "./dist/providers/evm/index.mjs",
+      "require": "./dist/providers/evm/index.js",
+      "types": "./dist/providers/evm/index.d.ts"
+    },
+    "./solana": {
+      "import": "./dist/providers/solana/index.mjs",
+      "require": "./dist/providers/solana/index.js",
+      "types": "./dist/providers/solana/index.d.ts"
+    },
+    "./svm": {
+      "import": "./dist/providers/solana/index.mjs",
+      "require": "./dist/providers/solana/index.js",
+      "types": "./dist/providers/solana/index.d.ts"
+    },
+    "./stellar": {
+      "import": "./dist/providers/stellar/index.mjs",
+      "require": "./dist/providers/stellar/index.js",
+      "types": "./dist/providers/stellar/index.d.ts"
+    },
+    "./near": {
+      "import": "./dist/providers/near/index.mjs",
+      "require": "./dist/providers/near/index.js",
+      "types": "./dist/providers/near/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react/index.mjs",
+      "require": "./dist/react/index.js",
+      "types": "./dist/react/index.d.ts"
+    },
+    "./utils": {
+      "import": "./dist/utils/index.mjs",
+      "require": "./dist/utils/index.js",
+      "types": "./dist/utils/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": "^1.87.0",
+    "@solana/spl-token": "^0.4.0",
+    "@stellar/stellar-sdk": "^13.0.0",
+    "@stellar/freighter-api": "^3.0.0",
+    "@near-wallet-selector/core": "^8.0.0",
+    "@near-wallet-selector/my-near-wallet": "^8.0.0",
+    "@walletconnect/ethereum-provider": "^2.17.0",
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@solana/web3.js": {
+      "optional": true
+    },
+    "@solana/spl-token": {
+      "optional": true
+    },
+    "@stellar/stellar-sdk": {
+      "optional": true
+    },
+    "@stellar/freighter-api": {
+      "optional": true
+    },
+    "@near-wallet-selector/core": {
+      "optional": true
+    },
+    "@near-wallet-selector/my-near-wallet": {
+      "optional": true
+    },
+    "@walletconnect/ethereum-provider": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "rimraf": "^6.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
