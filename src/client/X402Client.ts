@@ -24,7 +24,6 @@ import {
   getChainByName,
   getChainById,
   getEnabledChains,
-  getNetworkType,
 } from '../chains';
 
 /**
@@ -437,16 +436,18 @@ export class X402Client {
   private setupEVMEventListeners(): void {
     if (typeof window === 'undefined' || !window.ethereum) return;
 
-    window.ethereum.on?.('accountsChanged', (accounts: string[]) => {
+    window.ethereum.on?.('accountsChanged', ((...args: unknown[]) => {
+      const accounts = args[0] as string[];
       if (accounts.length === 0) {
         this.disconnect();
       } else if (accounts[0] !== this.connectedAddress) {
         this.connectedAddress = accounts[0];
         this.emit('accountChanged', { address: accounts[0] });
       }
-    });
+    }) as (...args: unknown[]) => void);
 
-    window.ethereum.on?.('chainChanged', (chainIdHex: string) => {
+    window.ethereum.on?.('chainChanged', ((...args: unknown[]) => {
+      const chainIdHex = args[0] as string;
       const chainId = parseInt(chainIdHex, 16);
       const chain = getChainById(chainId);
       if (chain) {
@@ -454,7 +455,7 @@ export class X402Client {
         this.currentChainName = chain.name;
         this.emit('chainChanged', { chainId, chainName: chain.name });
       }
-    });
+    }) as (...args: unknown[]) => void);
   }
 
   // ============================================================================
@@ -624,8 +625,11 @@ export class X402Client {
   // ============================================================================
 
   private getRecipientForNetwork(paymentInfo: PaymentInfo, network: NetworkType): string {
-    if (paymentInfo.recipients?.[network]) {
-      return paymentInfo.recipients[network]!;
+    // Map SVM to solana for recipient lookup
+    const lookupNetwork = network === 'svm' ? 'solana' : network;
+    const recipients = paymentInfo.recipients as Record<string, string> | undefined;
+    if (recipients?.[lookupNetwork]) {
+      return recipients[lookupNetwork];
     }
     return paymentInfo.recipient;
   }

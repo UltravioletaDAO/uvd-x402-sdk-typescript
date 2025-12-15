@@ -196,7 +196,8 @@ export class SVMProvider implements WalletAdapter {
     }
 
     await this.initConnection(chainConfig);
-    if (!this.connection) {
+    const connection = this.connections.get(chainConfig.name);
+    if (!connection) {
       throw new X402Error('Failed to connect to Solana RPC', 'NETWORK_ERROR');
     }
 
@@ -363,11 +364,8 @@ export class SVMProvider implements WalletAdapter {
       );
     }
 
-    // Serialize partially-signed transaction
-    const serialized = signedTransaction.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    });
+    // Serialize partially-signed transaction (VersionedTransaction.serialize takes no args)
+    const serialized = signedTransaction.serialize();
 
     const payload: SolanaPaymentPayload = {
       transaction: Buffer.from(serialized).toString('base64'),
@@ -475,6 +473,5 @@ export class SolanaProvider extends SVMProvider {
   }
 }
 
-// Export both for backward compatibility
-export { SVMProvider, SolanaProvider };
+// Default export
 export default SVMProvider;

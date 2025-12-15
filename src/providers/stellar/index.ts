@@ -27,7 +27,6 @@ import type {
   WalletAdapter,
 } from '../../types';
 import { X402Error } from '../../types';
-import { getChainByName } from '../../chains';
 
 // Stellar configuration
 const STELLAR_CONFIG = {
@@ -130,7 +129,7 @@ export class StellarProvider implements WalletAdapter {
   /**
    * Get USDC balance
    */
-  async getBalance(chainConfig: ChainConfig): Promise<string> {
+  async getBalance(_chainConfig: ChainConfig): Promise<string> {
     if (!this.publicKey) {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
     }
@@ -231,7 +230,7 @@ export class StellarProvider implements WalletAdapter {
       });
 
       const invocation = new xdr.SorobanAuthorizedInvocation({
-        function: xdr.SorobanAuthorizedFunctionTypeContractFn(contractFn),
+        function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(contractFn),
         subInvocations: [],
       });
 

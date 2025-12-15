@@ -34,7 +34,6 @@ import type {
   WalletAdapter,
 } from '../../types';
 import { X402Error } from '../../types';
-import { getChainByName } from '../../chains';
 
 // NEAR configuration
 const NEAR_CONFIG = {
@@ -165,7 +164,7 @@ function serializeSignedDelegateAction(
  * SHA-256 hash function
  */
 async function sha256(data: Uint8Array): Promise<Uint8Array> {
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data as BufferSource);
   return new Uint8Array(hashBuffer);
 }
 

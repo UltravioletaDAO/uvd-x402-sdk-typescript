@@ -92,7 +92,7 @@ export function caip2ToChain(caip2: string): string | null {
   if (match) {
     const chainId = parseInt(match[1], 10);
     // Find chain by ID
-    for (const [name, config] of Object.entries(CAIP2_IDENTIFIERS)) {
+    for (const [name, _config] of Object.entries(CAIP2_IDENTIFIERS)) {
       const chain = getChainByName(name);
       if (chain?.chainId === chainId) {
         return name;
