@@ -47,6 +47,18 @@ import type {
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
 
+/**
+ * Browser-compatible base64 encoding for Uint8Array
+ * Avoids Node.js Buffer dependency for browser bundlers
+ */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 // Lazy import Solana dependencies to avoid bundling when not used
 let Connection: typeof import('@solana/web3.js').Connection;
 let PublicKey: typeof import('@solana/web3.js').PublicKey;
@@ -368,7 +380,7 @@ export class SVMProvider implements WalletAdapter {
     const serialized = signedTransaction.serialize();
 
     const payload: SolanaPaymentPayload = {
-      transaction: Buffer.from(serialized).toString('base64'),
+      transaction: uint8ArrayToBase64(serialized),
     };
 
     return JSON.stringify(payload);

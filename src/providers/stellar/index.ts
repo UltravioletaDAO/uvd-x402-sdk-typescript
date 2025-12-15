@@ -28,6 +28,26 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 
+/**
+ * Browser-compatible text to Uint8Array encoding
+ * Avoids Node.js Buffer dependency for browser bundlers
+ */
+function stringToUint8Array(str: string): Uint8Array {
+  return new TextEncoder().encode(str);
+}
+
+/**
+ * Browser-compatible base64 decoding to Uint8Array
+ */
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 // Stellar configuration
 const STELLAR_CONFIG = {
   networkPassphrase: 'Public Global Stellar Network ; September 2015',
@@ -235,7 +255,8 @@ export class StellarProvider implements WalletAdapter {
       });
 
       // Build HashIdPreimageSorobanAuthorization for signing
-      const networkId = hash(Buffer.from(Networks.PUBLIC));
+      // Cast to Buffer for hash() - Uint8Array is compatible at runtime
+      const networkId = hash(stringToUint8Array(Networks.PUBLIC) as unknown as Buffer);
 
       const preimageData = new xdr.HashIdPreimageSorobanAuthorization({
         networkId: networkId,
@@ -261,7 +282,7 @@ export class StellarProvider implements WalletAdapter {
       }
 
       // Build the signed SorobanAuthorizationEntry
-      const signatureBytes = Buffer.from(signResult.signedAuthEntry, 'base64');
+      const signatureBytes = base64ToUint8Array(signResult.signedAuthEntry);
       const publicKeyBytes = StrKey.decodeEd25519PublicKey(this.publicKey);
 
       const sigMapEntries = [
@@ -271,7 +292,7 @@ export class StellarProvider implements WalletAdapter {
         }),
         new xdr.ScMapEntry({
           key: xdr.ScVal.scvSymbol('signature'),
-          val: xdr.ScVal.scvBytes(signatureBytes),
+          val: xdr.ScVal.scvBytes(signatureBytes as unknown as Buffer),
         }),
       ];
 
