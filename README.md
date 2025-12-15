@@ -778,5 +778,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 - [x402 Protocol](https://x402.org)
 - [Ultravioleta DAO](https://ultravioletadao.xyz)
 - [402milly](https://402milly.xyz)
-- [GitHub](https://github.com/ultravioletadao/uvd-x402-sdk)
+- [GitHub](https://github.com/UltravioletaDAO/uvd-x402-sdk-typescript)
 - [npm](https://www.npmjs.com/package/uvd-x402-sdk)
