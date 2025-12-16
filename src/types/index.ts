@@ -26,7 +26,7 @@ export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near';
 export interface USDCConfig {
   /** Contract/mint address */
   address: string;
-  /** Token decimals (6 for most chains, 7 for Stellar, 18 for BSC) */
+  /** Token decimals (6 for most chains, 7 for Stellar) */
   decimals: number;
   /** Token name for EIP-712 domain (e.g., "USD Coin" or "USDC") */
   name: string;
@@ -298,7 +298,6 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   hyperevm: 'eip155:999',
   unichain: 'eip155:130',
   monad: 'eip155:143',
-  bsc: 'eip155:56',
   // SVM chains
   solana: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
   fogo: 'svm:fogo',

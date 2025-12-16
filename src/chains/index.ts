@@ -25,7 +25,7 @@ export const DEFAULT_FACILITATOR_URL = 'https://facilitator.ultravioletadao.xyz'
  */
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // ============================================================================
-  // EVM CHAINS (11 networks)
+  // EVM CHAINS (10 networks)
   // ============================================================================
 
   base: {
@@ -275,32 +275,6 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
-    },
-  },
-
-  // BSC disabled: USDC doesn't support ERC-3009 transferWithAuthorization
-  bsc: {
-    chainId: 56,
-    chainIdHex: '0x38',
-    name: 'bsc',
-    displayName: 'BNB Smart Chain',
-    networkType: 'evm',
-    rpcUrl: 'https://binance.llamarpc.com',
-    explorerUrl: 'https://bscscan.com',
-    nativeCurrency: {
-      name: 'Binance Coin',
-      symbol: 'BNB',
-      decimals: 18,
-    },
-    usdc: {
-      address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
-      decimals: 18, // BSC USDC uses 18 decimals
-      name: 'USD Coin',
-      version: '2',
-    },
-    x402: {
-      facilitatorUrl: DEFAULT_FACILITATOR_URL,
-      enabled: false, // Disabled: BSC USDC doesn't support ERC-3009
     },
   },
 

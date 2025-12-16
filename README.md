@@ -1,12 +1,12 @@
 # uvd-x402-sdk
 
-> Gasless crypto payments across 15 blockchain networks using the x402 protocol.
+> Gasless crypto payments across 14 blockchain networks using the x402 protocol.
 
 The x402 SDK enables any application to accept USDC payments without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
 
 ## Features
 
-- **15 Supported Networks**: EVM chains, Solana, Fogo, Stellar, and NEAR
+- **14 Supported Networks**: EVM chains, Solana, Fogo, Stellar, and NEAR
 - **x402 v1 & v2**: Full support for both protocol versions with automatic detection
 - **Gasless Payments**: Users never pay gas - the facilitator covers all network fees
 - **Multi-Network**: Accept payments on multiple networks simultaneously
@@ -553,7 +553,7 @@ function PaymentPage() {
 
 ## Supported Networks
 
-### EVM Networks (11)
+### EVM Networks (10)
 
 | Network | Chain ID | USDC Decimals | Status |
 |---------|----------|---------------|--------|
@@ -567,9 +567,6 @@ function PaymentPage() {
 | HyperEVM | 999 | 6 | Enabled |
 | Unichain | 130 | 6 | Enabled |
 | Monad | 143 | 6 | Enabled |
-| BSC | 56 | 18 | Disabled* |
-
-*BSC USDC doesn't support ERC-3009 transferWithAuthorization
 
 ### SVM Networks (2)
 
@@ -724,7 +721,7 @@ Install MyNearWallet or Meteor wallet for NEAR support.
 
 #### "Chain not supported"
 
-Check if the chain is enabled in `SUPPORTED_CHAINS`. BSC is disabled because its USDC doesn't support ERC-3009.
+Check if the chain is enabled in `SUPPORTED_CHAINS`.
 
 #### "Signature rejected by user"
 
