@@ -69,9 +69,66 @@ npm install react
 
 ---
 
+## WalletConnect Integration
+
+The SDK works with any EVM wallet that injects into `window.ethereum`, including:
+
+- **Browser extensions**: MetaMask, Rainbow, Rabby, Coinbase Wallet
+- **Mobile wallets**: Rainbow, MetaMask Mobile, Trust Wallet (via WalletConnect)
+
+### Using WalletConnect (Mobile Wallets)
+
+For mobile wallet support (Rainbow, MetaMask Mobile, etc.), initialize WalletConnect before using the SDK:
+
+```typescript
+import { EthereumProvider } from '@walletconnect/ethereum-provider';
+import { X402Client } from 'uvd-x402-sdk';
+
+// 1. Initialize WalletConnect
+const walletConnectProvider = await EthereumProvider.init({
+  projectId: 'YOUR_WALLETCONNECT_PROJECT_ID', // Get from cloud.walletconnect.com
+  chains: [8453], // Base mainnet
+  optionalChains: [1, 137, 42161, 10], // ETH, Polygon, Arbitrum, Optimism
+  showQrModal: true,
+});
+
+// 2. Connect wallet (shows QR code for mobile wallet to scan)
+await walletConnectProvider.connect();
+
+// 3. Use the SDK normally
+const client = new X402Client({ defaultChain: 'base' });
+const address = await client.connect('base');
+
+// 4. Create payment
+const result = await client.createPayment({
+  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+  amount: '10.00',
+});
+```
+
+### Using Browser Extensions (Rainbow, MetaMask, etc.)
+
+Browser extension wallets work automatically - no extra setup needed:
+
+```typescript
+import { X402Client } from 'uvd-x402-sdk';
+
+const client = new X402Client({ defaultChain: 'base' });
+
+// Connects to whatever wallet is installed (Rainbow, MetaMask, Rabby, etc.)
+const address = await client.connect('base');
+
+const result = await client.createPayment({
+  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+  amount: '10.00',
+});
+```
+
+---
+
 ## Network Examples
 
-### EVM Chains (11 Networks)
+### EVM Chains (10 Networks)
 
 All EVM chains use EIP-712 typed data signing with ERC-3009 TransferWithAuthorization.
 
