@@ -446,6 +446,10 @@ export class SVMProvider implements WalletAdapter {
 
   /**
    * Get or create a connection for a specific chain
+   *
+   * IMPORTANT: Caches by RPC URL, not chain name. This allows consumers to
+   * override the RPC URL (e.g., use Helius instead of public RPC) and get
+   * a fresh connection with their custom RPC.
    */
   private async getConnection(chainConfig?: ChainConfig): Promise<InstanceType<typeof Connection>> {
     await loadSolanaDeps();
@@ -455,14 +459,17 @@ export class SVMProvider implements WalletAdapter {
       throw new X402Error('Chain config not found', 'CHAIN_NOT_SUPPORTED');
     }
 
-    // Check if we already have a connection for this chain
-    if (this.connections.has(config.name)) {
-      return this.connections.get(config.name)!;
+    // Cache by RPC URL, not chain name - allows custom RPC overrides
+    const cacheKey = config.rpcUrl;
+
+    // Check if we already have a connection for this RPC
+    if (this.connections.has(cacheKey)) {
+      return this.connections.get(cacheKey)!;
     }
 
-    // Create new connection for this chain
+    // Create new connection for this RPC
     const connection = new Connection(config.rpcUrl, 'confirmed');
-    this.connections.set(config.name, connection);
+    this.connections.set(cacheKey, connection);
 
     return connection;
   }
