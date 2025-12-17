@@ -318,9 +318,11 @@ export class SVMProvider implements WalletAdapter {
     );
 
     // Instruction 1: SetComputeUnitPrice
+    // Use 100k microlamports/CU for fast landing on mainnet
+    // Lower values (like 1) cause transactions to be deprioritized and time out
     instructions.push(
       ComputeBudgetProgram.setComputeUnitPrice({
-        microLamports: 1,
+        microLamports: 100_000,
       })
     );
 
@@ -362,6 +364,9 @@ export class SVMProvider implements WalletAdapter {
     const transaction = new VersionedTransaction(messageV0);
 
     // User signs (partial signature - facilitator will co-sign)
+    // IMPORTANT: Phantom may modify the transaction (add memo instruction).
+    // We send the FULL signed transaction to the facilitator, which will use it
+    // exactly as signed (not reconstruct it). This ensures signature validity.
     let signedTransaction: InstanceType<typeof VersionedTransaction>;
     try {
       signedTransaction = await this.provider.signTransaction(transaction);
@@ -376,7 +381,8 @@ export class SVMProvider implements WalletAdapter {
       );
     }
 
-    // Serialize partially-signed transaction (VersionedTransaction.serialize takes no args)
+    // Serialize the FULL signed transaction (including any wallet modifications)
+    // The facilitator will use this exact transaction, adding only its signature
     const serialized = signedTransaction.serialize();
 
     const payload: SolanaPaymentPayload = {
