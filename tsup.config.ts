@@ -9,6 +9,7 @@ export default defineConfig({
     'providers/near/index': 'src/providers/near/index.ts',
     'utils/index': 'src/utils/index.ts',
     'react/index': 'src/react/index.tsx',
+    'adapters/index': 'src/adapters/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,
