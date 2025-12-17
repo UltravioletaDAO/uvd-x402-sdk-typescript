@@ -13,6 +13,7 @@ The x402 SDK enables any application to accept USDC payments without requiring u
 - **Type-Safe**: Comprehensive TypeScript definitions
 - **Framework Agnostic**: Works with any JavaScript framework
 - **React Hooks**: First-class React integration
+- **Wagmi/RainbowKit**: Dedicated adapter for wagmi-based apps
 - **Modular**: Import only what you need
 
 ## Quick Start
@@ -122,6 +123,117 @@ const result = await client.createPayment({
   recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
   amount: '10.00',
 });
+```
+
+---
+
+## Wagmi / RainbowKit Integration
+
+If you're using wagmi with RainbowKit, ConnectKit, or other wagmi-based wallet libraries, use the dedicated wagmi adapter:
+
+```typescript
+import { useWalletClient } from 'wagmi';
+import { createPaymentFromWalletClient } from 'uvd-x402-sdk/wagmi';
+
+function PayButton() {
+  const { data: walletClient } = useWalletClient();
+
+  const handlePay = async () => {
+    const paymentHeader = await createPaymentFromWalletClient(walletClient, {
+      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+      amount: '10.00',
+      chainName: 'base', // optional, defaults to 'base'
+    });
+
+    // Use in your API request
+    await fetch('/api/purchase', {
+      headers: { 'X-PAYMENT': paymentHeader },
+      method: 'POST',
+    });
+  };
+
+  return <button onClick={handlePay}>Pay $10 USDC</button>;
+}
+```
+
+### With the Helper Hook
+
+```typescript
+import { useWalletClient } from 'wagmi';
+import { useX402Wagmi } from 'uvd-x402-sdk/wagmi';
+
+function PayButton() {
+  const { data: walletClient } = useWalletClient();
+  const { createPayment, isReady } = useX402Wagmi(walletClient);
+
+  const handlePay = async () => {
+    const paymentHeader = await createPayment({
+      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+      amount: '10.00',
+    });
+
+    await fetch('/api/purchase', {
+      headers: { 'X-PAYMENT': paymentHeader },
+    });
+  };
+
+  return (
+    <button onClick={handlePay} disabled={!isReady}>
+      Pay $10 USDC
+    </button>
+  );
+}
+```
+
+### Full Example with RainbowKit
+
+```tsx
+import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useWalletClient, useAccount } from 'wagmi';
+import { createPaymentFromWalletClient } from 'uvd-x402-sdk/wagmi';
+
+function App() {
+  const { data: walletClient } = useWalletClient();
+  const { isConnected } = useAccount();
+
+  const handlePurchase = async () => {
+    if (!walletClient) return;
+
+    try {
+      const paymentHeader = await createPaymentFromWalletClient(walletClient, {
+        recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+        amount: '5.00',
+        chainName: 'base',
+      });
+
+      const response = await fetch('/api/purchase', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-PAYMENT': paymentHeader,
+        },
+        body: JSON.stringify({ item: 'premium-feature' }),
+      });
+
+      if (response.ok) {
+        alert('Purchase successful!');
+      }
+    } catch (error) {
+      console.error('Payment failed:', error);
+    }
+  };
+
+  return (
+    <div>
+      <ConnectButton />
+      {isConnected && (
+        <button onClick={handlePurchase}>
+          Buy Premium ($5 USDC)
+        </button>
+      )}
+    </div>
+  );
+}
 ```
 
 ---
@@ -703,6 +815,33 @@ import {
   convertX402Header,
   generatePaymentOptions,
 } from 'uvd-x402-sdk';
+```
+
+### Wagmi Adapter
+
+```typescript
+import {
+  createPaymentFromWalletClient,
+  createPaymentWithResult,
+  useX402Wagmi,
+} from 'uvd-x402-sdk/wagmi';
+```
+
+| Function | Description |
+|----------|-------------|
+| `createPaymentFromWalletClient(walletClient, options)` | Create payment header using wagmi's WalletClient |
+| `createPaymentWithResult(walletClient, options)` | Same as above but returns full PaymentResult |
+| `useX402Wagmi(walletClient)` | Helper hook returning `{ createPayment, isReady }` |
+
+#### Options
+
+```typescript
+interface WagmiPaymentOptions {
+  recipient: string;        // Recipient address
+  amount: string;           // Amount in USDC (e.g., "10.00")
+  chainName?: string;       // Chain name (default: 'base')
+  validitySeconds?: number; // Signature validity window (default: 300)
+}
 ```
 
 ---
