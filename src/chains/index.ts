@@ -8,7 +8,7 @@
  * NEAR (1): Uses NEP-366 meta-transactions
  */
 
-import type { ChainConfig, NetworkType } from '../types';
+import type { ChainConfig, NetworkType, TokenType, TokenConfig } from '../types';
 
 /**
  * Default facilitator URL for x402 payments
@@ -47,6 +47,26 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       name: 'USD Coin',
       version: '2',
     },
+    tokens: {
+      usdc: {
+        address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+      eurc: {
+        address: '0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42',
+        decimals: 6,
+        name: 'EURC',
+        version: '2',
+      },
+      gho: {
+        address: '0x6Bb7a212910682DCFdbd5BCBb3e28FB4E8da10Ee',
+        decimals: 18,
+        name: 'Gho Token',
+        version: '1',
+      },
+    },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
@@ -71,6 +91,26 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       decimals: 6,
       name: 'USD Coin',
       version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+      eurc: {
+        address: '0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD',
+        decimals: 6,
+        name: 'EURC',
+        version: '2',
+      },
+      ausd: {
+        address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+        decimals: 6,
+        name: 'Agora USD',
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -97,6 +137,44 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       name: 'USD Coin',
       version: '2',
     },
+    tokens: {
+      usdc: {
+        address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+      eurc: {
+        address: '0x1aBaEA1f7C830bD89Acc67eC4af516284b1bC33c',
+        decimals: 6,
+        name: 'EURC',
+        version: '2',
+      },
+      ausd: {
+        address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+        decimals: 6,
+        name: 'Agora USD',
+        version: '1',
+      },
+      pyusd: {
+        address: '0x6c3ea9036406852006290770BEdFcAbA0e23A0e8',
+        decimals: 6,
+        name: 'PayPal USD',
+        version: '1',
+      },
+      gho: {
+        address: '0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f',
+        decimals: 18,
+        name: 'Gho Token',
+        version: '1',
+      },
+      crvusd: {
+        address: '0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E',
+        decimals: 18,
+        name: 'Curve.Fi USD Stablecoin',
+        version: '1',
+      },
+    },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
@@ -121,6 +199,20 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       decimals: 6,
       name: 'USD Coin',
       version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+      ausd: {
+        address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+        decimals: 6,
+        name: 'Agora USD',
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -147,6 +239,32 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       name: 'USD Coin',
       version: '2',
     },
+    tokens: {
+      usdc: {
+        address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+      ausd: {
+        address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+        decimals: 6,
+        name: 'Agora USD',
+        version: '1',
+      },
+      gho: {
+        address: '0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33',
+        decimals: 18,
+        name: 'Gho Token',
+        version: '1',
+      },
+      crvusd: {
+        address: '0x498Bf2B1e120FeD3ad3D42EA2165E9b73f99C1e5',
+        decimals: 18,
+        name: 'Curve.Fi USD Stablecoin',
+        version: '1',
+      },
+    },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
@@ -171,6 +289,14 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       decimals: 6,
       name: 'USD Coin',
       version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -197,6 +323,14 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       name: 'USDC',  // Celo uses "USDC" not "USD Coin" for EIP-712
       version: '2',
     },
+    tokens: {
+      usdc: {
+        address: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
+        decimals: 6,
+        name: 'USDC',  // Celo uses "USDC" not "USD Coin" for EIP-712
+        version: '2',
+      },
+    },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
@@ -221,6 +355,14 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       decimals: 6,
       name: 'USDC',  // HyperEVM uses "USDC" not "USD Coin"
       version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0xb88339CB7199b77E23DB6E890353E22632Ba630f',
+        decimals: 6,
+        name: 'USDC',  // HyperEVM uses "USDC" not "USD Coin"
+        version: '2',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -247,6 +389,14 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       name: 'USDC',  // Unichain uses "USDC" not "USD Coin"
       version: '2',
     },
+    tokens: {
+      usdc: {
+        address: '0x078d782b760474a361dda0af3839290b0ef57ad6',
+        decimals: 6,
+        name: 'USDC',  // Unichain uses "USDC" not "USD Coin"
+        version: '2',
+      },
+    },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
@@ -271,6 +421,20 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       decimals: 6,
       name: 'USDC',  // Monad uses "USDC" not "USD Coin"
       version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x754704bc059f8c67012fed69bc8a327a5aafb603',
+        decimals: 6,
+        name: 'USDC',  // Monad uses "USDC" not "USD Coin"
+        version: '2',
+      },
+      ausd: {
+        address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+        decimals: 6,
+        name: 'Agora USD',
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -510,4 +674,94 @@ export function getExplorerAddressUrl(chainName: string, address: string): strin
     default:
       return null;
   }
+}
+
+// ============================================================================
+// MULTI-TOKEN SUPPORT FUNCTIONS
+// ============================================================================
+
+/**
+ * Get token configuration for a specific chain and token type
+ * Falls back to USDC config if token not found (for backward compatibility)
+ *
+ * @param chainName - Chain name (e.g., 'ethereum', 'base')
+ * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'gho')
+ * @returns Token configuration or undefined if chain not found
+ */
+export function getTokenConfig(
+  chainName: string,
+  tokenType: TokenType = 'usdc'
+): TokenConfig | undefined {
+  const chain = getChainByName(chainName);
+  if (!chain) return undefined;
+
+  // Try to get from tokens map first (new multi-token support)
+  if (chain.tokens && chain.tokens[tokenType]) {
+    return chain.tokens[tokenType];
+  }
+
+  // Fall back to usdc config for backward compatibility
+  if (tokenType === 'usdc') {
+    return chain.usdc;
+  }
+
+  return undefined;
+}
+
+/**
+ * Get list of supported tokens for a chain
+ *
+ * @param chainName - Chain name (e.g., 'ethereum', 'base')
+ * @returns Array of supported token types, or empty array if chain not found
+ */
+export function getSupportedTokens(chainName: string): TokenType[] {
+  const chain = getChainByName(chainName);
+  if (!chain) return [];
+
+  // If tokens map exists, return its keys
+  if (chain.tokens) {
+    return Object.keys(chain.tokens) as TokenType[];
+  }
+
+  // Default to just USDC for chains without explicit tokens map
+  return ['usdc'];
+}
+
+/**
+ * Check if a token is supported on a specific chain
+ *
+ * @param chainName - Chain name (e.g., 'ethereum', 'base')
+ * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'gho')
+ * @returns true if token is supported on the chain
+ */
+export function isTokenSupported(chainName: string, tokenType: TokenType): boolean {
+  const chain = getChainByName(chainName);
+  if (!chain) return false;
+
+  // Check tokens map
+  if (chain.tokens && chain.tokens[tokenType]) {
+    return true;
+  }
+
+  // USDC is always supported (backward compatibility)
+  if (tokenType === 'usdc') {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get all chains that support a specific token
+ *
+ * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'gho')
+ * @returns Array of chain configs that support the token
+ */
+export function getChainsByToken(tokenType: TokenType): ChainConfig[] {
+  return Object.values(SUPPORTED_CHAINS).filter(chain => {
+    if (!chain.x402.enabled) return false;
+    if (chain.tokens && chain.tokens[tokenType]) return true;
+    if (tokenType === 'usdc') return true; // USDC is universal
+    return false;
+  });
 }

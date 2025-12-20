@@ -95,6 +95,11 @@ export {
   getNetworkType,
   getExplorerTxUrl,
   getExplorerAddressUrl,
+  // Multi-token support functions
+  getTokenConfig,
+  getSupportedTokens,
+  isTokenSupported,
+  getChainsByToken,
 } from './chains';
 
 // x402 utilities
@@ -120,6 +125,10 @@ export type {
   USDCConfig,
   NativeCurrency,
   NetworkType,
+
+  // Token types (multi-token support)
+  TokenType,
+  TokenConfig,
 
   // Wallet types
   WalletState,

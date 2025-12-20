@@ -21,7 +21,33 @@
 export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near';
 
 /**
+ * Supported stablecoin token types
+ * - usdc: USD Coin (Circle) - 6 decimals
+ * - eurc: Euro Coin (Circle) - 6 decimals
+ * - ausd: Agora USD (Agora Finance) - 6 decimals
+ * - pyusd: PayPal USD (PayPal/Paxos) - 6 decimals
+ * - gho: GHO Stablecoin (Aave) - 18 decimals
+ * - crvusd: Curve USD (Curve Finance) - 18 decimals
+ */
+export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'gho' | 'crvusd';
+
+/**
+ * Token configuration for EIP-712 signing and transfers
+ */
+export interface TokenConfig {
+  /** Contract/mint address */
+  address: string;
+  /** Token decimals (6 for most stablecoins, 18 for GHO/crvUSD) */
+  decimals: number;
+  /** Token name for EIP-712 domain (e.g., "USD Coin" or "USDC") */
+  name: string;
+  /** Token version for EIP-712 domain */
+  version: string;
+}
+
+/**
  * USDC token configuration for a specific chain
+ * @deprecated Use TokenConfig instead. This is kept for backward compatibility.
  */
 export interface USDCConfig {
   /** Contract/mint address */
@@ -65,6 +91,12 @@ export interface ChainConfig {
   nativeCurrency: NativeCurrency;
   /** USDC token configuration */
   usdc: USDCConfig;
+  /**
+   * Multi-token configurations (EVM chains only)
+   * Maps token type to its configuration for this chain.
+   * Not all tokens are available on all chains.
+   */
+  tokens?: Partial<Record<TokenType, TokenConfig>>;
   /** x402 facilitator configuration */
   x402: {
     facilitatorUrl: string;
@@ -117,11 +149,17 @@ export interface WalletAdapter {
   /** Switch to a different chain (EVM only) */
   switchChain?(chainName: string): Promise<void>;
 
-  /** Sign a payment payload */
+  /**
+   * Sign a payment payload
+   * For EVM chains, supports multi-token via paymentInfo.tokenType
+   */
   signPayment(paymentInfo: PaymentInfo, chainConfig: ChainConfig): Promise<string>;
 
-  /** Check USDC balance */
-  getBalance(chainConfig: ChainConfig): Promise<string>;
+  /**
+   * Check token balance (defaults to USDC for backward compatibility)
+   * EVM providers may accept optional tokenType parameter
+   */
+  getBalance(chainConfig: ChainConfig, tokenType?: TokenType): Promise<string>;
 
   /** Get current address */
   getAddress(): string | null;
@@ -170,6 +208,11 @@ export interface PaymentInfo {
   amount: string;
   /** Token symbol (usually "USDC") */
   token?: string;
+  /**
+   * Token type for multi-token support
+   * Defaults to 'usdc' if not specified for backward compatibility
+   */
+  tokenType?: TokenType;
   /** Network hint from backend */
   network?: string;
   /** Supported chain IDs */
