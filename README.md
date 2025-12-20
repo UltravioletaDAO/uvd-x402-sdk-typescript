@@ -2,11 +2,12 @@
 
 > Gasless crypto payments across 14 blockchain networks using the x402 protocol.
 
-The x402 SDK enables any application to accept USDC payments without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
+The x402 SDK enables any application to accept stablecoin payments (USDC, EURC, AUSD, PYUSD, GHO, crvUSD) without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
 
 ## Features
 
 - **14 Supported Networks**: EVM chains, Solana, Fogo, Stellar, and NEAR
+- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, GHO, crvUSD support on EVM chains
 - **x402 v1 & v2**: Full support for both protocol versions with automatic detection
 - **Gasless Payments**: Users never pay gas - the facilitator covers all network fees
 - **Multi-Network**: Accept payments on multiple networks simultaneously
@@ -669,6 +670,118 @@ const options = generatePaymentOptions(chains, '10.00');
 
 ---
 
+## Multi-Stablecoin Support (EVM)
+
+EVM chains support multiple stablecoins beyond USDC. Token availability varies by chain.
+
+### Supported Tokens
+
+| Token | Description | Decimals | Chains |
+|-------|-------------|----------|--------|
+| USDC | USD Coin (Circle) | 6 | All EVM chains |
+| EURC | Euro Coin (Circle) | 6 | Ethereum, Base, Avalanche |
+| AUSD | Agora USD | 6 | Ethereum, Avalanche, Polygon, Arbitrum, Monad |
+| PYUSD | PayPal USD | 6 | Ethereum |
+| GHO | Aave GHO | 18 | Ethereum, Base, Arbitrum |
+| crvUSD | Curve USD | 18 | Ethereum, Arbitrum |
+
+### Basic Usage
+
+```typescript
+import { X402Client } from 'uvd-x402-sdk';
+
+const client = new X402Client({ defaultChain: 'base' });
+await client.connect('base');
+
+// Pay with EURC instead of USDC
+const result = await client.createPayment({
+  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+  amount: '10.00',
+  tokenType: 'eurc', // 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'gho' | 'crvusd'
+});
+```
+
+### Check Token Availability
+
+```typescript
+import {
+  getSupportedTokens,
+  isTokenSupported,
+  getTokenConfig,
+  getChainsByToken,
+} from 'uvd-x402-sdk';
+
+// Get all tokens supported on a chain
+const tokens = getSupportedTokens('ethereum');
+// Returns: ['usdc', 'eurc', 'ausd', 'pyusd', 'gho', 'crvusd']
+
+const baseTokens = getSupportedTokens('base');
+// Returns: ['usdc', 'eurc', 'gho']
+
+// Check if a specific token is supported
+if (isTokenSupported('base', 'eurc')) {
+  console.log('EURC available on Base');
+}
+
+// Get token configuration (address, decimals, name)
+const eurcConfig = getTokenConfig('ethereum', 'eurc');
+// Returns: { address: '0x1aBa...', decimals: 6, name: 'EURC', version: '2' }
+
+// Find all chains that support a token
+const ghoChains = getChainsByToken('gho');
+// Returns: [baseConfig, ethereumConfig, arbitrumConfig]
+```
+
+### Check Token Balance
+
+```typescript
+import { EVMProvider } from 'uvd-x402-sdk';
+import { getChainByName } from 'uvd-x402-sdk';
+
+const evm = new EVMProvider();
+await evm.connect();
+
+const chainConfig = getChainByName('ethereum')!;
+
+// Check USDC balance (default)
+const usdcBalance = await evm.getBalance(chainConfig);
+
+// Check EURC balance
+const eurcBalance = await evm.getBalance(chainConfig, 'eurc');
+
+// Check GHO balance
+const ghoBalance = await evm.getBalance(chainConfig, 'gho');
+```
+
+### Wagmi/RainbowKit with Multi-Token
+
+```typescript
+import { useWalletClient } from 'wagmi';
+import { createPaymentFromWalletClient } from 'uvd-x402-sdk/wagmi';
+
+function PayWithEURC() {
+  const { data: walletClient } = useWalletClient();
+
+  const handlePay = async () => {
+    const paymentHeader = await createPaymentFromWalletClient(walletClient, {
+      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+      amount: '10.00',
+      chainName: 'base',
+      tokenType: 'eurc', // Pay with EURC
+    });
+
+    await fetch('/api/purchase', {
+      headers: { 'X-PAYMENT': paymentHeader },
+      method: 'POST',
+    });
+  };
+
+  return <button onClick={handlePay}>Pay 10 EURC</button>;
+}
+```
+
+---
+
 ## React Integration
 
 ```tsx
@@ -724,18 +837,18 @@ function PaymentPage() {
 
 ### EVM Networks (10)
 
-| Network | Chain ID | USDC Decimals | Status |
-|---------|----------|---------------|--------|
-| Base | 8453 | 6 | Enabled |
-| Ethereum | 1 | 6 | Enabled |
-| Polygon | 137 | 6 | Enabled |
-| Arbitrum | 42161 | 6 | Enabled |
-| Optimism | 10 | 6 | Enabled |
-| Avalanche | 43114 | 6 | Enabled |
-| Celo | 42220 | 6 | Enabled |
-| HyperEVM | 999 | 6 | Enabled |
-| Unichain | 130 | 6 | Enabled |
-| Monad | 143 | 6 | Enabled |
+| Network | Chain ID | Tokens | Status |
+|---------|----------|--------|--------|
+| Ethereum | 1 | USDC, EURC, AUSD, PYUSD, GHO, crvUSD | Enabled |
+| Base | 8453 | USDC, EURC, GHO | Enabled |
+| Avalanche | 43114 | USDC, EURC, AUSD | Enabled |
+| Arbitrum | 42161 | USDC, AUSD, GHO, crvUSD | Enabled |
+| Polygon | 137 | USDC, AUSD | Enabled |
+| Monad | 143 | USDC, AUSD | Enabled |
+| Optimism | 10 | USDC | Enabled |
+| Celo | 42220 | USDC | Enabled |
+| HyperEVM | 999 | USDC | Enabled |
+| Unichain | 130 | USDC | Enabled |
 
 ### SVM Networks (2)
 
@@ -779,8 +892,8 @@ interface X402ClientConfig {
 | `connect(chainName?)` | Connect wallet to specified chain |
 | `disconnect()` | Disconnect current wallet |
 | `switchChain(chainName)` | Switch to different EVM chain |
-| `createPayment(paymentInfo)` | Create payment authorization |
-| `getBalance()` | Get USDC balance on current chain |
+| `createPayment(paymentInfo)` | Create payment authorization (supports `tokenType` in paymentInfo) |
+| `getBalance(tokenType?)` | Get token balance on current chain (defaults to USDC) |
 | `getState()` | Get current wallet state |
 | `isConnected()` | Check if wallet is connected |
 | `on(event, handler)` | Subscribe to events |
@@ -798,8 +911,22 @@ import {
   isSVMChain,
   getExplorerTxUrl,
   getExplorerAddressUrl,
+  // Multi-token utilities
+  getTokenConfig,
+  getSupportedTokens,
+  isTokenSupported,
+  getChainsByToken,
 } from 'uvd-x402-sdk';
 ```
+
+### Token Utilities
+
+| Function | Description |
+|----------|-------------|
+| `getTokenConfig(chain, tokenType)` | Get token config (address, decimals, name, version) |
+| `getSupportedTokens(chain)` | Get array of supported token types for a chain |
+| `isTokenSupported(chain, tokenType)` | Check if token is available on chain |
+| `getChainsByToken(tokenType)` | Get all chains that support a specific token |
 
 ### x402 Utilities
 
@@ -838,8 +965,9 @@ import {
 ```typescript
 interface WagmiPaymentOptions {
   recipient: string;        // Recipient address
-  amount: string;           // Amount in USDC (e.g., "10.00")
+  amount: string;           // Amount in token (e.g., "10.00")
   chainName?: string;       // Chain name (default: 'base')
+  tokenType?: TokenType;    // Token type (default: 'usdc')
   validitySeconds?: number; // Signature validity window (default: 300)
 }
 ```

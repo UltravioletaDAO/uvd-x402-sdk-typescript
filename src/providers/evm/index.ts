@@ -27,9 +27,11 @@ import type {
   PaymentInfo,
   EVMPaymentPayload,
   WalletAdapter,
+  TokenType,
+  TokenConfig,
 } from '../../types';
 import { X402Error } from '../../types';
-import { getChainByName, getChainById } from '../../chains';
+import { getChainByName, getChainById, getTokenConfig } from '../../chains';
 
 /**
  * Ethereum provider interface
@@ -197,22 +199,48 @@ export class EVMProvider implements WalletAdapter {
   }
 
   /**
-   * Get USDC balance
+   * Get token balance (defaults to USDC for backward compatibility)
+   *
+   * @param chainConfig - Chain configuration
+   * @param tokenType - Token type to check balance for (defaults to 'usdc')
+   * @returns Formatted balance string
    */
-  async getBalance(chainConfig: ChainConfig): Promise<string> {
+  async getBalance(chainConfig: ChainConfig, tokenType: TokenType = 'usdc'): Promise<string> {
     if (!this.address) {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
     }
 
-    // Use public RPC for balance check
-    const publicProvider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
+    // Get token config for the specified token type
+    const tokenConfig = getTokenConfig(chainConfig.name, tokenType);
+    if (!tokenConfig) {
+      // Fall back to USDC config for backward compatibility
+      const fallbackConfig = chainConfig.usdc;
+      if (!fallbackConfig) {
+        throw new X402Error(`Token ${tokenType} not supported on ${chainConfig.name}`, 'INVALID_CONFIG');
+      }
+      return this.getBalanceWithConfig(chainConfig.rpcUrl, fallbackConfig);
+    }
 
-    const usdcAbi = ['function balanceOf(address owner) view returns (uint256)'];
-    const usdcContract = new ethers.Contract(chainConfig.usdc.address, usdcAbi, publicProvider);
+    return this.getBalanceWithConfig(chainConfig.rpcUrl, tokenConfig);
+  }
+
+  /**
+   * Internal helper to get balance using a token config
+   */
+  private async getBalanceWithConfig(rpcUrl: string, tokenConfig: TokenConfig): Promise<string> {
+    if (!this.address) {
+      return '0.00';
+    }
+
+    // Use public RPC for balance check
+    const publicProvider = new ethers.JsonRpcProvider(rpcUrl);
+
+    const tokenAbi = ['function balanceOf(address owner) view returns (uint256)'];
+    const tokenContract = new ethers.Contract(tokenConfig.address, tokenAbi, publicProvider);
 
     try {
-      const balance = await usdcContract.balanceOf(this.address);
-      const formatted = ethers.formatUnits(balance, chainConfig.usdc.decimals);
+      const balance = await tokenContract.balanceOf(this.address);
+      const formatted = ethers.formatUnits(balance, tokenConfig.decimals);
       return parseFloat(formatted).toFixed(2);
     } catch {
       return '0.00';
@@ -221,10 +249,30 @@ export class EVMProvider implements WalletAdapter {
 
   /**
    * Create EVM payment (EIP-712 TransferWithAuthorization)
+   *
+   * Supports multi-token payments. If paymentInfo.tokenType is specified,
+   * it will use the appropriate token configuration. Defaults to USDC
+   * for backward compatibility.
+   *
+   * @param paymentInfo - Payment details including amount and recipient
+   * @param chainConfig - Chain configuration
+   * @returns JSON-encoded payment payload
    */
   async signPayment(paymentInfo: PaymentInfo, chainConfig: ChainConfig): Promise<string> {
     if (!this.signer || !this.address) {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
+    }
+
+    // Determine token type (default to 'usdc' for backward compatibility)
+    const tokenType: TokenType = paymentInfo.tokenType || 'usdc';
+
+    // Get token configuration for the specified token type
+    const tokenConfig = getTokenConfig(chainConfig.name, tokenType);
+    if (!tokenConfig) {
+      throw new X402Error(
+        `Token ${tokenType} not supported on ${chainConfig.name}`,
+        'CHAIN_NOT_SUPPORTED'
+      );
     }
 
     // Get recipient
@@ -246,12 +294,12 @@ export class EVMProvider implements WalletAdapter {
     const validityWindowSeconds = chainConfig.name === 'base' ? 300 : 60;
     const validBefore = Math.floor(Date.now() / 1000) + validityWindowSeconds;
 
-    // EIP-712 domain
+    // EIP-712 domain using the selected token's configuration
     const domain = {
-      name: chainConfig.usdc.name,
-      version: chainConfig.usdc.version,
+      name: tokenConfig.name,
+      version: tokenConfig.version,
       chainId: chainConfig.chainId,
-      verifyingContract: chainConfig.usdc.address,
+      verifyingContract: tokenConfig.address,
     };
 
     // EIP-712 types for TransferWithAuthorization (ERC-3009)
@@ -266,8 +314,8 @@ export class EVMProvider implements WalletAdapter {
       ],
     };
 
-    // Parse amount
-    const value = ethers.parseUnits(paymentInfo.amount, chainConfig.usdc.decimals);
+    // Parse amount using the token's decimals
+    const value = ethers.parseUnits(paymentInfo.amount, tokenConfig.decimals);
     const from = this.address;
     const to = ethers.getAddress(recipient);
 
@@ -298,7 +346,7 @@ export class EVMProvider implements WalletAdapter {
 
     const sig = ethers.Signature.from(signature);
 
-    // Construct payload
+    // Construct payload with the selected token address
     const payload: EVMPaymentPayload = {
       from,
       to,
@@ -310,7 +358,7 @@ export class EVMProvider implements WalletAdapter {
       r: sig.r,
       s: sig.s,
       chainId: chainConfig.chainId,
-      token: chainConfig.usdc.address,
+      token: tokenConfig.address,
     };
 
     return JSON.stringify(payload);
