@@ -2,12 +2,12 @@
 
 > Gasless crypto payments across 14 blockchain networks using the x402 protocol.
 
-The x402 SDK enables any application to accept stablecoin payments (USDC, EURC, AUSD, PYUSD, GHO, crvUSD) without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
+The x402 SDK enables any application to accept stablecoin payments (USDC, EURC, AUSD, PYUSD) without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
 
 ## Features
 
 - **14 Supported Networks**: EVM chains, Solana, Fogo, Stellar, and NEAR
-- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, GHO, crvUSD support on EVM chains
+- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD support on EVM chains
 - **x402 v1 & v2**: Full support for both protocol versions with automatic detection
 - **Gasless Payments**: Users never pay gas - the facilitator covers all network fees
 - **Multi-Network**: Accept payments on multiple networks simultaneously
@@ -682,8 +682,6 @@ EVM chains support multiple stablecoins beyond USDC. Token availability varies b
 | EURC | Euro Coin (Circle) | 6 | Ethereum, Base, Avalanche |
 | AUSD | Agora USD | 6 | Ethereum, Avalanche, Polygon, Arbitrum, Monad |
 | PYUSD | PayPal USD | 6 | Ethereum |
-| GHO | Aave GHO | 18 | Ethereum, Base, Arbitrum |
-| crvUSD | Curve USD | 18 | Ethereum, Arbitrum |
 
 ### Basic Usage
 
@@ -697,7 +695,7 @@ await client.connect('base');
 const result = await client.createPayment({
   recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
   amount: '10.00',
-  tokenType: 'eurc', // 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'gho' | 'crvusd'
+  tokenType: 'eurc', // 'usdc' | 'eurc' | 'ausd' | 'pyusd'
 });
 ```
 
@@ -713,10 +711,10 @@ import {
 
 // Get all tokens supported on a chain
 const tokens = getSupportedTokens('ethereum');
-// Returns: ['usdc', 'eurc', 'ausd', 'pyusd', 'gho', 'crvusd']
+// Returns: ['usdc', 'eurc', 'ausd', 'pyusd']
 
 const baseTokens = getSupportedTokens('base');
-// Returns: ['usdc', 'eurc', 'gho']
+// Returns: ['usdc', 'eurc']
 
 // Check if a specific token is supported
 if (isTokenSupported('base', 'eurc')) {
@@ -728,8 +726,8 @@ const eurcConfig = getTokenConfig('ethereum', 'eurc');
 // Returns: { address: '0x1aBa...', decimals: 6, name: 'EURC', version: '2' }
 
 // Find all chains that support a token
-const ghoChains = getChainsByToken('gho');
-// Returns: [baseConfig, ethereumConfig, arbitrumConfig]
+const eurcChains = getChainsByToken('eurc');
+// Returns: [baseConfig, ethereumConfig, avalancheConfig]
 ```
 
 ### Check Token Balance
@@ -749,8 +747,8 @@ const usdcBalance = await evm.getBalance(chainConfig);
 // Check EURC balance
 const eurcBalance = await evm.getBalance(chainConfig, 'eurc');
 
-// Check GHO balance
-const ghoBalance = await evm.getBalance(chainConfig, 'gho');
+// Check PYUSD balance
+const pyusdBalance = await evm.getBalance(chainConfig, 'pyusd');
 ```
 
 ### Wagmi/RainbowKit with Multi-Token
@@ -839,10 +837,10 @@ function PaymentPage() {
 
 | Network | Chain ID | Tokens | Status |
 |---------|----------|--------|--------|
-| Ethereum | 1 | USDC, EURC, AUSD, PYUSD, GHO, crvUSD | Enabled |
-| Base | 8453 | USDC, EURC, GHO | Enabled |
+| Ethereum | 1 | USDC, EURC, AUSD, PYUSD | Enabled |
+| Base | 8453 | USDC, EURC | Enabled |
 | Avalanche | 43114 | USDC, EURC, AUSD | Enabled |
-| Arbitrum | 42161 | USDC, AUSD, GHO, crvUSD | Enabled |
+| Arbitrum | 42161 | USDC, AUSD | Enabled |
 | Polygon | 137 | USDC, AUSD | Enabled |
 | Monad | 143 | USDC, AUSD | Enabled |
 | Optimism | 10 | USDC | Enabled |

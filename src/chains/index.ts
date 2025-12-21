@@ -60,12 +60,6 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'EURC',
         version: '2',
       },
-      gho: {
-        address: '0x6Bb7a212910682DCFdbd5BCBb3e28FB4E8da10Ee',
-        decimals: 18,
-        name: 'Gho Token',
-        version: '1',
-      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -162,18 +156,6 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'PayPal USD',
         version: '1',
       },
-      gho: {
-        address: '0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f',
-        decimals: 18,
-        name: 'Gho Token',
-        version: '1',
-      },
-      crvusd: {
-        address: '0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E',
-        decimals: 18,
-        name: 'Curve.Fi USD Stablecoin',
-        version: '1',
-      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -250,18 +232,6 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
         decimals: 6,
         name: 'Agora USD',
-        version: '1',
-      },
-      gho: {
-        address: '0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33',
-        decimals: 18,
-        name: 'Gho Token',
-        version: '1',
-      },
-      crvusd: {
-        address: '0x498Bf2B1e120FeD3ad3D42EA2165E9b73f99C1e5',
-        decimals: 18,
-        name: 'Curve.Fi USD Stablecoin',
         version: '1',
       },
     },
@@ -685,7 +655,7 @@ export function getExplorerAddressUrl(chainName: string, address: string): strin
  * Falls back to USDC config if token not found (for backward compatibility)
  *
  * @param chainName - Chain name (e.g., 'ethereum', 'base')
- * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'gho')
+ * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'pyusd')
  * @returns Token configuration or undefined if chain not found
  */
 export function getTokenConfig(
@@ -731,7 +701,7 @@ export function getSupportedTokens(chainName: string): TokenType[] {
  * Check if a token is supported on a specific chain
  *
  * @param chainName - Chain name (e.g., 'ethereum', 'base')
- * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'gho')
+ * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'pyusd')
  * @returns true if token is supported on the chain
  */
 export function isTokenSupported(chainName: string, tokenType: TokenType): boolean {
@@ -754,7 +724,7 @@ export function isTokenSupported(chainName: string, tokenType: TokenType): boole
 /**
  * Get all chains that support a specific token
  *
- * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'gho')
+ * @param tokenType - Token type (e.g., 'usdc', 'eurc', 'pyusd')
  * @returns Array of chain configs that support the token
  */
 export function getChainsByToken(tokenType: TokenType): ChainConfig[] {

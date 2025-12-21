@@ -26,10 +26,8 @@ export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near';
  * - eurc: Euro Coin (Circle) - 6 decimals
  * - ausd: Agora USD (Agora Finance) - 6 decimals
  * - pyusd: PayPal USD (PayPal/Paxos) - 6 decimals
- * - gho: GHO Stablecoin (Aave) - 18 decimals
- * - crvusd: Curve USD (Curve Finance) - 18 decimals
  */
-export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'gho' | 'crvusd';
+export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd';
 
 /**
  * Token configuration for EIP-712 signing and transfers
@@ -37,7 +35,7 @@ export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'gho' | 'crvusd';
 export interface TokenConfig {
   /** Contract/mint address */
   address: string;
-  /** Token decimals (6 for most stablecoins, 18 for GHO/crvUSD) */
+  /** Token decimals (6 for all supported stablecoins) */
   decimals: number;
   /** Token name for EIP-712 domain (e.g., "USD Coin" or "USDC") */
   name: string;
