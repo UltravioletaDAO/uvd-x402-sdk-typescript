@@ -778,6 +778,61 @@ function PayWithEURC() {
 }
 ```
 
+### Critical Implementation Notes
+
+#### EIP-712 Domain Names Vary by Chain
+
+The same token may use **different EIP-712 domain names on different chains**. This affects signature verification.
+
+| Token | Ethereum | Base | Avalanche |
+|-------|----------|------|-----------|
+| EURC | `"Euro Coin"` | `"EURC"` | `"Euro Coin"` |
+| USDC | `"USD Coin"` | `"USD Coin"` | `"USD Coin"` |
+| AUSD | `"AUSD"` | N/A | `"AUSD"` |
+| PYUSD | `"PayPal USD"` | N/A | N/A |
+
+**Important:** Always use `getTokenConfig()` to get the correct domain name for each chain. Never hardcode domain names.
+
+```typescript
+// CORRECT: Use getTokenConfig for each chain
+const eurcBase = getTokenConfig('base', 'eurc');
+// Returns: { name: 'EURC', version: '2', ... }
+
+const eurcEthereum = getTokenConfig('ethereum', 'eurc');
+// Returns: { name: 'Euro Coin', version: '2', ... }
+```
+
+#### PYUSD Signature Format (PayPal USD)
+
+PYUSD uses the Paxos implementation which only supports the **v,r,s signature variant** of `transferWithAuthorization`. This is different from Circle's USDC/EURC which support both compact bytes and v,r,s variants.
+
+**Backend implications:**
+- The x402 facilitator (v1.9.0+) automatically handles this by detecting PYUSD and using `transferWithAuthorization_1(v,r,s)` instead of `transferWithAuthorization_0(bytes signature)`
+- If using a custom facilitator, ensure it supports the v,r,s variant for PYUSD
+
+#### Token Info Must Be Passed to Backend
+
+When using non-USDC tokens, you **must** pass the token info in your payment payload so the backend can validate the correct EIP-712 domain. The SDK handles this automatically when you specify `tokenType`.
+
+```typescript
+// The SDK automatically includes token info when you specify tokenType
+const paymentHeader = await client.createPayment({
+  recipient: '0x...',
+  amount: '10.00',
+  tokenType: 'eurc', // This ensures token info is included
+});
+
+// Backend receives token info in the payload:
+// {
+//   "token": {
+//     "address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+//     "symbol": "EURC",
+//     "decimals": 6,
+//     "eip712": { "name": "EURC", "version": "2" }
+//   }
+// }
+```
+
 ---
 
 ## React Integration
