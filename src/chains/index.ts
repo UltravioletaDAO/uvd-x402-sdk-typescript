@@ -234,6 +234,12 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'Agora Dollar',
         version: '1',
       },
+      usdt: {
+        address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+        decimals: 6,
+        name: 'USD₮0',
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -267,6 +273,12 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'USD Coin',
         version: '2',
       },
+      usdt: {
+        address: '0x01bff41798a0bcf287b996046ca68b395dbc1071',
+        decimals: 6,
+        name: 'USD₮0',
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -299,6 +311,12 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'USDC',  // Celo uses "USDC" not "USD Coin" for EIP-712
         version: '2',
+      },
+      usdt: {
+        address: '0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e',
+        decimals: 6,
+        name: 'Tether USD',  // Celo USDT uses "Tether USD" for EIP-712
+        version: '1',
       },
     },
     x402: {

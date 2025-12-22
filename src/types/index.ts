@@ -26,8 +26,9 @@ export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near';
  * - eurc: Euro Coin (Circle) - 6 decimals
  * - ausd: Agora USD (Agora Finance) - 6 decimals
  * - pyusd: PayPal USD (PayPal/Paxos) - 6 decimals
+ * - usdt: Tether USD (USDT0 omnichain via LayerZero) - 6 decimals
  */
-export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd';
+export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'usdt';
 
 /**
  * Token configuration for EIP-712 signing and transfers
