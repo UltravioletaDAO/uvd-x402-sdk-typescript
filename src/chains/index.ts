@@ -102,7 +102,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
         decimals: 6,
-        name: 'AUSD',
+        name: 'Agora Dollar',
         version: '1',
       },
     },
@@ -147,7 +147,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
         decimals: 6,
-        name: 'AUSD',
+        name: 'Agora Dollar',
         version: '1',
       },
       pyusd: {
@@ -192,7 +192,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
         decimals: 6,
-        name: 'AUSD',
+        name: 'Agora Dollar',
         version: '1',
       },
     },
@@ -231,7 +231,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
         decimals: 6,
-        name: 'AUSD',
+        name: 'Agora Dollar',
         version: '1',
       },
     },
@@ -402,7 +402,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
         decimals: 6,
-        name: 'AUSD',
+        name: 'Agora Dollar',
         version: '1',
       },
     },
