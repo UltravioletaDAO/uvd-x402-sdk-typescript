@@ -25,7 +25,7 @@ import {
   getChainById,
   getEnabledChains,
 } from '../chains';
-import { validateRecipient } from '../utils';
+import { validateRecipient, chainToCAIP2 } from '../utils';
 
 /**
  * X402Client - Main SDK client for x402 payments
@@ -581,23 +581,36 @@ export class X402Client {
     // Reconstruct full signature from v, r, s
     const fullSignature = payload.r + payload.s.slice(2) + payload.v.toString(16).padStart(2, '0');
 
-    // Format in x402 standard format
-    const x402Payload = {
-      x402Version: 1,
-      scheme: 'exact',
-      network: chain.name,
-      payload: {
-        signature: fullSignature,
-        authorization: {
-          from: payload.from,
-          to: payload.to,
-          value: payload.value,
-          validAfter: payload.validAfter.toString(),
-          validBefore: payload.validBefore.toString(),
-          nonce: payload.nonce,
-        },
+    // Determine version to use (default to v1 for backward compatibility)
+    const version = this.config.x402Version === 2 ? 2 : 1;
+
+    // Build the payload data
+    const payloadData = {
+      signature: fullSignature,
+      authorization: {
+        from: payload.from,
+        to: payload.to,
+        value: payload.value,
+        validAfter: payload.validAfter.toString(),
+        validBefore: payload.validBefore.toString(),
+        nonce: payload.nonce,
       },
     };
+
+    // Format in x402 standard format (v1 or v2)
+    const x402Payload = version === 2
+      ? {
+          x402Version: 2 as const,
+          scheme: 'exact' as const,
+          network: chainToCAIP2(chain.name), // CAIP-2 format for v2
+          payload: payloadData,
+        }
+      : {
+          x402Version: 1 as const,
+          scheme: 'exact' as const,
+          network: chain.name, // Plain chain name for v1
+          payload: payloadData,
+        };
 
     // Base64 encode
     const jsonString = JSON.stringify(x402Payload);
