@@ -32,6 +32,7 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { getChainByName, getChainById, getTokenConfig } from '../../chains';
+import { validateRecipient } from '../../utils';
 
 /**
  * Ethereum provider interface
@@ -277,6 +278,9 @@ export class EVMProvider implements WalletAdapter {
 
     // Get recipient
     const recipient = paymentInfo.recipients?.evm || paymentInfo.recipient;
+
+    // Validate recipient address - prevents empty/invalid addresses
+    validateRecipient(recipient, 'evm');
 
     // Generate random nonce
     const nonceBytes = new Uint8Array(32);

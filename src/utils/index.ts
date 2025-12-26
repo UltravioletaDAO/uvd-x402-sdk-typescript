@@ -18,3 +18,8 @@ export {
   isCAIP2Format,
   convertX402Header,
 } from './x402';
+
+export {
+  validateRecipient,
+  validateAmount,
+} from './validation';
