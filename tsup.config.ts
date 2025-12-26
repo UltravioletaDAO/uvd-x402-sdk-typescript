@@ -7,6 +7,7 @@ export default defineConfig({
     'providers/solana/index': 'src/providers/solana/index.ts',
     'providers/stellar/index': 'src/providers/stellar/index.ts',
     'providers/near/index': 'src/providers/near/index.ts',
+    'providers/algorand/index': 'src/providers/algorand/index.ts',
     'utils/index': 'src/utils/index.ts',
     'react/index': 'src/react/index.tsx',
     'adapters/index': 'src/adapters/index.ts',
@@ -30,5 +31,7 @@ export default defineConfig({
     '@walletconnect/ethereum-provider',
     '@near-wallet-selector/core',
     '@near-wallet-selector/my-near-wallet',
+    '@perawallet/connect',
+    'algosdk',
   ],
 });

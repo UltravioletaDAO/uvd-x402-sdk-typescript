@@ -3,11 +3,12 @@
  *
  * x402 Payment SDK - Gasless crypto payments using the Ultravioleta facilitator.
  *
- * Supports 14 blockchain networks:
+ * Supports 16 blockchain networks:
  * - EVM (10): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad
  * - SVM (2): Solana, Fogo
  * - Stellar (1): Stellar
  * - NEAR (1): NEAR Protocol
+ * - Algorand (2): Algorand mainnet and testnet
  *
  * Supports both x402 v1 and v2 protocols.
  *
@@ -60,6 +61,18 @@
  * const header = near.encodePaymentHeader(payload);
  * ```
  *
+ * @example With Algorand
+ * ```ts
+ * import { AlgorandProvider } from 'uvd-x402-sdk/algorand';
+ * import { getChainByName } from 'uvd-x402-sdk';
+ *
+ * const algorand = new AlgorandProvider();
+ * const address = await algorand.connect();
+ * const algorandConfig = getChainByName('algorand')!;
+ * const payload = await algorand.signPayment(paymentInfo, algorandConfig);
+ * const header = algorand.encodePaymentHeader(payload, algorandConfig);
+ * ```
+ *
  * @example With React
  * ```tsx
  * import { X402Provider, useX402, usePayment } from 'uvd-x402-sdk/react';
@@ -100,6 +113,9 @@ export {
   getSupportedTokens,
   isTokenSupported,
   getChainsByToken,
+  // Algorand helper functions
+  getAlgorandChains,
+  isAlgorandChain,
 } from './chains';
 
 // x402 utilities
@@ -154,6 +170,7 @@ export type {
   SolanaPaymentPayload,
   StellarPaymentPayload,
   NEARPaymentPayload,
+  AlgorandPaymentPayload,
   X402HeaderName,
 
   // x402 header types (v1 and v2)
@@ -167,6 +184,7 @@ export type {
   X402SolanaPayload,
   X402StellarPayload,
   X402NEARPayload,
+  X402AlgorandPayload,
 
   // Config types
   X402ClientConfig,

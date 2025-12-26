@@ -1,11 +1,12 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 15 supported blockchain networks.
- * EVM chains (11): Use ERC-3009 TransferWithAuthorization
+ * Complete configuration for all 16 supported blockchain networks.
+ * EVM chains (10): Use ERC-3009 TransferWithAuthorization
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
  * NEAR (1): Uses NEP-366 meta-transactions
+ * Algorand (2): Uses ASA transfers with atomic transaction groups
  */
 
 import type { ChainConfig, NetworkType, TokenType, TokenConfig } from '../types';
@@ -541,6 +542,76 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       enabled: true, // NEP-366 meta-transactions supported
     },
   },
+
+  // ============================================================================
+  // ALGORAND (2 networks) - Uses ASA transfers with atomic transaction groups
+  // ============================================================================
+
+  algorand: {
+    chainId: 0, // Non-EVM (Algorand uses genesis hash for network identification)
+    chainIdHex: '0x0',
+    name: 'algorand',
+    displayName: 'Algorand',
+    networkType: 'algorand',
+    rpcUrl: 'https://mainnet-api.algonode.cloud',
+    explorerUrl: 'https://allo.info',
+    nativeCurrency: {
+      name: 'Algo',
+      symbol: 'ALGO',
+      decimals: 6, // Algorand uses 6 decimals (microAlgos)
+    },
+    usdc: {
+      address: '31566704', // USDC ASA ID on Algorand mainnet
+      decimals: 6,
+      name: 'USDC',
+      version: '1',
+    },
+    tokens: {
+      usdc: {
+        address: '31566704', // USDC ASA ID on Algorand mainnet
+        decimals: 6,
+        name: 'USDC',
+        version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  'algorand-testnet': {
+    chainId: 0, // Non-EVM
+    chainIdHex: '0x0',
+    name: 'algorand-testnet',
+    displayName: 'Algorand Testnet',
+    networkType: 'algorand',
+    rpcUrl: 'https://testnet-api.algonode.cloud',
+    explorerUrl: 'https://testnet.allo.info',
+    nativeCurrency: {
+      name: 'Algo',
+      symbol: 'ALGO',
+      decimals: 6,
+    },
+    usdc: {
+      address: '10458941', // USDC ASA ID on Algorand testnet
+      decimals: 6,
+      name: 'USDC',
+      version: '1',
+    },
+    tokens: {
+      usdc: {
+        address: '10458941', // USDC ASA ID on Algorand testnet
+        decimals: 6,
+        name: 'USDC',
+        version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
 };
 
 /**
@@ -637,6 +708,8 @@ export function getExplorerTxUrl(chainName: string, txHash: string): string | nu
       return `${chain.explorerUrl}/tx/${txHash}`;
     case 'near':
       return `${chain.explorerUrl}/txns/${txHash}`;
+    case 'algorand':
+      return `${chain.explorerUrl}/tx/${txHash}`;
     default:
       return null;
   }
@@ -659,9 +732,28 @@ export function getExplorerAddressUrl(chainName: string, address: string): strin
       return `${chain.explorerUrl}/account/${address}`;
     case 'near':
       return `${chain.explorerUrl}/address/${address}`;
+    case 'algorand':
+      return `${chain.explorerUrl}/account/${address}`;
     default:
       return null;
   }
+}
+
+/**
+ * Get list of Algorand chains
+ */
+export function getAlgorandChains(): ChainConfig[] {
+  return Object.values(SUPPORTED_CHAINS).filter(
+    chain => chain.networkType === 'algorand' && chain.x402.enabled
+  );
+}
+
+/**
+ * Check if a chain is Algorand-based
+ */
+export function isAlgorandChain(chainName: string): boolean {
+  const chain = getChainByName(chainName);
+  return chain?.networkType === 'algorand';
 }
 
 // ============================================================================
