@@ -2,15 +2,18 @@
 
 > Gasless crypto payments across 14 blockchain networks using the x402 protocol.
 
-The x402 SDK enables any application to accept stablecoin payments (USDC, EURC, AUSD, PYUSD) without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
+The x402 SDK enables any application to accept stablecoin payments (USDC, EURC, AUSD, PYUSD, USDT) without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
 
 ## Features
 
 - **14 Supported Networks**: EVM chains, Solana, Fogo, Stellar, and NEAR
-- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD support on EVM chains
+- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT support on EVM chains
 - **x402 v1 & v2**: Full support for both protocol versions with automatic detection
 - **Gasless Payments**: Users never pay gas - the facilitator covers all network fees
 - **Multi-Network**: Accept payments on multiple networks simultaneously
+- **Backend Utilities**: Server-side helpers for payment verification and settlement
+- **Bazaar Discovery**: Discover and register x402-enabled resources
+- **Escrow & Refunds**: Hold payments in escrow with refund and dispute support
 - **Type-Safe**: Comprehensive TypeScript definitions
 - **Framework Agnostic**: Works with any JavaScript framework
 - **React Hooks**: First-class React integration
@@ -680,8 +683,9 @@ EVM chains support multiple stablecoins beyond USDC. Token availability varies b
 |-------|-------------|----------|--------|
 | USDC | USD Coin (Circle) | 6 | All EVM chains |
 | EURC | Euro Coin (Circle) | 6 | Ethereum, Base, Avalanche |
-| AUSD | Agora USD | 6 | Ethereum, Avalanche, Polygon, Arbitrum, Monad |
+| AUSD | Agora Dollar | 6 | Ethereum, Avalanche, Polygon, Arbitrum, Monad |
 | PYUSD | PayPal USD | 6 | Ethereum |
+| USDT | Tether USD (USDT0 Omnichain via LayerZero) | 6 | Ethereum, Arbitrum |
 
 ### Basic Usage
 
@@ -1073,6 +1077,379 @@ try {
 | `PAYMENT_FAILED` | Payment processing failed |
 | `NETWORK_ERROR` | Network request failed |
 | `INVALID_CONFIG` | Invalid configuration |
+
+---
+
+## Backend Utilities
+
+The SDK includes comprehensive server-side utilities for handling x402 payments.
+
+### Payment Flow Diagram
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────────┐     ┌──────────────┐
+│   Client    │     │  Your API   │     │   Facilitator   │     │  Blockchain  │
+└──────┬──────┘     └──────┬──────┘     └────────┬────────┘     └──────┬───────┘
+       │                   │                     │                     │
+       │ 1. Request resource (no payment)        │                     │
+       │ ────────────────> │                     │                     │
+       │                   │                     │                     │
+       │ 2. 402 Payment Required                 │                     │
+       │ <──────────────── │                     │                     │
+       │                   │                     │                     │
+       │ 3. User signs payment                   │                     │
+       │ (wallet popup)    │                     │                     │
+       │                   │                     │                     │
+       │ 4. Request with X-PAYMENT header        │                     │
+       │ ────────────────> │                     │                     │
+       │                   │                     │                     │
+       │                   │ 5. Verify payment   │                     │
+       │                   │ ────────────────────>                     │
+       │                   │                     │                     │
+       │                   │ 6. Payment valid    │                     │
+       │                   │ <────────────────── │                     │
+       │                   │                     │                     │
+       │ 7. Provide resource                     │                     │
+       │ <──────────────── │                     │                     │
+       │                   │                     │                     │
+       │                   │ 8. Settle payment   │                     │
+       │                   │ ────────────────────>                     │
+       │                   │                     │                     │
+       │                   │                     │ 9. Submit tx        │
+       │                   │                     │ ───────────────────>│
+       │                   │                     │                     │
+       │                   │                     │ 10. Confirmed       │
+       │                   │                     │ <───────────────────│
+       │                   │                     │                     │
+       │                   │ 11. Settlement done │                     │
+       │                   │ <────────────────── │                     │
+       └                   └                     └                     └
+```
+
+### Basic Backend Setup
+
+```typescript
+import {
+  parsePaymentHeader,
+  extractPaymentFromHeaders,
+  buildPaymentRequirements,
+  FacilitatorClient,
+  create402Response,
+  X402_CORS_HEADERS,
+} from 'uvd-x402-sdk/backend';
+
+// Configure CORS
+app.use((req, res, next) => {
+  Object.entries(X402_CORS_HEADERS).forEach(([key, value]) => {
+    res.setHeader(key, value);
+  });
+  next();
+});
+
+// Protected endpoint
+app.post('/api/premium', async (req, res) => {
+  // Extract payment from headers
+  const payment = extractPaymentFromHeaders(req.headers);
+
+  if (!payment) {
+    // Return 402 Payment Required
+    const { status, headers, body } = create402Response({
+      amount: '1.00',
+      recipient: process.env.PAYMENT_RECIPIENT,
+      resource: 'https://api.example.com/premium',
+      chainName: 'base',
+    });
+    return res.status(status).set(headers).json(body);
+  }
+
+  // Verify payment with facilitator
+  const client = new FacilitatorClient();
+  const requirements = buildPaymentRequirements({
+    amount: '1.00',
+    recipient: process.env.PAYMENT_RECIPIENT,
+    resource: 'https://api.example.com/premium',
+  });
+
+  const verifyResult = await client.verify(payment, requirements);
+
+  if (!verifyResult.isValid) {
+    return res.status(402).json({
+      error: 'Payment verification failed',
+      reason: verifyResult.invalidReason,
+    });
+  }
+
+  // Provide the resource
+  res.json({ data: 'premium content' });
+
+  // Settle payment after response
+  await client.settle(payment, requirements);
+});
+```
+
+### Using Payment Middleware
+
+```typescript
+import { createPaymentMiddleware } from 'uvd-x402-sdk/backend';
+
+const paymentMiddleware = createPaymentMiddleware(
+  (req) => ({
+    amount: '1.00',
+    recipient: process.env.PAYMENT_RECIPIENT,
+    resource: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
+  })
+);
+
+// Apply to specific routes
+app.get('/premium/*', paymentMiddleware, (req, res) => {
+  res.json({ premium: 'data' });
+});
+```
+
+### FacilitatorClient API
+
+```typescript
+const client = new FacilitatorClient({
+  baseUrl: 'https://facilitator.ultravioletadao.xyz', // default
+  timeout: 30000, // default: 30 seconds
+});
+
+// Verify a payment
+const verifyResult = await client.verify(payment, requirements);
+// Returns: { isValid: boolean, invalidReason?: string, payer?: string }
+
+// Settle a payment (execute on-chain)
+const settleResult = await client.settle(payment, requirements);
+// Returns: { success: boolean, transactionHash?: string, error?: string }
+
+// Combined verify + settle
+const result = await client.verifyAndSettle(payment, requirements);
+// Returns: { verified: boolean, settled: boolean, transactionHash?: string, error?: string }
+
+// Health check
+const isHealthy = await client.healthCheck();
+```
+
+---
+
+## Bazaar Discovery API
+
+Discover and register x402-enabled resources across the ecosystem.
+
+```typescript
+import { BazaarClient } from 'uvd-x402-sdk/backend';
+
+// Discover resources (no auth required)
+const bazaar = new BazaarClient();
+
+const results = await bazaar.discover({
+  category: 'ai',       // 'api' | 'data' | 'ai' | 'media' | 'compute' | 'storage'
+  network: 'base',      // Filter by network
+  token: 'USDC',        // Filter by token
+  maxPrice: '0.10',     // Max price in dollars
+  query: 'image',       // Search query
+  sortBy: 'price',      // 'price' | 'createdAt' | 'name'
+  sortOrder: 'asc',
+});
+
+for (const resource of results.resources) {
+  console.log(`${resource.name}: ${resource.url} - $${resource.pricePerRequest}`);
+}
+```
+
+### Register a Resource
+
+```typescript
+// Registration requires API key
+const bazaar = new BazaarClient({
+  apiKey: process.env.BAZAAR_API_KEY,
+});
+
+const resource = await bazaar.register({
+  url: 'https://api.example.com/v1/generate',
+  name: 'AI Image Generator',
+  description: 'Generate high-quality images with AI',
+  category: 'ai',
+  networks: ['base', 'ethereum', 'polygon'],
+  tokens: ['USDC', 'EURC'],
+  price: '0.05',
+  payTo: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+  tags: ['ai', 'image', 'generator'],
+});
+
+console.log('Registered:', resource.id);
+
+// Update resource
+await bazaar.update(resource.id, { price: '0.03' });
+
+// Deactivate (soft delete)
+await bazaar.deactivate(resource.id);
+
+// Reactivate
+await bazaar.reactivate(resource.id);
+
+// Delete permanently
+await bazaar.delete(resource.id);
+```
+
+### List Your Resources
+
+```typescript
+const myResources = await bazaar.listMyResources({
+  includeInactive: true,
+});
+```
+
+---
+
+## Escrow & Refunds
+
+For services that may require refunds, use the escrow system.
+
+### Escrow Flow Diagram
+
+```
+┌─────────────┐     ┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
+│   Payer     │     │  Your API   │     │  Escrow Service  │     │  Blockchain  │
+└──────┬──────┘     └──────┬──────┘     └────────┬─────────┘     └──────┬───────┘
+       │                   │                     │                      │
+       │ 1. Pay with X-PAYMENT                   │                      │
+       │ ────────────────> │                     │                      │
+       │                   │                     │                      │
+       │                   │ 2. Create escrow    │                      │
+       │                   │ ────────────────────>                      │
+       │                   │                     │                      │
+       │                   │                     │ 3. Hold funds        │
+       │                   │                     │ ─────────────────────>
+       │                   │                     │                      │
+       │                   │ 4. Escrow created   │                      │
+       │                   │ <────────────────── │                      │
+       │                   │                     │                      │
+       │ 5. Provide service                      │                      │
+       │ <──────────────── │                     │                      │
+       │                   │                     │                      │
+       │   ┌───────────────────────────────────────────────────────────┐
+       │   │                  IF SERVICE DELIVERED                     │
+       │   └───────────────────────────────────────────────────────────┘
+       │                   │ 6a. Release escrow  │                      │
+       │                   │ ────────────────────>                      │
+       │                   │                     │                      │
+       │                   │                     │ 7a. Transfer to      │
+       │                   │                     │     recipient        │
+       │                   │                     │ ─────────────────────>
+       │                   │                     │                      │
+       │   ┌───────────────────────────────────────────────────────────┐
+       │   │                  IF SERVICE FAILED                        │
+       │   └───────────────────────────────────────────────────────────┘
+       │ 6b. Request refund│                     │                      │
+       │ ────────────────> │                     │                      │
+       │                   │ 7b. Process refund  │                      │
+       │                   │ ────────────────────>                      │
+       │                   │                     │                      │
+       │                   │                     │ 8b. Return to payer  │
+       │                   │                     │ ─────────────────────>
+       └                   └                     └                      └
+```
+
+### Basic Escrow Usage
+
+```typescript
+import {
+  EscrowClient,
+  canReleaseEscrow,
+  canRefundEscrow,
+  isEscrowExpired,
+} from 'uvd-x402-sdk/backend';
+
+const escrow = new EscrowClient({
+  apiKey: process.env.ESCROW_API_KEY,
+});
+
+// Create escrow payment
+const escrowPayment = await escrow.createEscrow({
+  paymentHeader: req.headers['x-payment'],
+  requirements: paymentRequirements,
+  escrowDuration: 86400, // 24 hours
+  releaseConditions: {
+    minHoldTime: 3600, // Minimum 1 hour before release
+  },
+});
+
+console.log('Escrow ID:', escrowPayment.id);
+console.log('Status:', escrowPayment.status); // 'held'
+
+// Check if we can release
+if (canReleaseEscrow(escrowPayment)) {
+  // After service is provided, release funds to recipient
+  const released = await escrow.release(escrowPayment.id);
+  console.log('Released, tx:', released.transactionHash);
+}
+```
+
+### Handling Refunds
+
+```typescript
+// Payer requests refund
+const refundRequest = await escrow.requestRefund({
+  escrowId: escrowPayment.id,
+  reason: 'Service not delivered within expected timeframe',
+  evidence: 'Order #12345 shows pending status after 48 hours',
+});
+
+// Recipient can approve or reject
+await escrow.approveRefund(refundRequest.id, refundRequest.amountRequested);
+// or
+await escrow.rejectRefund(refundRequest.id, 'Service was delivered, see tracking #XYZ');
+```
+
+### Dispute Resolution
+
+```typescript
+// If parties disagree, open a dispute
+const dispute = await escrow.openDispute(
+  escrowPayment.id,
+  'Service quality does not match description',
+  'Screenshots showing issues with delivered product'
+);
+
+// Submit additional evidence
+await escrow.submitEvidence(dispute.id, 'Additional documentation...');
+
+// Check dispute status
+const updatedDispute = await escrow.getDispute(dispute.id);
+console.log('Outcome:', updatedDispute.outcome);
+// 'pending' | 'payer_wins' | 'recipient_wins' | 'split'
+```
+
+### Helper Functions
+
+```typescript
+import {
+  canReleaseEscrow,
+  canRefundEscrow,
+  isEscrowExpired,
+  escrowTimeRemaining,
+} from 'uvd-x402-sdk/backend';
+
+// Check if escrow can be released
+if (canReleaseEscrow(escrowPayment)) {
+  await escrow.release(escrowPayment.id);
+}
+
+// Check if escrow can be refunded
+if (canRefundEscrow(escrowPayment)) {
+  await escrow.requestRefund({ escrowId: escrowPayment.id, reason: '...' });
+}
+
+// Check expiration
+if (isEscrowExpired(escrowPayment)) {
+  console.log('Escrow has expired');
+}
+
+// Time remaining
+const msRemaining = escrowTimeRemaining(escrowPayment);
+console.log(`Expires in ${msRemaining / 1000 / 60} minutes`);
+```
 
 ---
 
