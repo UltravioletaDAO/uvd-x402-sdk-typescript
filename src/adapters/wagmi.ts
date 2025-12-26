@@ -31,7 +31,7 @@
  */
 
 import { getChainByName } from '../chains';
-import { createX402V1Header, encodeX402Header } from '../utils';
+import { createX402V1Header, encodeX402Header, validateRecipient } from '../utils';
 import { X402Error } from '../types';
 import type { PaymentResult } from '../types';
 
@@ -135,6 +135,9 @@ export async function createPaymentFromWalletClient(
     chainName = 'base',
     validitySeconds = 300,
   } = options;
+
+  // Validate recipient address - prevents empty/invalid addresses
+  validateRecipient(recipient, 'evm');
 
   // Get chain configuration
   const chain = getChainByName(chainName);

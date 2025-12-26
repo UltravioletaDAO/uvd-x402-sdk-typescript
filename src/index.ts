@@ -116,6 +116,9 @@ export {
   generatePaymentOptions,
   isCAIP2Format,
   convertX402Header,
+  // Validation utilities
+  validateRecipient,
+  validateAmount,
 } from './utils';
 
 // Types

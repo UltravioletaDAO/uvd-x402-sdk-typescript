@@ -25,6 +25,7 @@ import {
   getChainById,
   getEnabledChains,
 } from '../chains';
+import { validateRecipient } from '../utils';
 
 /**
  * X402Client - Main SDK client for x402 payments
@@ -469,6 +470,9 @@ export class X402Client {
 
     // Get recipient address for EVM
     const recipient = this.getRecipientForNetwork(paymentInfo, 'evm');
+
+    // Validate recipient address - prevents empty/invalid addresses
+    validateRecipient(recipient, 'evm');
 
     // Generate random nonce
     const nonceBytes = new Uint8Array(32);
