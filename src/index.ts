@@ -201,3 +201,7 @@ export type {
 } from './types';
 
 export { X402Error, DEFAULT_CONFIG, CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from './types';
+
+// Facilitator configuration
+export { FACILITATOR_ADDRESSES, getFacilitatorAddress } from './facilitator';
+export type { FacilitatorAddresses } from './facilitator';
