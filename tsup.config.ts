@@ -10,6 +10,7 @@ export default defineConfig({
     'utils/index': 'src/utils/index.ts',
     'react/index': 'src/react/index.tsx',
     'adapters/index': 'src/adapters/index.ts',
+    'backend/index': 'src/backend/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,
