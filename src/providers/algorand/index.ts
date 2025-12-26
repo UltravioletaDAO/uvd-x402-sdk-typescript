@@ -40,6 +40,7 @@ import type {
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
 import { chainToCAIP2 } from '../../utils';
+import { getFacilitatorAddress } from '../../facilitator';
 
 /**
  * Browser-compatible base64 encoding for Uint8Array
@@ -343,11 +344,15 @@ export class AlgorandProvider implements WalletAdapter {
     const recipient = paymentInfo.recipients?.algorand || paymentInfo.recipient;
     const assetId = parseInt(chainConfig.usdc.address, 10);
 
-    // Get facilitator address (fee payer)
-    const facilitatorAddress = paymentInfo.facilitator;
+    // Get facilitator address (fee payer) - automatically from SDK config
+    // Priority: paymentInfo.facilitator > SDK default for chain
+    const chainName = chainConfig?.name || 'algorand';
+    const facilitatorAddress =
+      paymentInfo.facilitator || getFacilitatorAddress(chainName, 'algorand');
+
     if (!facilitatorAddress) {
       throw new X402Error(
-        'Facilitator address required for Algorand payments. Set paymentInfo.facilitator',
+        'Facilitator address not configured for Algorand',
         'PAYMENT_FAILED'
       );
     }
