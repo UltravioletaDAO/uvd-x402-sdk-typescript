@@ -454,6 +454,20 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       name: 'USD Coin',
       version: '1',
     },
+    tokens: {
+      usdc: {
+        address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC SPL token mint
+        decimals: 6,
+        name: 'USD Coin',
+        version: '1',
+      },
+      ausd: {
+        address: 'AUSD1jCcCyPLybk1YnvPWsHQSrZ46dxwoMniN4N2UEB9', // AUSD Token2022 mint
+        decimals: 6,
+        name: 'Agora Dollar',
+        version: '1',
+      },
+    },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
