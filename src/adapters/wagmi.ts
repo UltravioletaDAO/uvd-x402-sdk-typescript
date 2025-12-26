@@ -259,6 +259,10 @@ export async function createPaymentWithResult(
   return {
     success: true,
     paymentHeader,
+    headers: {
+      'X-PAYMENT': paymentHeader,
+      'PAYMENT-SIGNATURE': paymentHeader,
+    },
     network: options.chainName || 'base',
     payer: walletClient?.account.address,
   };

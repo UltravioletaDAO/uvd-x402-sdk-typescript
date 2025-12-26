@@ -1,10 +1,11 @@
 /**
- * uvd-x402-sdk - Validation Utilities
+ * uvd-x402-sdk - Validation and Payment Header Utilities
  *
- * Functions for validating payment parameters to prevent
- * invalid or empty values from being processed.
+ * Functions for validating payment parameters and creating
+ * payment headers for HTTP requests.
  */
 
+import type { X402HeaderName, PaymentHeaders } from '../types';
 import { X402Error } from '../types';
 
 /**
@@ -149,3 +150,75 @@ export function validateAmount(amount: string | undefined | null): asserts amoun
     );
   }
 }
+
+// ============================================================================
+// PAYMENT HEADER UTILITIES
+// ============================================================================
+
+/**
+ * Create payment headers object from a base64-encoded payload
+ *
+ * Returns an object with both X-PAYMENT and PAYMENT-SIGNATURE headers,
+ * making it easy to use either header format.
+ *
+ * @param paymentHeader - Base64-encoded payment payload
+ * @returns PaymentHeaders object with both header formats
+ *
+ * @example
+ * ```ts
+ * const headers = createPaymentHeaders(paymentHeader);
+ *
+ * // Use v1 header (most compatible)
+ * fetch(url, { headers: { 'X-PAYMENT': headers['X-PAYMENT'] } });
+ *
+ * // Use v2 header
+ * fetch(url, { headers: { 'PAYMENT-SIGNATURE': headers['PAYMENT-SIGNATURE'] } });
+ * ```
+ */
+export function createPaymentHeaders(paymentHeader: string): PaymentHeaders {
+  return {
+    'X-PAYMENT': paymentHeader,
+    'PAYMENT-SIGNATURE': paymentHeader,
+  };
+}
+
+/**
+ * Get a single payment header by name
+ *
+ * @param paymentHeader - Base64-encoded payment payload
+ * @param headerName - Header name to use ('X-PAYMENT' or 'PAYMENT-SIGNATURE')
+ * @returns Object with a single header entry
+ *
+ * @example
+ * ```ts
+ * // Use with fetch spread operator
+ * fetch(url, {
+ *   headers: {
+ *     'Content-Type': 'application/json',
+ *     ...getPaymentHeader(result.paymentHeader, 'X-PAYMENT'),
+ *   },
+ * });
+ * ```
+ */
+export function getPaymentHeader(
+  paymentHeader: string,
+  headerName: X402HeaderName = 'X-PAYMENT'
+): Record<X402HeaderName, string> {
+  return { [headerName]: paymentHeader } as Record<X402HeaderName, string>;
+}
+
+/**
+ * Default x402 payment header name
+ *
+ * Use 'X-PAYMENT' for maximum compatibility with all facilitators.
+ * Use 'PAYMENT-SIGNATURE' for x402 v2 compliance.
+ */
+export const DEFAULT_PAYMENT_HEADER: X402HeaderName = 'X-PAYMENT';
+
+/**
+ * All supported x402 payment header names
+ */
+export const PAYMENT_HEADER_NAMES: readonly X402HeaderName[] = [
+  'X-PAYMENT',
+  'PAYMENT-SIGNATURE',
+] as const;

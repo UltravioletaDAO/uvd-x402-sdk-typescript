@@ -567,6 +567,10 @@ export class X402Client {
     const result: PaymentResult = {
       success: true,
       paymentHeader,
+      headers: {
+        'X-PAYMENT': paymentHeader,
+        'PAYMENT-SIGNATURE': paymentHeader,
+      },
       network: chain.name,
       payer: from,
     };

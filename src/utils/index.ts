@@ -22,4 +22,8 @@ export {
 export {
   validateRecipient,
   validateAmount,
+  createPaymentHeaders,
+  getPaymentHeader,
+  DEFAULT_PAYMENT_HEADER,
+  PAYMENT_HEADER_NAMES,
 } from './validation';
