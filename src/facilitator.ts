@@ -25,42 +25,90 @@ export const DEFAULT_FACILITATOR_URL = 'https://facilitator.ultravioletadao.xyz'
  * The facilitator uses these to pay fees and sign transactions.
  */
 export const FACILITATOR_ADDRESSES = {
+  // ============================================
+  // EVM Chains
+  // ============================================
   /**
-   * Solana facilitator address (fee payer)
+   * EVM facilitator address (mainnet)
+   * Used for: Submitting EIP-3009 transferWithAuthorization transactions
+   * Note: Same address across all EVM mainnet chains
+   */
+  evm: '0x103040545AC5031A11E8C03dd11324C7333a13C7',
+
+  /**
+   * EVM facilitator address (testnet)
+   * Used for: All EVM testnet chains
+   */
+  'evm-testnet': '0x34033041a5944B8F10f8E4D8496Bfb84f1A293A8',
+
+  // ============================================
+  // Solana
+  // ============================================
+  /**
+   * Solana facilitator address (mainnet)
    * Used for: Paying transaction fees on Solana
    */
   solana: 'F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq',
 
   /**
-   * Algorand facilitator address (fee payer)
-   * Used for: Signing Transaction 0 (fee tx) in atomic groups
-   * Note: This is derived from the facilitator's Algorand mnemonic
+   * Solana facilitator address (devnet)
    */
-  algorand: 'SXHRBXS22SKKXHXK44DTQMWN2SXK3SFJWBDAQZGF4DRPW7PNFAUM2GYFAQ',
+  'solana-devnet': '6xNPewUdKRbEZDReQdpyfNUdgNg8QRc8Mt263T5GZSRv',
+
+  // ============================================
+  // Fogo (uses same addresses as Solana)
+  // ============================================
+  /**
+   * Fogo facilitator address (mainnet)
+   */
+  fogo: 'F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq',
 
   /**
-   * Algorand testnet facilitator address
+   * Fogo facilitator address (testnet)
    */
-  'algorand-testnet': 'SXHRBXS22SKKXHXK44DTQMWN2SXK3SFJWBDAQZGF4DRPW7PNFAUM2GYFAQ',
+  'fogo-testnet': '6xNPewUdKRbEZDReQdpyfNUdgNg8QRc8Mt263T5GZSRv',
 
+  // ============================================
+  // NEAR
+  // ============================================
   /**
-   * EVM facilitator address
-   * Used for: Submitting EIP-3009 transferWithAuthorization transactions
-   * Note: Same address across all EVM chains
-   */
-  evm: '0x7c5F3AdB0C7775968Bc7e7cF61b27fECf2e2b500',
-
-  /**
-   * Stellar facilitator address
-   * Used for: Signing soroban authorization entries
-   */
-  stellar: 'GDUTDNV53WQPOB2JUZPO6SXH4LVT7CJSLCMLFQ7W4CNAXGIX7XYMCNP2',
-
-  /**
-   * NEAR facilitator address
+   * NEAR facilitator address (mainnet)
    * Used for: Relaying meta-transactions
    */
   near: 'uvd-facilitator.near',
+
+  /**
+   * NEAR facilitator address (testnet)
+   */
+  'near-testnet': 'uvd-facilitator.testnet',
+
+  // ============================================
+  // Stellar
+  // ============================================
+  /**
+   * Stellar facilitator address (mainnet)
+   * Used for: Signing soroban authorization entries
+   */
+  stellar: 'GCHPGXJT2WFFRFCA5TV4G4E3PMMXLNIDUH27PKDYA4QJ2XGYZWGFZNHB',
+
+  /**
+   * Stellar facilitator address (testnet)
+   */
+  'stellar-testnet': 'GBBFZMLUJEZVI32EN4XA2KPP445XIBTMTRBLYWFIL556RDTHS2OWFQ2Z',
+
+  // ============================================
+  // Algorand
+  // ============================================
+  /**
+   * Algorand facilitator address (mainnet)
+   * Used for: Signing Transaction 0 (fee tx) in atomic groups
+   */
+  algorand: 'KIMS5H6QLCUDL65L5UBTOXDPWLMTS7N3AAC3I6B2NCONEI5QIVK7LH2C2I',
+
+  /**
+   * Algorand facilitator address (testnet)
+   */
+  'algorand-testnet': '5DPPDQNYUPCTXRZWRYSF3WPYU6RKAUR25F3YG4EKXQRHV5AUAI62H5GXL4',
 } as const;
 
 /**
