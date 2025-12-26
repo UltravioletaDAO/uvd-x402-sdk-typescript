@@ -512,12 +512,12 @@ export class AlgorandProvider implements WalletAdapter {
     const payload = JSON.parse(paymentPayload) as AlgorandPaymentPayload;
 
     // Determine network name for x402
-    // Use "algorand-mainnet" or "algorand-testnet" format for facilitator
+    // Use "algorand" or "algorand-testnet" format for facilitator
     let networkName: string;
     if (chainConfig?.name === 'algorand-testnet') {
       networkName = 'algorand-testnet';
     } else {
-      networkName = 'algorand-mainnet'; // Default to mainnet
+      networkName = 'algorand'; // Default to mainnet
     }
 
     // Build the payload data (GoPlausible x402-avm spec)
