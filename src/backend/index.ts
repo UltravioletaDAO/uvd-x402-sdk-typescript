@@ -8,15 +8,13 @@
  * - Configure CORS for x402 payment flows
  * - Create atomic payment handlers
  * - Discover and register resources via Bazaar Discovery API
+ * - Manage escrow payments with refund and dispute resolution
  *
- * @example
+ * @example Basic payment flow
  * ```ts
  * import {
  *   parsePaymentHeader,
- *   buildVerifyRequest,
- *   buildSettleRequest,
  *   FacilitatorClient,
- *   BazaarClient,
  *   X402_CORS_HEADERS,
  * } from 'uvd-x402-sdk/backend';
  *
@@ -29,10 +27,41 @@
  *
  * // If valid, provide service then settle
  * const settleResult = await client.settle(payment, paymentRequirements);
+ * ```
  *
- * // Discover x402-enabled resources
+ * @example Escrow payment with refund support
+ * ```ts
+ * import { EscrowClient } from 'uvd-x402-sdk/backend';
+ *
+ * const escrow = new EscrowClient();
+ *
+ * // Hold payment in escrow
+ * const escrowPayment = await escrow.createEscrow({
+ *   paymentHeader: req.headers['x-payment'],
+ *   requirements: paymentRequirements,
+ *   escrowDuration: 86400, // 24 hours
+ * });
+ *
+ * // After service delivered, release to recipient
+ * await escrow.release(escrowPayment.id);
+ *
+ * // Or if service failed, request refund
+ * await escrow.requestRefund({
+ *   escrowId: escrowPayment.id,
+ *   reason: 'Service not delivered',
+ * });
+ * ```
+ *
+ * @example Resource discovery
+ * ```ts
+ * import { BazaarClient } from 'uvd-x402-sdk/backend';
+ *
  * const bazaar = new BazaarClient();
- * const resources = await bazaar.discover({ category: 'api' });
+ * const resources = await bazaar.discover({
+ *   category: 'ai',
+ *   network: 'base',
+ *   maxPrice: '0.10',
+ * });
  * ```
  */
 
@@ -1368,4 +1397,735 @@ export class BazaarClient {
       throw error;
     }
   }
+}
+
+// ============================================================================
+// ESCROW & REFUND EXTENSION
+// ============================================================================
+
+/**
+ * Escrow payment status
+ */
+export type EscrowStatus =
+  | 'pending'        // Payment initiated, awaiting confirmation
+  | 'held'           // Funds held in escrow
+  | 'released'       // Funds released to recipient
+  | 'refunded'       // Funds returned to payer
+  | 'disputed'       // Dispute in progress
+  | 'expired';       // Escrow expired without resolution
+
+/**
+ * Refund request status
+ */
+export type RefundStatus =
+  | 'pending'        // Refund requested, awaiting processing
+  | 'approved'       // Refund approved
+  | 'rejected'       // Refund rejected
+  | 'processed'      // Refund completed on-chain
+  | 'disputed';      // Under dispute review
+
+/**
+ * Dispute resolution outcome
+ */
+export type DisputeOutcome =
+  | 'pending'        // Dispute under review
+  | 'payer_wins'     // Payer gets refund
+  | 'recipient_wins' // Recipient keeps funds
+  | 'split';         // Funds split between parties
+
+/**
+ * Escrow payment record
+ */
+export interface EscrowPayment {
+  /** Unique escrow ID */
+  id: string;
+  /** Original payment header (base64 encoded) */
+  paymentHeader: string;
+  /** Current status */
+  status: EscrowStatus;
+  /** Network where payment was made */
+  network: string;
+  /** Payer address */
+  payer: string;
+  /** Recipient address */
+  recipient: string;
+  /** Amount in atomic units */
+  amount: string;
+  /** Token/asset contract */
+  asset: string;
+  /** Resource URL being paid for */
+  resource: string;
+  /** Escrow expiration timestamp (ISO) */
+  expiresAt: string;
+  /** Release conditions (optional) */
+  releaseConditions?: {
+    /** Minimum time before release (seconds) */
+    minHoldTime?: number;
+    /** Required confirmations */
+    confirmations?: number;
+    /** Custom condition metadata */
+    custom?: unknown;
+  };
+  /** Transaction hash if released/refunded */
+  transactionHash?: string;
+  /** Creation timestamp (ISO) */
+  createdAt: string;
+  /** Last update timestamp (ISO) */
+  updatedAt: string;
+}
+
+/**
+ * Refund request record
+ */
+export interface RefundRequest {
+  /** Unique refund request ID */
+  id: string;
+  /** Related escrow ID */
+  escrowId: string;
+  /** Current status */
+  status: RefundStatus;
+  /** Reason for refund request */
+  reason: string;
+  /** Additional evidence/details */
+  evidence?: string;
+  /** Amount requested (may be partial) */
+  amountRequested: string;
+  /** Amount approved (if any) */
+  amountApproved?: string;
+  /** Requester (payer) address */
+  requester: string;
+  /** Transaction hash if processed */
+  transactionHash?: string;
+  /** Response from recipient/facilitator */
+  response?: {
+    status: 'approved' | 'rejected';
+    reason?: string;
+    respondedAt: string;
+  };
+  /** Creation timestamp (ISO) */
+  createdAt: string;
+  /** Last update timestamp (ISO) */
+  updatedAt: string;
+}
+
+/**
+ * Dispute record
+ */
+export interface Dispute {
+  /** Unique dispute ID */
+  id: string;
+  /** Related escrow ID */
+  escrowId: string;
+  /** Related refund request ID (if any) */
+  refundRequestId?: string;
+  /** Dispute outcome */
+  outcome: DisputeOutcome;
+  /** Initiator (payer or recipient) */
+  initiator: 'payer' | 'recipient';
+  /** Reason for dispute */
+  reason: string;
+  /** Evidence from payer */
+  payerEvidence?: string;
+  /** Evidence from recipient */
+  recipientEvidence?: string;
+  /** Arbitration notes */
+  arbitrationNotes?: string;
+  /** Amount resolved to payer */
+  payerAmount?: string;
+  /** Amount resolved to recipient */
+  recipientAmount?: string;
+  /** Transaction hash(es) for resolution */
+  transactionHashes?: string[];
+  /** Creation timestamp (ISO) */
+  createdAt: string;
+  /** Resolution timestamp (ISO) */
+  resolvedAt?: string;
+}
+
+/**
+ * Options for creating an escrow payment
+ */
+export interface CreateEscrowOptions {
+  /** Payment header (from client SDK) */
+  paymentHeader: string;
+  /** Payment requirements */
+  requirements: PaymentRequirements;
+  /** Escrow duration in seconds (default: 86400 = 24h) */
+  escrowDuration?: number;
+  /** Release conditions */
+  releaseConditions?: {
+    minHoldTime?: number;
+    confirmations?: number;
+    custom?: unknown;
+  };
+}
+
+/**
+ * Options for requesting a refund
+ */
+export interface RequestRefundOptions {
+  /** Escrow ID to refund */
+  escrowId: string;
+  /** Reason for refund */
+  reason: string;
+  /** Amount to refund (full amount if not specified) */
+  amount?: string;
+  /** Supporting evidence */
+  evidence?: string;
+}
+
+/**
+ * Options for the EscrowClient
+ */
+export interface EscrowClientOptions {
+  /** Base URL of the Escrow API (default: https://escrow.ultravioletadao.xyz) */
+  baseUrl?: string;
+  /** API key for authenticated operations */
+  apiKey?: string;
+  /** Request timeout in milliseconds (default: 30000) */
+  timeout?: number;
+}
+
+/**
+ * Client for x402 Escrow & Refund operations
+ *
+ * The Escrow system holds payments until service is verified,
+ * enabling refunds and dispute resolution.
+ *
+ * @example
+ * ```ts
+ * // Create escrow payment (backend)
+ * const escrow = new EscrowClient();
+ * const escrowPayment = await escrow.createEscrow({
+ *   paymentHeader: req.headers['x-payment'],
+ *   requirements: paymentRequirements,
+ *   escrowDuration: 86400, // 24 hours
+ * });
+ *
+ * // After service is provided, release the escrow
+ * await escrow.release(escrowPayment.id);
+ *
+ * // If service not provided, payer can request refund
+ * await escrow.requestRefund({
+ *   escrowId: escrowPayment.id,
+ *   reason: 'Service not delivered within expected timeframe',
+ * });
+ * ```
+ */
+export class EscrowClient {
+  private readonly baseUrl: string;
+  private readonly apiKey?: string;
+  private readonly timeout: number;
+
+  constructor(options: EscrowClientOptions = {}) {
+    this.baseUrl = options.baseUrl || 'https://escrow.ultravioletadao.xyz';
+    this.apiKey = options.apiKey;
+    this.timeout = options.timeout || 30000;
+  }
+
+  private getHeaders(authenticated: boolean = false): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (authenticated && this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    return headers;
+  }
+
+  /**
+   * Create an escrow payment
+   *
+   * Holds the payment in escrow until released or refunded.
+   *
+   * @param options - Escrow creation options
+   * @returns Created escrow payment
+   */
+  async createEscrow(options: CreateEscrowOptions): Promise<EscrowPayment> {
+    const url = `${this.baseUrl}/escrow`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        body: JSON.stringify({
+          paymentHeader: options.paymentHeader,
+          paymentRequirements: options.requirements,
+          escrowDuration: options.escrowDuration || 86400,
+          releaseConditions: options.releaseConditions,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get escrow payment by ID
+   *
+   * @param escrowId - Escrow payment ID
+   * @returns Escrow payment details
+   */
+  async getEscrow(escrowId: string): Promise<EscrowPayment> {
+    const url = `${this.baseUrl}/escrow/${encodeURIComponent(escrowId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Release escrow funds to recipient
+   *
+   * Call this after service has been successfully provided.
+   *
+   * @param escrowId - Escrow payment ID
+   * @returns Updated escrow payment with transaction hash
+   */
+  async release(escrowId: string): Promise<EscrowPayment> {
+    const url = `${this.baseUrl}/escrow/${encodeURIComponent(escrowId)}/release`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Request a refund for an escrow payment
+   *
+   * Initiates a refund request that must be approved.
+   *
+   * @param options - Refund request options
+   * @returns Created refund request
+   */
+  async requestRefund(options: RequestRefundOptions): Promise<RefundRequest> {
+    const url = `${this.baseUrl}/escrow/${encodeURIComponent(options.escrowId)}/refund`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        body: JSON.stringify({
+          reason: options.reason,
+          amount: options.amount,
+          evidence: options.evidence,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Approve a refund request (for recipients)
+   *
+   * @param refundId - Refund request ID
+   * @param amount - Amount to approve (may be less than requested)
+   * @returns Updated refund request
+   */
+  async approveRefund(refundId: string, amount?: string): Promise<RefundRequest> {
+    const url = `${this.baseUrl}/refund/${encodeURIComponent(refundId)}/approve`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        body: JSON.stringify({ amount }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Reject a refund request (for recipients)
+   *
+   * @param refundId - Refund request ID
+   * @param reason - Reason for rejection
+   * @returns Updated refund request
+   */
+  async rejectRefund(refundId: string, reason: string): Promise<RefundRequest> {
+    const url = `${this.baseUrl}/refund/${encodeURIComponent(refundId)}/reject`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        body: JSON.stringify({ reason }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get refund request by ID
+   *
+   * @param refundId - Refund request ID
+   * @returns Refund request details
+   */
+  async getRefund(refundId: string): Promise<RefundRequest> {
+    const url = `${this.baseUrl}/refund/${encodeURIComponent(refundId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Open a dispute for an escrow payment
+   *
+   * Initiates arbitration when payer and recipient disagree.
+   *
+   * @param escrowId - Escrow payment ID
+   * @param reason - Reason for dispute
+   * @param evidence - Supporting evidence
+   * @returns Created dispute
+   */
+  async openDispute(
+    escrowId: string,
+    reason: string,
+    evidence?: string
+  ): Promise<Dispute> {
+    const url = `${this.baseUrl}/escrow/${encodeURIComponent(escrowId)}/dispute`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        body: JSON.stringify({ reason, evidence }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Submit evidence to a dispute
+   *
+   * @param disputeId - Dispute ID
+   * @param evidence - Evidence to submit
+   * @returns Updated dispute
+   */
+  async submitEvidence(disputeId: string, evidence: string): Promise<Dispute> {
+    const url = `${this.baseUrl}/dispute/${encodeURIComponent(disputeId)}/evidence`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(true),
+        body: JSON.stringify({ evidence }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get dispute by ID
+   *
+   * @param disputeId - Dispute ID
+   * @returns Dispute details
+   */
+  async getDispute(disputeId: string): Promise<Dispute> {
+    const url = `${this.baseUrl}/dispute/${encodeURIComponent(disputeId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * List escrow payments (with filters)
+   *
+   * @param options - Filter and pagination options
+   * @returns Paginated list of escrow payments
+   */
+  async listEscrows(options: {
+    status?: EscrowStatus;
+    payer?: string;
+    recipient?: string;
+    page?: number;
+    limit?: number;
+  } = {}): Promise<{
+    escrows: EscrowPayment[];
+    total: number;
+    page: number;
+    limit: number;
+    hasMore: boolean;
+  }> {
+    const params = new URLSearchParams();
+    if (options.status) params.set('status', options.status);
+    if (options.payer) params.set('payer', options.payer);
+    if (options.recipient) params.set('recipient', options.recipient);
+    if (options.page) params.set('page', options.page.toString());
+    if (options.limit) params.set('limit', options.limit.toString());
+
+    const url = `${this.baseUrl}/escrow${params.toString() ? `?${params}` : ''}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(true),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Check Escrow API health
+   *
+   * @returns True if healthy
+   */
+  async healthCheck(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/health`, {
+        method: 'GET',
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// ============================================================================
+// ESCROW HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Check if an escrow can be released
+ *
+ * @param escrow - Escrow payment to check
+ * @returns True if the escrow can be released
+ */
+export function canReleaseEscrow(escrow: EscrowPayment): boolean {
+  if (escrow.status !== 'held') {
+    return false;
+  }
+
+  // Check expiration
+  if (new Date(escrow.expiresAt) < new Date()) {
+    return false;
+  }
+
+  // Check minimum hold time if specified
+  if (escrow.releaseConditions?.minHoldTime) {
+    const createdAt = new Date(escrow.createdAt);
+    const minReleaseTime = new Date(
+      createdAt.getTime() + escrow.releaseConditions.minHoldTime * 1000
+    );
+    if (new Date() < minReleaseTime) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Check if an escrow can be refunded
+ *
+ * @param escrow - Escrow payment to check
+ * @returns True if the escrow can be refunded
+ */
+export function canRefundEscrow(escrow: EscrowPayment): boolean {
+  // Can only refund held or pending escrows
+  return escrow.status === 'held' || escrow.status === 'pending';
+}
+
+/**
+ * Check if an escrow is expired
+ *
+ * @param escrow - Escrow payment to check
+ * @returns True if the escrow is expired
+ */
+export function isEscrowExpired(escrow: EscrowPayment): boolean {
+  return new Date(escrow.expiresAt) < new Date();
+}
+
+/**
+ * Calculate time remaining until escrow expires
+ *
+ * @param escrow - Escrow payment to check
+ * @returns Milliseconds until expiration (negative if expired)
+ */
+export function escrowTimeRemaining(escrow: EscrowPayment): number {
+  return new Date(escrow.expiresAt).getTime() - Date.now();
 }
