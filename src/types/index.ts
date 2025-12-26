@@ -345,23 +345,21 @@ export interface NEARPaymentPayload {
 /**
  * Algorand payment payload (atomic transaction group)
  *
- * Algorand uses a unique payment model where the facilitator creates and signs
- * an atomic transaction group. The user signs their portion (the ASA transfer)
- * and the facilitator submits the complete group.
+ * Follows the GoPlausible x402-avm spec for atomic groups:
+ * - Transaction 0: Fee payment (UNSIGNED) - facilitator -> facilitator, covers all fees
+ * - Transaction 1: ASA transfer (SIGNED) - client -> merchant
+ *
+ * The facilitator signs transaction 0 and submits the complete atomic group.
  */
 export interface AlgorandPaymentPayload {
-  /** Sender's Algorand address (58-character base32) */
-  from: string;
-  /** Recipient's Algorand address */
-  to: string;
-  /** Amount in base units (microAlgos for ALGO, or base units for ASA) */
-  amount: string;
-  /** USDC ASA ID (31566704 for mainnet, 10458941 for testnet) */
-  assetId: number;
-  /** Base64-encoded signed transaction bytes */
-  signedTxn: string;
-  /** Optional note field */
-  note?: string;
+  /** Index of the payment transaction in the group (always 1) */
+  paymentIndex: number;
+  /**
+   * Array of base64-encoded msgpack transactions forming the atomic group:
+   * - [0]: Unsigned fee transaction (facilitator signs)
+   * - [1]: Signed ASA transfer (client signed)
+   */
+  paymentGroup: string[];
 }
 
 /**
@@ -497,15 +495,13 @@ export interface X402NEARPayload {
 }
 
 /**
- * Algorand-specific payload in x402 header
+ * Algorand-specific payload in x402 header (atomic group format)
  */
 export interface X402AlgorandPayload {
-  from: string;
-  to: string;
-  amount: string;
-  assetId: number;
-  signedTxn: string;
-  note?: string;
+  /** Index of the payment transaction in the group (always 1) */
+  paymentIndex: number;
+  /** Array of base64-encoded msgpack transactions */
+  paymentGroup: string[];
 }
 
 /**

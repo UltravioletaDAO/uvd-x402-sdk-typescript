@@ -318,11 +318,13 @@ export class AlgorandProvider implements WalletAdapter {
   }
 
   /**
-   * Create Algorand ASA transfer payment
+   * Create Algorand atomic group payment (GoPlausible x402-avm spec)
    *
-   * Transaction structure:
-   * 1. ASA Transfer from user to recipient
-   * 2. Facilitator pays transaction fees
+   * Transaction structure (atomic group):
+   * - Transaction 0: Fee payment (UNSIGNED) - facilitator -> facilitator, covers all fees
+   * - Transaction 1: ASA transfer (SIGNED) - client -> merchant
+   *
+   * The facilitator signs transaction 0 and submits the complete atomic group.
    */
   async signPayment(paymentInfo: PaymentInfo, chainConfig: ChainConfig): Promise<string> {
     await loadAlgorandDeps();
@@ -341,6 +343,15 @@ export class AlgorandProvider implements WalletAdapter {
     const recipient = paymentInfo.recipients?.algorand || paymentInfo.recipient;
     const assetId = parseInt(chainConfig.usdc.address, 10);
 
+    // Get facilitator address (fee payer)
+    const facilitatorAddress = paymentInfo.facilitator;
+    if (!facilitatorAddress) {
+      throw new X402Error(
+        'Facilitator address required for Algorand payments. Set paymentInfo.facilitator',
+        'PAYMENT_FAILED'
+      );
+    }
+
     // Parse amount (6 decimals for USDC)
     const amount = Math.floor(parseFloat(paymentInfo.amount) * 1_000_000);
 
@@ -348,46 +359,92 @@ export class AlgorandProvider implements WalletAdapter {
       // Get suggested transaction parameters
       const suggestedParams = await algodClient.getTransactionParams().do();
 
-      // Create ASA transfer transaction
+      // Transaction 0: Fee payment (facilitator -> facilitator, 0 amount)
+      // This transaction pays fees for both txns in the group (fee pooling)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const txn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+      const feeTxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: facilitatorAddress,
+        receiver: facilitatorAddress, // self-transfer
+        amount: 0,
+        suggestedParams: {
+          ...suggestedParams,
+          fee: 2000, // Covers both transactions (1000 each)
+          flatFee: true,
+        },
+      } as any);
+
+      // Transaction 1: ASA transfer (client -> merchant)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const paymentTxn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
         sender: this.address,
         receiver: recipient,
         amount: BigInt(amount),
         assetIndex: assetId,
-        suggestedParams: suggestedParams,
+        suggestedParams: {
+          ...suggestedParams,
+          fee: 0, // Fee paid by transaction 0
+          flatFee: true,
+        },
         note: new TextEncoder().encode('x402 payment via uvd-x402-sdk'),
       } as any);
 
-      // Sign with the active wallet (Lute or Pera)
-      let signedTxn: Uint8Array;
+      // Assign group ID to both transactions (creates atomic group)
+      const txnGroup = algosdk.assignGroupID([feeTxn, paymentTxn]);
+
+      // Encode fee transaction (UNSIGNED - facilitator will sign)
+      const unsignedFeeTxnBytes = algosdk.encodeUnsignedTransaction(txnGroup[0]);
+      const unsignedFeeTxnBase64 = uint8ArrayToBase64(unsignedFeeTxnBytes);
+
+      // Sign the payment transaction (index 1) with the active wallet
+      let signedPaymentTxnBytes: Uint8Array;
 
       if (this.walletType === 'lute' && this.luteWallet) {
         // Lute uses signTxns with base64 encoded transactions
-        const txnBase64 = uint8ArrayToBase64(txn.toByte());
-        const signedTxns = await this.luteWallet.signTxns([{ txn: txnBase64 }]);
-        if (!signedTxns || signedTxns.length === 0 || !signedTxns[0]) {
+        // For atomic groups, pass both txns but only sign the one we control
+        const feeTxnBase64 = uint8ArrayToBase64(txnGroup[0].toByte());
+        const paymentTxnBase64 = uint8ArrayToBase64(txnGroup[1].toByte());
+
+        // Sign only the payment transaction (index 1), leave fee txn unsigned
+        const signedTxns = await this.luteWallet.signTxns([
+          { txn: feeTxnBase64, signers: [] }, // Don't sign - facilitator will
+          { txn: paymentTxnBase64 }, // Sign this one
+        ]);
+
+        if (!signedTxns || signedTxns.length < 2 || !signedTxns[1]) {
           throw new X402Error('No signed transaction returned', 'SIGNATURE_REJECTED');
         }
-        // Lute returns base64 encoded signed transaction
-        signedTxn = Uint8Array.from(atob(signedTxns[0]), c => c.charCodeAt(0));
+
+        // Get the signed payment transaction (index 1)
+        const signedResult = signedTxns[1];
+        signedPaymentTxnBytes = this.decodeSignedTxn(signedResult);
       } else if (this.walletType === 'pera' && this.peraWallet) {
         // Pera uses signTransaction with transaction objects
-        const signedTxns = await this.peraWallet.signTransaction([[{ txn }]]);
-        if (!signedTxns || signedTxns.length === 0) {
+        // For atomic groups, pass both txns but only sign the one we control
+        const signedTxns = await this.peraWallet.signTransaction([
+          [
+            { txn: txnGroup[0], signers: [] }, // Don't sign - facilitator will
+            { txn: txnGroup[1] }, // Sign this one
+          ],
+        ]);
+
+        if (!signedTxns || signedTxns.length < 2 || !signedTxns[1]) {
           throw new X402Error('No signed transaction returned', 'SIGNATURE_REJECTED');
         }
-        signedTxn = signedTxns[0];
+
+        signedPaymentTxnBytes = signedTxns[1];
       } else {
         throw new X402Error('No wallet available for signing', 'WALLET_NOT_CONNECTED');
       }
 
+      const signedPaymentTxnBase64 = uint8ArrayToBase64(signedPaymentTxnBytes);
+
+      // Build payload following GoPlausible x402-avm spec
       const payload: AlgorandPaymentPayload = {
-        from: this.address,
-        to: recipient,
-        amount: amount.toString(),
-        assetId: assetId,
-        signedTxn: uint8ArrayToBase64(signedTxn),
+        paymentIndex: 1, // Index of the payment transaction in the group
+        paymentGroup: [
+          unsignedFeeTxnBase64,   // Transaction 0: unsigned fee tx
+          signedPaymentTxnBase64, // Transaction 1: signed payment tx
+        ],
       };
 
       return JSON.stringify(payload);
@@ -409,6 +466,32 @@ export class AlgorandProvider implements WalletAdapter {
   }
 
   /**
+   * Decode signed transaction from wallet response (handles various formats)
+   */
+  private decodeSignedTxn(signedResult: unknown): Uint8Array {
+    if (signedResult instanceof Uint8Array) {
+      return signedResult;
+    } else if (typeof signedResult === 'string') {
+      // Try to decode as base64
+      try {
+        return Uint8Array.from(atob(signedResult), c => c.charCodeAt(0));
+      } catch {
+        // If standard base64 fails, try URL-safe base64
+        const standardBase64 = signedResult.replace(/-/g, '+').replace(/_/g, '/');
+        return Uint8Array.from(atob(standardBase64), c => c.charCodeAt(0));
+      }
+    } else if (ArrayBuffer.isView(signedResult)) {
+      return new Uint8Array(
+        (signedResult as ArrayBufferView).buffer,
+        (signedResult as ArrayBufferView).byteOffset,
+        (signedResult as ArrayBufferView).byteLength
+      );
+    } else {
+      throw new X402Error('Unexpected signed transaction format', 'PAYMENT_FAILED');
+    }
+  }
+
+  /**
    * Encode Algorand payment as X-PAYMENT header
    *
    * @param paymentPayload - JSON-encoded payment payload from signPayment()
@@ -423,17 +506,19 @@ export class AlgorandProvider implements WalletAdapter {
   ): string {
     const payload = JSON.parse(paymentPayload) as AlgorandPaymentPayload;
 
-    // Use chain name from config, or default to 'algorand'
-    const networkName = chainConfig?.name || 'algorand';
+    // Determine network name for x402
+    // Use "algorand-mainnet" or "algorand-testnet" format for facilitator
+    let networkName: string;
+    if (chainConfig?.name === 'algorand-testnet') {
+      networkName = 'algorand-testnet';
+    } else {
+      networkName = 'algorand-mainnet'; // Default to mainnet
+    }
 
-    // Build the payload data
+    // Build the payload data (GoPlausible x402-avm spec)
     const payloadData = {
-      from: payload.from,
-      to: payload.to,
-      amount: payload.amount,
-      assetId: payload.assetId,
-      signedTxn: payload.signedTxn,
-      ...(payload.note && { note: payload.note }),
+      paymentIndex: payload.paymentIndex,
+      paymentGroup: payload.paymentGroup,
     };
 
     // Format in x402 standard format (v1 or v2)
@@ -447,7 +532,7 @@ export class AlgorandProvider implements WalletAdapter {
       : {
           x402Version: 1 as const,
           scheme: 'exact' as const,
-          network: networkName, // Plain chain name for v1
+          network: networkName,
           payload: payloadData,
         };
 
