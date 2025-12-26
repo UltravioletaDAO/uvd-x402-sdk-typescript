@@ -7,6 +7,7 @@
  * - Parse X-PAYMENT headers from incoming requests
  * - Configure CORS for x402 payment flows
  * - Create atomic payment handlers
+ * - Discover and register resources via Bazaar Discovery API
  *
  * @example
  * ```ts
@@ -15,6 +16,7 @@
  *   buildVerifyRequest,
  *   buildSettleRequest,
  *   FacilitatorClient,
+ *   BazaarClient,
  *   X402_CORS_HEADERS,
  * } from 'uvd-x402-sdk/backend';
  *
@@ -27,6 +29,10 @@
  *
  * // If valid, provide service then settle
  * const settleResult = await client.settle(payment, paymentRequirements);
+ *
+ * // Discover x402-enabled resources
+ * const bazaar = new BazaarClient();
+ * const resources = await bazaar.discover({ category: 'api' });
  * ```
  */
 
@@ -679,4 +685,687 @@ export function createPaymentMiddleware(
     // Note: Settlement should be done after the response is sent
     next();
   };
+}
+
+// ============================================================================
+// BAZAAR DISCOVERY API
+// ============================================================================
+
+/**
+ * Resource category for discovery
+ */
+export type BazaarCategory =
+  | 'api'
+  | 'data'
+  | 'ai'
+  | 'media'
+  | 'compute'
+  | 'storage'
+  | 'other';
+
+/**
+ * Network/chain filter for discovery
+ */
+export type BazaarNetwork =
+  | 'base'
+  | 'ethereum'
+  | 'polygon'
+  | 'arbitrum'
+  | 'optimism'
+  | 'avalanche'
+  | 'celo'
+  | 'hyperevm'
+  | 'unichain'
+  | 'monad'
+  | 'solana'
+  | 'fogo'
+  | 'stellar'
+  | 'near';
+
+/**
+ * Token/asset filter for discovery
+ */
+export type BazaarToken = 'USDC' | 'EURC' | 'AUSD' | 'PYUSD' | 'USDT';
+
+/**
+ * Resource registered in the Bazaar
+ */
+export interface BazaarResource {
+  /** Unique resource ID */
+  id: string;
+  /** Resource URL */
+  url: string;
+  /** Human-readable name */
+  name: string;
+  /** Description of the resource */
+  description: string;
+  /** Category of the resource */
+  category: BazaarCategory;
+  /** Supported networks for payment */
+  networks: BazaarNetwork[];
+  /** Supported tokens for payment */
+  tokens: BazaarToken[];
+  /** Price per request in atomic units */
+  pricePerRequest: string;
+  /** Price currency (e.g., "USDC") */
+  priceCurrency: BazaarToken;
+  /** Recipient address for payments */
+  payTo: string;
+  /** MIME type of the resource */
+  mimeType: string;
+  /** Optional output schema */
+  outputSchema?: unknown;
+  /** Resource owner/provider */
+  provider?: string;
+  /** Resource tags for search */
+  tags?: string[];
+  /** Whether the resource is active */
+  isActive: boolean;
+  /** ISO timestamp of creation */
+  createdAt: string;
+  /** ISO timestamp of last update */
+  updatedAt: string;
+}
+
+/**
+ * Options for registering a resource
+ */
+export interface BazaarRegisterOptions {
+  /** Resource URL (must be unique) */
+  url: string;
+  /** Human-readable name */
+  name: string;
+  /** Description of the resource */
+  description: string;
+  /** Category of the resource */
+  category: BazaarCategory;
+  /** Supported networks for payment */
+  networks: BazaarNetwork[];
+  /** Supported tokens for payment */
+  tokens?: BazaarToken[];
+  /** Price per request (e.g., "0.01") */
+  price: string;
+  /** Price currency (default: USDC) */
+  priceCurrency?: BazaarToken;
+  /** Recipient address for payments */
+  payTo: string;
+  /** MIME type of the resource (default: application/json) */
+  mimeType?: string;
+  /** Optional output schema */
+  outputSchema?: unknown;
+  /** Resource tags for search */
+  tags?: string[];
+}
+
+/**
+ * Options for discovering resources
+ */
+export interface BazaarDiscoverOptions {
+  /** Filter by category */
+  category?: BazaarCategory;
+  /** Filter by network */
+  network?: BazaarNetwork;
+  /** Filter by token */
+  token?: BazaarToken;
+  /** Filter by provider address */
+  provider?: string;
+  /** Filter by tags (match any) */
+  tags?: string[];
+  /** Search query (name, description) */
+  query?: string;
+  /** Maximum price filter (e.g., "0.10") */
+  maxPrice?: string;
+  /** Page number (1-indexed) */
+  page?: number;
+  /** Results per page (default: 20, max: 100) */
+  limit?: number;
+  /** Sort order */
+  sortBy?: 'price' | 'createdAt' | 'name';
+  /** Sort direction */
+  sortOrder?: 'asc' | 'desc';
+}
+
+/**
+ * Paginated discovery response
+ */
+export interface BazaarDiscoverResponse {
+  /** List of resources matching the query */
+  resources: BazaarResource[];
+  /** Total number of matching resources */
+  total: number;
+  /** Current page number */
+  page: number;
+  /** Results per page */
+  limit: number;
+  /** Total number of pages */
+  totalPages: number;
+  /** Whether there are more pages */
+  hasMore: boolean;
+}
+
+/**
+ * Options for the BazaarClient
+ */
+export interface BazaarClientOptions {
+  /** Base URL of the Bazaar API (default: https://bazaar.ultravioletadao.xyz) */
+  baseUrl?: string;
+  /** API key for authenticated operations (required for register/update/delete) */
+  apiKey?: string;
+  /** Request timeout in milliseconds (default: 30000) */
+  timeout?: number;
+}
+
+/**
+ * Client for interacting with the x402 Bazaar Discovery API
+ *
+ * The Bazaar is a discovery service for x402-enabled resources.
+ * Providers can register their APIs and consumers can discover them.
+ *
+ * @example
+ * ```ts
+ * // Discover resources (no auth required)
+ * const bazaar = new BazaarClient();
+ * const results = await bazaar.discover({
+ *   category: 'ai',
+ *   network: 'base',
+ *   maxPrice: '0.10',
+ * });
+ *
+ * // Register a resource (requires API key)
+ * const authBazaar = new BazaarClient({ apiKey: 'your-api-key' });
+ * const resource = await authBazaar.register({
+ *   url: 'https://api.example.com/v1/chat',
+ *   name: 'AI Chat API',
+ *   description: 'Pay-per-message AI chat',
+ *   category: 'ai',
+ *   networks: ['base', 'ethereum'],
+ *   price: '0.01',
+ *   payTo: '0x...',
+ * });
+ * ```
+ */
+export class BazaarClient {
+  private readonly baseUrl: string;
+  private readonly apiKey?: string;
+  private readonly timeout: number;
+
+  constructor(options: BazaarClientOptions = {}) {
+    this.baseUrl = options.baseUrl || 'https://bazaar.ultravioletadao.xyz';
+    this.apiKey = options.apiKey;
+    this.timeout = options.timeout || 30000;
+  }
+
+  /**
+   * Discover x402-enabled resources
+   *
+   * @param options - Discovery filters
+   * @returns Paginated list of matching resources
+   *
+   * @example
+   * ```ts
+   * // Find AI APIs on Base with USDC under $0.10
+   * const results = await bazaar.discover({
+   *   category: 'ai',
+   *   network: 'base',
+   *   token: 'USDC',
+   *   maxPrice: '0.10',
+   * });
+   *
+   * for (const resource of results.resources) {
+   *   console.log(`${resource.name}: ${resource.url}`);
+   * }
+   * ```
+   */
+  async discover(
+    options: BazaarDiscoverOptions = {}
+  ): Promise<BazaarDiscoverResponse> {
+    const params = new URLSearchParams();
+
+    if (options.category) params.set('category', options.category);
+    if (options.network) params.set('network', options.network);
+    if (options.token) params.set('token', options.token);
+    if (options.provider) params.set('provider', options.provider);
+    if (options.tags?.length) params.set('tags', options.tags.join(','));
+    if (options.query) params.set('query', options.query);
+    if (options.maxPrice) params.set('maxPrice', options.maxPrice);
+    if (options.page) params.set('page', options.page.toString());
+    if (options.limit) params.set('limit', options.limit.toString());
+    if (options.sortBy) params.set('sortBy', options.sortBy);
+    if (options.sortOrder) params.set('sortOrder', options.sortOrder);
+
+    const url = `${this.baseUrl}/resources${params.toString() ? `?${params}` : ''}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a specific resource by ID
+   *
+   * @param resourceId - Resource ID
+   * @returns Resource details
+   */
+  async getResource(resourceId: string): Promise<BazaarResource> {
+    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a resource by its URL
+   *
+   * @param resourceUrl - Resource URL
+   * @returns Resource details
+   */
+  async getResourceByUrl(resourceUrl: string): Promise<BazaarResource> {
+    const url = `${this.baseUrl}/resources/by-url?url=${encodeURIComponent(resourceUrl)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Register a new resource in the Bazaar
+   *
+   * Requires API key authentication.
+   *
+   * @param options - Resource registration options
+   * @returns Registered resource
+   *
+   * @example
+   * ```ts
+   * const resource = await bazaar.register({
+   *   url: 'https://api.example.com/v1/generate',
+   *   name: 'Image Generator API',
+   *   description: 'Generate images with AI',
+   *   category: 'ai',
+   *   networks: ['base', 'ethereum', 'polygon'],
+   *   price: '0.05',
+   *   payTo: '0x1234...',
+   *   tags: ['ai', 'image', 'generator'],
+   * });
+   * ```
+   */
+  async register(options: BazaarRegisterOptions): Promise<BazaarResource> {
+    if (!this.apiKey) {
+      throw new Error('API key required for resource registration');
+    }
+
+    const url = `${this.baseUrl}/resources`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          url: options.url,
+          name: options.name,
+          description: options.description,
+          category: options.category,
+          networks: options.networks,
+          tokens: options.tokens || ['USDC'],
+          price: options.price,
+          priceCurrency: options.priceCurrency || 'USDC',
+          payTo: options.payTo,
+          mimeType: options.mimeType || 'application/json',
+          outputSchema: options.outputSchema,
+          tags: options.tags,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Update an existing resource
+   *
+   * Requires API key authentication. Only the owner can update.
+   *
+   * @param resourceId - Resource ID to update
+   * @param updates - Partial update options
+   * @returns Updated resource
+   */
+  async update(
+    resourceId: string,
+    updates: Partial<BazaarRegisterOptions>
+  ): Promise<BazaarResource> {
+    if (!this.apiKey) {
+      throw new Error('API key required for resource update');
+    }
+
+    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(updates),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a resource from the Bazaar
+   *
+   * Requires API key authentication. Only the owner can delete.
+   *
+   * @param resourceId - Resource ID to delete
+   */
+  async delete(resourceId: string): Promise<void> {
+    if (!this.apiKey) {
+      throw new Error('API key required for resource deletion');
+    }
+
+    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Deactivate a resource (soft delete)
+   *
+   * Requires API key authentication. Only the owner can deactivate.
+   *
+   * @param resourceId - Resource ID to deactivate
+   * @returns Updated resource with isActive: false
+   */
+  async deactivate(resourceId: string): Promise<BazaarResource> {
+    if (!this.apiKey) {
+      throw new Error('API key required for resource deactivation');
+    }
+
+    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}/deactivate`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Reactivate a deactivated resource
+   *
+   * Requires API key authentication. Only the owner can reactivate.
+   *
+   * @param resourceId - Resource ID to reactivate
+   * @returns Updated resource with isActive: true
+   */
+  async reactivate(resourceId: string): Promise<BazaarResource> {
+    if (!this.apiKey) {
+      throw new Error('API key required for resource reactivation');
+    }
+
+    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}/reactivate`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * List all resources owned by the authenticated user
+   *
+   * Requires API key authentication.
+   *
+   * @param options - Pagination options
+   * @returns Paginated list of owned resources
+   */
+  async listMyResources(options: {
+    page?: number;
+    limit?: number;
+    includeInactive?: boolean;
+  } = {}): Promise<BazaarDiscoverResponse> {
+    if (!this.apiKey) {
+      throw new Error('API key required to list owned resources');
+    }
+
+    const params = new URLSearchParams();
+    if (options.page) params.set('page', options.page.toString());
+    if (options.limit) params.set('limit', options.limit.toString());
+    if (options.includeInactive) params.set('includeInactive', 'true');
+
+    const url = `${this.baseUrl}/resources/mine${params.toString() ? `?${params}` : ''}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get Bazaar API health status
+   *
+   * @returns True if the Bazaar API is healthy
+   */
+  async healthCheck(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/health`, {
+        method: 'GET',
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get Bazaar statistics
+   *
+   * @returns Global statistics about the Bazaar
+   */
+  async getStats(): Promise<{
+    totalResources: number;
+    activeResources: number;
+    totalProviders: number;
+    categoryCounts: Record<BazaarCategory, number>;
+    networkCounts: Record<BazaarNetwork, number>;
+  }> {
+    const url = `${this.baseUrl}/stats`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
 }
