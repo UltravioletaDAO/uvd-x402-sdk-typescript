@@ -231,6 +231,27 @@ export interface PaymentRequest {
 }
 
 /**
+ * x402 payment header names
+ *
+ * - 'X-PAYMENT': v1 header name (default, most compatible)
+ * - 'PAYMENT-SIGNATURE': v2 header name (newer standard)
+ *
+ * Both headers use the same base64-encoded JSON payload format.
+ * The facilitator accepts both headers.
+ */
+export type X402HeaderName = 'X-PAYMENT' | 'PAYMENT-SIGNATURE';
+
+/**
+ * Payment headers object containing both v1 and v2 header formats
+ */
+export interface PaymentHeaders {
+  /** v1 header: X-PAYMENT */
+  'X-PAYMENT': string;
+  /** v2 header: PAYMENT-SIGNATURE (same value, different header name) */
+  'PAYMENT-SIGNATURE': string;
+}
+
+/**
  * Result of a payment operation
  */
 export interface PaymentResult {
@@ -238,6 +259,19 @@ export interface PaymentResult {
   success: boolean;
   /** Base64-encoded X-PAYMENT header value */
   paymentHeader: string;
+  /**
+   * Payment headers object for easy use with fetch/axios
+   *
+   * @example
+   * ```ts
+   * // Use v1 header
+   * fetch(url, { headers: { 'X-PAYMENT': result.headers['X-PAYMENT'] } });
+   *
+   * // Use v2 header
+   * fetch(url, { headers: { 'PAYMENT-SIGNATURE': result.headers['PAYMENT-SIGNATURE'] } });
+   * ```
+   */
+  headers: PaymentHeaders;
   /** Transaction hash (if available) */
   transactionHash?: string;
   /** Network where payment was made */

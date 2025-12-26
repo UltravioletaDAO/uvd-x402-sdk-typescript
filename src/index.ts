@@ -119,6 +119,11 @@ export {
   // Validation utilities
   validateRecipient,
   validateAmount,
+  // Payment header utilities
+  createPaymentHeaders,
+  getPaymentHeader,
+  DEFAULT_PAYMENT_HEADER,
+  PAYMENT_HEADER_NAMES,
 } from './utils';
 
 // Types
@@ -143,11 +148,13 @@ export type {
   PaymentInfo,
   PaymentRequest,
   PaymentResult,
+  PaymentHeaders,
   PaymentPayload,
   EVMPaymentPayload,
   SolanaPaymentPayload,
   StellarPaymentPayload,
   NEARPaymentPayload,
+  X402HeaderName,
 
   // x402 header types (v1 and v2)
   X402Version,
