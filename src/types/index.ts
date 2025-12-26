@@ -15,10 +15,11 @@
  * - 'svm': Solana Virtual Machine chains (Solana, Fogo) (use SPL tokens)
  * - 'stellar': Stellar network (use Soroban)
  * - 'near': NEAR Protocol (use NEP-366)
+ * - 'algorand': Algorand network (use ASA transfers with atomic transactions)
  *
  * @deprecated 'solana' type is deprecated, use 'svm' instead
  */
-export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near';
+export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand';
 
 /**
  * Supported stablecoin token types
@@ -200,6 +201,7 @@ export interface PaymentInfo {
     solana?: string;
     near?: string;
     stellar?: string;
+    algorand?: string;
   };
   /** Facilitator address (for Solana fee payer) */
   facilitator?: string;
@@ -341,13 +343,36 @@ export interface NEARPaymentPayload {
 }
 
 /**
+ * Algorand payment payload (atomic transaction group)
+ *
+ * Algorand uses a unique payment model where the facilitator creates and signs
+ * an atomic transaction group. The user signs their portion (the ASA transfer)
+ * and the facilitator submits the complete group.
+ */
+export interface AlgorandPaymentPayload {
+  /** Sender's Algorand address (58-character base32) */
+  from: string;
+  /** Recipient's Algorand address */
+  to: string;
+  /** Amount in base units (microAlgos for ALGO, or base units for ASA) */
+  amount: string;
+  /** USDC ASA ID (31566704 for mainnet, 10458941 for testnet) */
+  assetId: number;
+  /** Base64-encoded signed transaction bytes */
+  signedTxn: string;
+  /** Optional note field */
+  note?: string;
+}
+
+/**
  * Union type for all payment payloads
  */
 export type PaymentPayload =
   | EVMPaymentPayload
   | SolanaPaymentPayload
   | StellarPaymentPayload
-  | NEARPaymentPayload;
+  | NEARPaymentPayload
+  | AlgorandPaymentPayload;
 
 // ============================================================================
 // X402 HEADER TYPES (v1 and v2)
@@ -381,6 +406,9 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   stellar: 'stellar:pubnet',
   // NEAR
   near: 'near:mainnet',
+  // Algorand
+  algorand: 'algorand:mainnet',
+  'algorand-testnet': 'algorand:testnet',
 };
 
 /**
@@ -469,13 +497,26 @@ export interface X402NEARPayload {
 }
 
 /**
+ * Algorand-specific payload in x402 header
+ */
+export interface X402AlgorandPayload {
+  from: string;
+  to: string;
+  amount: string;
+  assetId: number;
+  signedTxn: string;
+  note?: string;
+}
+
+/**
  * Union of all x402 payload types
  */
 export type X402PayloadData =
   | X402EVMPayload
   | X402SolanaPayload
   | X402StellarPayload
-  | X402NEARPayload;
+  | X402NEARPayload
+  | X402AlgorandPayload;
 
 // ============================================================================
 // CLIENT CONFIGURATION
