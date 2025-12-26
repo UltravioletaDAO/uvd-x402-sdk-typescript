@@ -1,8 +1,13 @@
 /**
  * uvd-x402-sdk - Algorand Provider
  *
- * Provides wallet connection and payment creation for Algorand via Pera Wallet.
+ * Provides wallet connection and payment creation for Algorand.
+ * Supports both Lute Wallet (desktop browser extension) and Pera Wallet (mobile).
  * Uses ASA (Algorand Standard Assets) transfers for USDC payments.
+ *
+ * Wallet Priority:
+ * 1. Lute Wallet - Desktop browser extension (preferred for desktop)
+ * 2. Pera Wallet - Mobile via WalletConnect (fallback/mobile)
  *
  * USDC ASA IDs:
  * - Mainnet: 31566704
@@ -15,7 +20,7 @@
  *
  * const algorand = new AlgorandProvider();
  *
- * // Connect to Pera Wallet
+ * // Connect to Lute (desktop) or Pera (mobile) automatically
  * const address = await algorand.connect();
  *
  * // Create Algorand payment
@@ -50,27 +55,60 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 // Lazy import Algorand dependencies
 let algosdk: typeof import('algosdk') | null = null;
 let PeraWalletConnect: typeof import('@perawallet/connect').PeraWalletConnect | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let LuteConnect: any = null;
 
 async function loadAlgorandDeps() {
   if (!algosdk) {
     algosdk = await import('algosdk');
   }
+}
+
+async function loadPeraWallet() {
   if (!PeraWalletConnect) {
     const peraModule = await import('@perawallet/connect');
     PeraWalletConnect = peraModule.PeraWalletConnect;
   }
 }
 
+async function loadLuteWallet() {
+  if (!LuteConnect) {
+    try {
+      const luteModule = await import('lute-connect');
+      LuteConnect = luteModule.default;
+    } catch {
+      // Lute not installed, will fall back to Pera
+      LuteConnect = null;
+    }
+  }
+}
+
 /**
- * AlgorandProvider - Wallet adapter for Algorand via Pera Wallet
+ * Check if Lute wallet extension is installed
+ */
+function isLuteAvailable(): boolean {
+  if (typeof window === 'undefined') return false;
+  // Lute injects itself into window.algorand or window.lute
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const win = window as any;
+  return !!(win.algorand || win.lute);
+}
+
+/**
+ * AlgorandProvider - Wallet adapter for Algorand
  *
- * Supports both mainnet and testnet through chain configuration.
+ * Supports Lute Wallet (desktop) and Pera Wallet (mobile).
+ * Automatically detects and uses the best available wallet.
  */
 export class AlgorandProvider implements WalletAdapter {
-  readonly id = 'pera';
-  readonly name = 'Pera Wallet';
+  readonly id = 'algorand';
+  readonly name = 'Algorand Wallet';
   readonly networkType = 'algorand' as const;
 
+  // Active wallet type
+  private walletType: 'lute' | 'pera' | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private luteWallet: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private peraWallet: any = null;
   private address: string | null = null;
@@ -78,18 +116,90 @@ export class AlgorandProvider implements WalletAdapter {
   private algodClients: Map<string, any> = new Map();
 
   /**
-   * Check if Pera Wallet is available
-   * Note: Pera works as a WalletConnect modal, so it's always "available"
+   * Check if any Algorand wallet is available
+   * Returns true if Lute extension is installed OR we can use Pera (always available via WalletConnect)
    */
   isAvailable(): boolean {
     return typeof window !== 'undefined';
   }
 
   /**
-   * Connect to Pera Wallet
+   * Get the name of the currently connected wallet
+   */
+  getWalletName(): string {
+    if (this.walletType === 'lute') return 'Lute Wallet';
+    if (this.walletType === 'pera') return 'Pera Wallet';
+    return 'Algorand Wallet';
+  }
+
+  /**
+   * Connect to Algorand wallet
+   * Priority: Lute (desktop extension) > Pera (mobile via WalletConnect)
    */
   async connect(_chainName?: string): Promise<string> {
     await loadAlgorandDeps();
+
+    // Try Lute first (better desktop UX)
+    if (isLuteAvailable()) {
+      try {
+        return await this.connectLute();
+      } catch (error) {
+        // Lute failed, try Pera
+        console.warn('Lute connection failed, falling back to Pera:', error);
+      }
+    }
+
+    // Fall back to Pera (mobile/WalletConnect)
+    return await this.connectPera();
+  }
+
+  /**
+   * Connect to Lute Wallet (desktop browser extension)
+   */
+  private async connectLute(): Promise<string> {
+    await loadLuteWallet();
+
+    if (!LuteConnect) {
+      throw new X402Error('Lute Wallet SDK not available', 'WALLET_NOT_FOUND');
+    }
+
+    try {
+      this.luteWallet = new LuteConnect('402milly');
+
+      // Get Algorand genesis ID for mainnet
+      const genesisId = 'mainnet-v1.0';
+
+      // Connect and get accounts
+      const accounts = await this.luteWallet.connect(genesisId);
+
+      if (!accounts || accounts.length === 0) {
+        throw new X402Error('No accounts returned from Lute Wallet', 'WALLET_CONNECTION_REJECTED');
+      }
+
+      this.address = accounts[0];
+      this.walletType = 'lute';
+
+      return accounts[0];
+    } catch (error: unknown) {
+      if (error instanceof X402Error) throw error;
+      if (error instanceof Error) {
+        if (error.message.includes('rejected') || error.message.includes('cancelled')) {
+          throw new X402Error('Connection rejected by user', 'WALLET_CONNECTION_REJECTED');
+        }
+      }
+      throw new X402Error(
+        `Failed to connect Lute Wallet: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'UNKNOWN_ERROR',
+        error
+      );
+    }
+  }
+
+  /**
+   * Connect to Pera Wallet (mobile via WalletConnect)
+   */
+  private async connectPera(): Promise<string> {
+    await loadPeraWallet();
 
     if (!PeraWalletConnect) {
       throw new X402Error('Failed to load Pera Wallet SDK', 'WALLET_NOT_FOUND');
@@ -104,6 +214,7 @@ export class AlgorandProvider implements WalletAdapter {
 
       if (accounts.length > 0) {
         this.address = accounts[0];
+        this.walletType = 'pera';
         return accounts[0];
       }
 
@@ -115,10 +226,12 @@ export class AlgorandProvider implements WalletAdapter {
       }
 
       this.address = newAccounts[0];
+      this.walletType = 'pera';
 
       // Set up disconnect handler
       this.peraWallet.connector?.on('disconnect', () => {
         this.address = null;
+        this.walletType = null;
       });
 
       return newAccounts[0];
@@ -137,18 +250,27 @@ export class AlgorandProvider implements WalletAdapter {
   }
 
   /**
-   * Disconnect from Pera Wallet
+   * Disconnect from wallet
    */
   async disconnect(): Promise<void> {
-    if (this.peraWallet) {
+    if (this.walletType === 'lute' && this.luteWallet) {
+      try {
+        // Lute doesn't have a disconnect method, just clear state
+      } catch {
+        // Ignore disconnect errors
+      }
+      this.luteWallet = null;
+    }
+    if (this.walletType === 'pera' && this.peraWallet) {
       try {
         await this.peraWallet.disconnect();
       } catch {
         // Ignore disconnect errors
       }
+      this.peraWallet = null;
     }
-    this.peraWallet = null;
     this.address = null;
+    this.walletType = null;
     this.algodClients.clear();
   }
 
@@ -205,7 +327,7 @@ export class AlgorandProvider implements WalletAdapter {
   async signPayment(paymentInfo: PaymentInfo, chainConfig: ChainConfig): Promise<string> {
     await loadAlgorandDeps();
 
-    if (!this.peraWallet || !this.address) {
+    if (!this.address || !this.walletType) {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
     }
 
@@ -237,14 +359,28 @@ export class AlgorandProvider implements WalletAdapter {
         note: new TextEncoder().encode('x402 payment via uvd-x402-sdk'),
       } as any);
 
-      // Sign with Pera Wallet
-      const signedTxns = await this.peraWallet.signTransaction([[{ txn }]]);
+      // Sign with the active wallet (Lute or Pera)
+      let signedTxn: Uint8Array;
 
-      if (!signedTxns || signedTxns.length === 0) {
-        throw new X402Error('No signed transaction returned', 'SIGNATURE_REJECTED');
+      if (this.walletType === 'lute' && this.luteWallet) {
+        // Lute uses signTxns with base64 encoded transactions
+        const txnBase64 = uint8ArrayToBase64(txn.toByte());
+        const signedTxns = await this.luteWallet.signTxns([{ txn: txnBase64 }]);
+        if (!signedTxns || signedTxns.length === 0 || !signedTxns[0]) {
+          throw new X402Error('No signed transaction returned', 'SIGNATURE_REJECTED');
+        }
+        // Lute returns base64 encoded signed transaction
+        signedTxn = Uint8Array.from(atob(signedTxns[0]), c => c.charCodeAt(0));
+      } else if (this.walletType === 'pera' && this.peraWallet) {
+        // Pera uses signTransaction with transaction objects
+        const signedTxns = await this.peraWallet.signTransaction([[{ txn }]]);
+        if (!signedTxns || signedTxns.length === 0) {
+          throw new X402Error('No signed transaction returned', 'SIGNATURE_REJECTED');
+        }
+        signedTxn = signedTxns[0];
+      } else {
+        throw new X402Error('No wallet available for signing', 'WALLET_NOT_CONNECTED');
       }
-
-      const signedTxn = signedTxns[0];
 
       const payload: AlgorandPaymentPayload = {
         from: this.address,
