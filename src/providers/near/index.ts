@@ -32,8 +32,10 @@ import type {
   PaymentInfo,
   NEARPaymentPayload,
   WalletAdapter,
+  X402Version,
 } from '../../types';
 import { X402Error } from '../../types';
+import { chainToCAIP2 } from '../../utils';
 
 // NEAR configuration
 const NEAR_CONFIG = {
@@ -473,18 +475,33 @@ export class NEARProvider implements WalletAdapter {
 
   /**
    * Encode NEAR payment as X-PAYMENT header
+   *
+   * @param paymentPayload - JSON-encoded payment payload from signPayment()
+   * @param version - x402 protocol version (1 or 2, defaults to 1)
+   * @returns Base64-encoded X-PAYMENT header value
    */
-  encodePaymentHeader(paymentPayload: string): string {
+  encodePaymentHeader(paymentPayload: string, version: X402Version = 1): string {
     const payload = JSON.parse(paymentPayload) as NEARPaymentPayload;
 
-    const x402Payload = {
-      x402Version: 1,
-      scheme: 'exact',
-      network: 'near',
-      payload: {
-        signedDelegateAction: payload.signedDelegateAction,
-      },
+    // Build the payload data
+    const payloadData = {
+      signedDelegateAction: payload.signedDelegateAction,
     };
+
+    // Format in x402 standard format (v1 or v2)
+    const x402Payload = version === 2
+      ? {
+          x402Version: 2 as const,
+          scheme: 'exact' as const,
+          network: chainToCAIP2('near'), // CAIP-2 format for v2
+          payload: payloadData,
+        }
+      : {
+          x402Version: 1 as const,
+          scheme: 'exact' as const,
+          network: 'near', // Plain chain name for v1
+          payload: payloadData,
+        };
 
     return btoa(JSON.stringify(x402Payload));
   }

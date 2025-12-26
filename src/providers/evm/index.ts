@@ -32,7 +32,8 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { getChainByName, getChainById, getTokenConfig } from '../../chains';
-import { validateRecipient } from '../../utils';
+import { validateRecipient, chainToCAIP2 } from '../../utils';
+import type { X402Version } from '../../types';
 
 /**
  * Ethereum provider interface
@@ -370,29 +371,49 @@ export class EVMProvider implements WalletAdapter {
 
   /**
    * Encode EVM payment as X-PAYMENT header
+   *
+   * @param paymentPayload - JSON-encoded payment payload from signPayment()
+   * @param chainConfig - Chain configuration
+   * @param version - x402 protocol version (1 or 2, defaults to 1)
+   * @returns Base64-encoded X-PAYMENT header value
    */
-  encodePaymentHeader(paymentPayload: string, chainConfig: ChainConfig): string {
+  encodePaymentHeader(
+    paymentPayload: string,
+    chainConfig: ChainConfig,
+    version: X402Version = 1
+  ): string {
     const payload = JSON.parse(paymentPayload) as EVMPaymentPayload;
 
     // Reconstruct full signature
     const fullSignature = payload.r + payload.s.slice(2) + payload.v.toString(16).padStart(2, '0');
 
-    const x402Payload = {
-      x402Version: 1,
-      scheme: 'exact',
-      network: chainConfig.name,
-      payload: {
-        signature: fullSignature,
-        authorization: {
-          from: payload.from,
-          to: payload.to,
-          value: payload.value,
-          validAfter: payload.validAfter.toString(),
-          validBefore: payload.validBefore.toString(),
-          nonce: payload.nonce,
-        },
+    // Build the payload data
+    const payloadData = {
+      signature: fullSignature,
+      authorization: {
+        from: payload.from,
+        to: payload.to,
+        value: payload.value,
+        validAfter: payload.validAfter.toString(),
+        validBefore: payload.validBefore.toString(),
+        nonce: payload.nonce,
       },
     };
+
+    // Format in x402 standard format (v1 or v2)
+    const x402Payload = version === 2
+      ? {
+          x402Version: 2 as const,
+          scheme: 'exact' as const,
+          network: chainToCAIP2(chainConfig.name), // CAIP-2 format for v2
+          payload: payloadData,
+        }
+      : {
+          x402Version: 1 as const,
+          scheme: 'exact' as const,
+          network: chainConfig.name, // Plain chain name for v1
+          payload: payloadData,
+        };
 
     return btoa(JSON.stringify(x402Payload));
   }

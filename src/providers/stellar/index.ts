@@ -25,8 +25,10 @@ import type {
   PaymentInfo,
   StellarPaymentPayload,
   WalletAdapter,
+  X402Version,
 } from '../../types';
 import { X402Error } from '../../types';
+import { chainToCAIP2 } from '../../utils';
 
 /**
  * Browser-compatible text to Uint8Array encoding
@@ -343,24 +345,39 @@ export class StellarProvider implements WalletAdapter {
 
   /**
    * Encode Stellar payment as X-PAYMENT header
+   *
+   * @param paymentPayload - JSON-encoded payment payload from signPayment()
+   * @param version - x402 protocol version (1 or 2, defaults to 1)
+   * @returns Base64-encoded X-PAYMENT header value
    */
-  encodePaymentHeader(paymentPayload: string): string {
+  encodePaymentHeader(paymentPayload: string, version: X402Version = 1): string {
     const payload = JSON.parse(paymentPayload) as StellarPaymentPayload;
 
-    const x402Payload = {
-      x402Version: 1,
-      scheme: 'exact',
-      network: 'stellar',
-      payload: {
-        from: payload.from,
-        to: payload.to,
-        amount: payload.amount,
-        tokenContract: payload.tokenContract,
-        authorizationEntryXdr: payload.authorizationEntryXdr,
-        nonce: payload.nonce,
-        signatureExpirationLedger: payload.signatureExpirationLedger,
-      },
+    // Build the payload data
+    const payloadData = {
+      from: payload.from,
+      to: payload.to,
+      amount: payload.amount,
+      tokenContract: payload.tokenContract,
+      authorizationEntryXdr: payload.authorizationEntryXdr,
+      nonce: payload.nonce,
+      signatureExpirationLedger: payload.signatureExpirationLedger,
     };
+
+    // Format in x402 standard format (v1 or v2)
+    const x402Payload = version === 2
+      ? {
+          x402Version: 2 as const,
+          scheme: 'exact' as const,
+          network: chainToCAIP2('stellar'), // CAIP-2 format for v2
+          payload: payloadData,
+        }
+      : {
+          x402Version: 1 as const,
+          scheme: 'exact' as const,
+          network: 'stellar', // Plain chain name for v1
+          payload: payloadData,
+        };
 
     return btoa(JSON.stringify(x402Payload));
   }

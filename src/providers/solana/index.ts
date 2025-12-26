@@ -43,9 +43,11 @@ import type {
   PaymentInfo,
   SolanaPaymentPayload,
   WalletAdapter,
+  X402Version,
 } from '../../types';
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
+import { chainToCAIP2 } from '../../utils';
 
 /**
  * Browser-compatible base64 encoding for Uint8Array
@@ -395,23 +397,40 @@ export class SVMProvider implements WalletAdapter {
   /**
    * Encode SVM payment as X-PAYMENT header
    *
-   * @param paymentPayload - The payment payload JSON string
-   * @param chainConfig - Optional chain config (defaults to 'solana' if not provided)
+   * @param paymentPayload - JSON-encoded payment payload from signPayment()
+   * @param chainConfig - Chain configuration (optional, defaults to 'solana')
+   * @param version - x402 protocol version (1 or 2, defaults to 1)
+   * @returns Base64-encoded X-PAYMENT header value
    */
-  encodePaymentHeader(paymentPayload: string, chainConfig?: ChainConfig): string {
+  encodePaymentHeader(
+    paymentPayload: string,
+    chainConfig?: ChainConfig,
+    version: X402Version = 1
+  ): string {
     const payload = JSON.parse(paymentPayload) as SolanaPaymentPayload;
 
     // Use chain name from config, or default to 'solana' for backward compatibility
     const networkName = chainConfig?.name || 'solana';
 
-    const x402Payload = {
-      x402Version: 1,
-      scheme: 'exact',
-      network: networkName,
-      payload: {
-        transaction: payload.transaction,
-      },
+    // Build the payload data
+    const payloadData = {
+      transaction: payload.transaction,
     };
+
+    // Format in x402 standard format (v1 or v2)
+    const x402Payload = version === 2
+      ? {
+          x402Version: 2 as const,
+          scheme: 'exact' as const,
+          network: chainToCAIP2(networkName), // CAIP-2 format for v2
+          payload: payloadData,
+        }
+      : {
+          x402Version: 1 as const,
+          scheme: 'exact' as const,
+          network: networkName, // Plain chain name for v1
+          payload: payloadData,
+        };
 
     return btoa(JSON.stringify(x402Payload));
   }

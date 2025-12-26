@@ -31,9 +31,9 @@
  */
 
 import { getChainByName } from '../chains';
-import { createX402V1Header, encodeX402Header, validateRecipient } from '../utils';
+import { createX402V1Header, createX402V2Header, encodeX402Header, validateRecipient } from '../utils';
 import { X402Error } from '../types';
-import type { PaymentResult } from '../types';
+import type { PaymentResult, X402Version } from '../types';
 
 /**
  * Viem WalletClient interface (minimal type to avoid viem dependency)
@@ -67,6 +67,12 @@ export interface WagmiPaymentOptions {
   chainName?: string;
   /** Validity window in seconds (default: 300 = 5 minutes) */
   validitySeconds?: number;
+  /**
+   * x402 protocol version (default: 1)
+   * - 1: Classic format with network as string (e.g., "base")
+   * - 2: CAIP-2 format (e.g., "eip155:8453")
+   */
+  x402Version?: X402Version;
 }
 
 /**
@@ -134,6 +140,7 @@ export async function createPaymentFromWalletClient(
     amount,
     chainName = 'base',
     validitySeconds = 300,
+    x402Version = 1,
   } = options;
 
   // Validate recipient address - prevents empty/invalid addresses
@@ -211,9 +218,9 @@ export async function createPaymentFromWalletClient(
     );
   }
 
-  // Create x402 header with correct format
+  // Build the payload data
   // IMPORTANT: validAfter, validBefore, and value must be STRINGS
-  const header = createX402V1Header(chainName, {
+  const payloadData = {
     signature,
     authorization: {
       from,
@@ -223,7 +230,12 @@ export async function createPaymentFromWalletClient(
       validBefore: validBefore.toString(),
       nonce,
     },
-  });
+  };
+
+  // Create x402 header with correct version format
+  const header = x402Version === 2
+    ? createX402V2Header(chainName, payloadData)
+    : createX402V1Header(chainName, payloadData);
 
   return encodeX402Header(header);
 }
