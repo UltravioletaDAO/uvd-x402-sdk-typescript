@@ -42,6 +42,7 @@ import type {
   ChainConfig,
   PaymentInfo,
   SolanaPaymentPayload,
+  TokenInfo,
   WalletAdapter,
   X402Version,
 } from '../../types';
@@ -412,10 +413,16 @@ export class SVMProvider implements WalletAdapter {
     // Use chain name from config, or default to 'solana' for backward compatibility
     const networkName = chainConfig?.name || 'solana';
 
-    // Build the payload data
-    const payloadData = {
+    // Build the payload data - preserve token info for Token2022 (AUSD, etc.)
+    const payloadData: { transaction: string; token?: TokenInfo } = {
       transaction: payload.transaction,
     };
+
+    // CRITICAL: Preserve token info for non-USDC tokens (Token2022 like AUSD)
+    // Without this, the facilitator cannot verify Token2022 transfers correctly
+    if (payload.token) {
+      payloadData.token = payload.token;
+    }
 
     // Format in x402 standard format (v1 or v2)
     const x402Payload = version === 2

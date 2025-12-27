@@ -284,38 +284,51 @@ export class AlgorandProvider implements WalletAdapter {
 
   /**
    * Get USDC (ASA) balance
+   *
+   * Uses direct fetch with CORS-friendly RPC endpoints for browser compatibility.
+   * Falls back through multiple endpoints for reliability.
    */
   async getBalance(chainConfig: ChainConfig): Promise<string> {
-    await loadAlgorandDeps();
-
     if (!this.address) {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
     }
 
-    const algodClient = await this.getAlgodClient(chainConfig);
     const assetId = parseInt(chainConfig.usdc.address, 10);
 
-    try {
-      const accountInfo = await algodClient.accountInformation(this.address).do();
+    // Use direct fetch with CORS-friendly RPC endpoints
+    // The SDK's algod client has CORS issues in browser environments
+    const rpcEndpoints = [
+      chainConfig.rpcUrl,
+      'https://mainnet-api.4160.nodely.io',
+      'https://mainnet-api.algonode.cloud',
+    ];
 
-      // Find the USDC asset in the account's assets
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const assets: any[] = accountInfo.assets || accountInfo['assets'] || [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const usdcAsset = assets.find((asset: any) =>
-        (asset.assetId || asset['asset-id']) === assetId
-      );
+    for (const rpcUrl of rpcEndpoints) {
+      try {
+        const response = await fetch(`${rpcUrl}/v2/accounts/${this.address}`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        });
 
-      if (!usdcAsset) {
-        return '0.00'; // Account not opted into USDC
+        if (!response.ok) continue;
+
+        const data = await response.json();
+        const assets = data.assets || [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const usdcAsset = assets.find((asset: any) =>
+          asset['asset-id'] === assetId
+        );
+
+        if (!usdcAsset) return '0.00'; // Account not opted into USDC
+
+        const balance = Number(usdcAsset.amount) / Math.pow(10, chainConfig.usdc.decimals);
+        return balance.toFixed(2);
+      } catch {
+        // Continue to next endpoint
       }
-
-      const amount = Number(usdcAsset.amount || usdcAsset['amount']);
-      const balance = amount / Math.pow(10, chainConfig.usdc.decimals);
-      return balance.toFixed(2);
-    } catch {
-      return '0.00';
     }
+
+    return '0.00';
   }
 
   /**

@@ -306,11 +306,29 @@ export interface EVMPaymentPayload {
 }
 
 /**
+ * Token info for non-USDC stablecoins (e.g., Token2022 like AUSD)
+ * Required in payload for facilitator to verify Token2022 transfers correctly.
+ */
+export interface TokenInfo {
+  /** Token mint address */
+  address: string;
+  /** Token symbol (e.g., 'AUSD') */
+  symbol: string;
+  /** Token decimals (e.g., 6) */
+  decimals: number;
+}
+
+/**
  * Solana payment payload (partially-signed transaction)
  */
 export interface SolanaPaymentPayload {
   /** Base64-encoded serialized transaction */
   transaction: string;
+  /**
+   * Token info for non-USDC tokens (e.g., Token2022 like AUSD)
+   * CRITICAL: Must be included for Token2022 tokens for facilitator verification
+   */
+  token?: TokenInfo;
 }
 
 /**
