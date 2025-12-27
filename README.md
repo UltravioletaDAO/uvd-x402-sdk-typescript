@@ -1,51 +1,17 @@
 # uvd-x402-sdk
 
-> Gasless crypto payments across 14 blockchain networks using the x402 protocol.
+Gasless crypto payments across 16 blockchain networks using the x402 protocol.
 
-The x402 SDK enables any application to accept stablecoin payments (USDC, EURC, AUSD, PYUSD, USDT) without requiring users to pay gas fees. Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement.
+Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
 ## Features
 
-- **14 Supported Networks**: EVM chains, Solana, Fogo, Stellar, and NEAR
-- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT support on EVM chains
-- **x402 v1 & v2**: Full support for both protocol versions with automatic detection
-- **Gasless Payments**: Users never pay gas - the facilitator covers all network fees
-- **Multi-Network**: Accept payments on multiple networks simultaneously
-- **Backend Utilities**: Server-side helpers for payment verification and settlement
-- **Bazaar Discovery**: Discover and register x402-enabled resources
-- **Escrow & Refunds**: Hold payments in escrow with refund and dispute support
-- **Type-Safe**: Comprehensive TypeScript definitions
-- **Framework Agnostic**: Works with any JavaScript framework
-- **React Hooks**: First-class React integration
-- **Wagmi/RainbowKit**: Dedicated adapter for wagmi-based apps
-- **Modular**: Import only what you need
-
-## Quick Start
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'base' });
-
-// Connect wallet
-const address = await client.connect('base');
-
-// Create payment
-const result = await client.createPayment({
-  recipient: '0x...',
-  amount: '10.00',
-});
-
-// Use in your API request
-await fetch('/api/purchase', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'X-PAYMENT': result.paymentHeader,
-  },
-  body: JSON.stringify({ item: 'premium-feature' }),
-});
-```
+- **16 Networks**: EVM (10), Solana, Fogo, Stellar, NEAR, Algorand (2)
+- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT
+- **x402 v1 & v2**: Both protocol versions with auto-detection
+- **Gasless**: Facilitator pays all network fees
+- **Type-Safe**: Full TypeScript support
+- **React & Wagmi**: First-class integrations
 
 ## Installation
 
@@ -53,13 +19,13 @@ await fetch('/api/purchase', {
 npm install uvd-x402-sdk
 ```
 
-### Peer Dependencies by Network
+### Peer Dependencies
 
 ```bash
-# EVM chains (Base, Ethereum, etc.) - included by default
+# EVM (included by default)
 npm install ethers@^6
 
-# Solana & Fogo (SVM chains)
+# Solana/Fogo
 npm install @solana/web3.js @solana/spl-token
 
 # Stellar
@@ -68,781 +34,270 @@ npm install @stellar/stellar-sdk @stellar/freighter-api
 # NEAR
 npm install @near-wallet-selector/core @near-wallet-selector/my-near-wallet
 
-# React hooks (optional)
-npm install react
+# Algorand
+npm install algosdk lute-connect
 ```
 
----
+## Quick Start
 
-## WalletConnect Integration
-
-The SDK works with any EVM wallet that injects into `window.ethereum`, including:
-
-- **Browser extensions**: MetaMask, Rainbow, Rabby, Coinbase Wallet
-- **Mobile wallets**: Rainbow, MetaMask Mobile, Trust Wallet (via WalletConnect)
-
-### Using WalletConnect (Mobile Wallets)
-
-For mobile wallet support (Rainbow, MetaMask Mobile, etc.), initialize WalletConnect before using the SDK:
-
-```typescript
-import { EthereumProvider } from '@walletconnect/ethereum-provider';
-import { X402Client } from 'uvd-x402-sdk';
-
-// 1. Initialize WalletConnect
-const walletConnectProvider = await EthereumProvider.init({
-  projectId: 'YOUR_WALLETCONNECT_PROJECT_ID', // Get from cloud.walletconnect.com
-  chains: [8453], // Base mainnet
-  optionalChains: [1, 137, 42161, 10], // ETH, Polygon, Arbitrum, Optimism
-  showQrModal: true,
-});
-
-// 2. Connect wallet (shows QR code for mobile wallet to scan)
-await walletConnectProvider.connect();
-
-// 3. Use the SDK normally
-const client = new X402Client({ defaultChain: 'base' });
-const address = await client.connect('base');
-
-// 4. Create payment
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-### Using Browser Extensions (Rainbow, MetaMask, etc.)
-
-Browser extension wallets work automatically - no extra setup needed:
+### EVM Chains
 
 ```typescript
 import { X402Client } from 'uvd-x402-sdk';
 
 const client = new X402Client({ defaultChain: 'base' });
-
-// Connects to whatever wallet is installed (Rainbow, MetaMask, Rabby, etc.)
 const address = await client.connect('base');
 
 const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
----
-
-## Wagmi / RainbowKit Integration
-
-If you're using wagmi with RainbowKit, ConnectKit, or other wagmi-based wallet libraries, use the dedicated wagmi adapter:
-
-```typescript
-import { useWalletClient } from 'wagmi';
-import { createPaymentFromWalletClient } from 'uvd-x402-sdk/wagmi';
-
-function PayButton() {
-  const { data: walletClient } = useWalletClient();
-
-  const handlePay = async () => {
-    const paymentHeader = await createPaymentFromWalletClient(walletClient, {
-      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-      amount: '10.00',
-      chainName: 'base', // optional, defaults to 'base'
-    });
-
-    // Use in your API request
-    await fetch('/api/purchase', {
-      headers: { 'X-PAYMENT': paymentHeader },
-      method: 'POST',
-    });
-  };
-
-  return <button onClick={handlePay}>Pay $10 USDC</button>;
-}
-```
-
-### With the Helper Hook
-
-```typescript
-import { useWalletClient } from 'wagmi';
-import { useX402Wagmi } from 'uvd-x402-sdk/wagmi';
-
-function PayButton() {
-  const { data: walletClient } = useWalletClient();
-  const { createPayment, isReady } = useX402Wagmi(walletClient);
-
-  const handlePay = async () => {
-    const paymentHeader = await createPayment({
-      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-      amount: '10.00',
-    });
-
-    await fetch('/api/purchase', {
-      headers: { 'X-PAYMENT': paymentHeader },
-    });
-  };
-
-  return (
-    <button onClick={handlePay} disabled={!isReady}>
-      Pay $10 USDC
-    </button>
-  );
-}
-```
-
-### Full Example with RainbowKit
-
-```tsx
-import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { useWalletClient, useAccount } from 'wagmi';
-import { createPaymentFromWalletClient } from 'uvd-x402-sdk/wagmi';
-
-function App() {
-  const { data: walletClient } = useWalletClient();
-  const { isConnected } = useAccount();
-
-  const handlePurchase = async () => {
-    if (!walletClient) return;
-
-    try {
-      const paymentHeader = await createPaymentFromWalletClient(walletClient, {
-        recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-        amount: '5.00',
-        chainName: 'base',
-      });
-
-      const response = await fetch('/api/purchase', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-PAYMENT': paymentHeader,
-        },
-        body: JSON.stringify({ item: 'premium-feature' }),
-      });
-
-      if (response.ok) {
-        alert('Purchase successful!');
-      }
-    } catch (error) {
-      console.error('Payment failed:', error);
-    }
-  };
-
-  return (
-    <div>
-      <ConnectButton />
-      {isConnected && (
-        <button onClick={handlePurchase}>
-          Buy Premium ($5 USDC)
-        </button>
-      )}
-    </div>
-  );
-}
-```
-
----
-
-## Network Examples
-
-### EVM Chains (10 Networks)
-
-All EVM chains use EIP-712 typed data signing with ERC-3009 TransferWithAuthorization.
-
-#### Base (Recommended - Fastest & Cheapest)
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'base' });
-
-// Connect to Base
-const address = await client.connect('base');
-console.log('Connected:', address);
-
-// Check balance
-const balance = await client.getBalance();
-console.log('USDC Balance:', balance);
-
-// Create payment
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+  recipient: '0x...',
   amount: '10.00',
 });
 
-console.log('Payment header:', result.paymentHeader);
-```
-
-#### Ethereum
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'ethereum' });
-const address = await client.connect('ethereum');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '100.00', // Higher amounts common on Ethereum
+await fetch('/api/purchase', {
+  headers: { 'X-PAYMENT': result.paymentHeader },
 });
 ```
 
-#### Polygon
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'polygon' });
-const address = await client.connect('polygon');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### Arbitrum
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'arbitrum' });
-const address = await client.connect('arbitrum');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### Optimism
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'optimism' });
-const address = await client.connect('optimism');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### Avalanche C-Chain
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'avalanche' });
-const address = await client.connect('avalanche');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### Celo
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'celo' });
-const address = await client.connect('celo');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### HyperEVM
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'hyperevm' });
-const address = await client.connect('hyperevm');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### Unichain
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'unichain' });
-const address = await client.connect('unichain');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
-#### Monad
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'monad' });
-const address = await client.connect('monad');
-
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  amount: '10.00',
-});
-```
-
----
-
-### SVM Chains (Solana Virtual Machine)
-
-SVM chains use partially-signed transactions where the facilitator is the fee payer.
-
-#### Solana
+### Solana
 
 ```typescript
 import { SVMProvider } from 'uvd-x402-sdk/solana';
 import { getChainByName } from 'uvd-x402-sdk';
 
 const svm = new SVMProvider();
-
-// Check if Phantom is installed
-if (!svm.isAvailable()) {
-  throw new Error('Please install Phantom wallet from phantom.app');
-}
-
-// Connect
 const address = await svm.connect();
-console.log('Connected Solana wallet:', address);
-
-// Get chain config
 const chainConfig = getChainByName('solana')!;
 
-// Get balance
-const balance = await svm.getBalance(chainConfig);
-console.log('USDC Balance:', balance);
+const payload = await svm.signPayment({
+  recipient: '5Y32Dk6weq1LrMRdujpJyDbTN3SjwXGoQS9QN39WQ9Cq',
+  amount: '10.00',
+}, chainConfig);
 
-// Create payment
-const paymentPayload = await svm.signPayment(
-  {
-    recipient: '5Y32Dk6weq1LrMRdujpJyDbTN3SjwXGoQS9QN39WQ9Cq',
-    amount: '10.00',
-    facilitator: 'F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq',
-  },
-  chainConfig
-);
-
-// Encode as X-PAYMENT header
-const header = svm.encodePaymentHeader(paymentPayload, chainConfig);
-console.log('Payment header:', header);
+const header = svm.encodePaymentHeader(payload, chainConfig);
 ```
 
-#### Fogo
-
-Fogo is an SVM chain with ultra-fast ~400ms finality.
+### Algorand
 
 ```typescript
-import { SVMProvider } from 'uvd-x402-sdk/solana';
+import { AlgorandProvider } from 'uvd-x402-sdk/algorand';
 import { getChainByName } from 'uvd-x402-sdk';
 
-const svm = new SVMProvider();
+const algorand = new AlgorandProvider();
+const address = await algorand.connect(); // Lute or Pera wallet
+const chainConfig = getChainByName('algorand')!;
 
-// Connect (same wallet works for all SVM chains)
-const address = await svm.connect();
+const payload = await algorand.signPayment({
+  recipient: 'NCDSNUQ2QLXDMJXRALAW4CRUSSKG4IS37MVOFDQQPC45SE4EBZO42U6ZX4',
+  amount: '10.00',
+}, chainConfig);
 
-// Get Fogo chain config
-const chainConfig = getChainByName('fogo')!;
-
-// Get balance on Fogo
-const balance = await svm.getBalance(chainConfig);
-console.log('Fogo USDC Balance:', balance);
-
-// Create Fogo payment
-const paymentPayload = await svm.signPayment(
-  {
-    recipient: '5Y32Dk6weq1LrMRdujpJyDbTN3SjwXGoQS9QN39WQ9Cq',
-    amount: '10.00',
-    facilitator: 'F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq',
-  },
-  chainConfig
-);
-
-// Encode with correct network name ('fogo')
-const header = svm.encodePaymentHeader(paymentPayload, chainConfig);
-console.log('Fogo payment header:', header);
+const header = algorand.encodePaymentHeader(payload, chainConfig);
 ```
 
----
+Algorand uses atomic transaction groups:
+- Transaction 0: Fee payment (unsigned, facilitator signs)
+- Transaction 1: USDC ASA transfer (signed by user)
 
 ### Stellar
-
-Stellar uses Soroban authorization entries for gasless transfers.
 
 ```typescript
 import { StellarProvider } from 'uvd-x402-sdk/stellar';
 import { getChainByName } from 'uvd-x402-sdk';
 
 const stellar = new StellarProvider();
-
-// Check if Freighter is installed
-if (!stellar.isAvailable()) {
-  throw new Error('Please install Freighter wallet from freighter.app');
-}
-
-// Connect
-const address = await stellar.connect();
-console.log('Connected Stellar wallet:', address);
-
-// Get chain config
+const address = await stellar.connect(); // Freighter wallet
 const chainConfig = getChainByName('stellar')!;
 
-// Get balance
-const balance = await stellar.getBalance(chainConfig);
-console.log('USDC Balance:', balance);
+const payload = await stellar.signPayment({
+  recipient: 'GD3FWQ4QFSCO2F2KVXZPQWOC27CQHXHYCRCRRZBMWU3DNOZW2IIGOU54',
+  amount: '10.00',
+}, chainConfig);
 
-// Create payment
-const paymentPayload = await stellar.signPayment(
-  {
-    recipient: 'GD3FWQ4QFSCO2F2KVXZPQWOC27CQHXHYCRCRRZBMWU3DNOZW2IIGOU54',
-    amount: '10.00',
-  },
-  chainConfig
-);
-
-// Encode as X-PAYMENT header
-const header = stellar.encodePaymentHeader(paymentPayload);
-console.log('Payment header:', header);
+const header = stellar.encodePaymentHeader(payload);
 ```
 
----
-
-### NEAR Protocol
-
-NEAR uses NEP-366 meta-transactions where the facilitator pays all gas.
+### NEAR
 
 ```typescript
 import { NEARProvider } from 'uvd-x402-sdk/near';
 import { getChainByName } from 'uvd-x402-sdk';
 
 const near = new NEARProvider();
-
-// Check if NEAR wallet is available
-if (!near.isAvailable()) {
-  throw new Error('Please install MyNearWallet or Meteor wallet');
-}
-
-// Connect
-const accountId = await near.connect();
-console.log('Connected NEAR account:', accountId);
-
-// Get chain config
+const accountId = await near.connect(); // MyNearWallet
 const chainConfig = getChainByName('near')!;
 
-// Get balance
-const balance = await near.getBalance(chainConfig);
-console.log('USDC Balance:', balance);
-
-// Create payment
-const paymentPayload = await near.signPayment(
-  {
-    recipient: '0xultravioleta.near',
-    amount: '10.00',
-  },
-  chainConfig
-);
-
-// Encode as X-PAYMENT header
-const header = near.encodePaymentHeader(paymentPayload);
-console.log('Payment header:', header);
-```
-
----
-
-## x402 Protocol Versions
-
-The SDK supports both x402 v1 and v2 protocols.
-
-### v1 (Default)
-
-```typescript
-// v1 uses simple network names
-{
-  "x402Version": 1,
-  "scheme": "exact",
-  "network": "base",
-  "payload": { ... }
-}
-```
-
-### v2 (CAIP-2)
-
-```typescript
-// v2 uses CAIP-2 chain identifiers
-{
-  "x402Version": 2,
-  "scheme": "exact",
-  "network": "eip155:8453",
-  "payload": { ... },
-  "accepts": [
-    { "network": "eip155:8453", "asset": "0x833...", "amount": "10000000" },
-    { "network": "solana:5eykt...", "asset": "EPjF...", "amount": "10000000" }
-  ]
-}
-```
-
-### Version Detection and Conversion
-
-```typescript
-import {
-  detectX402Version,
-  chainToCAIP2,
-  caip2ToChain,
-  convertX402Header,
-} from 'uvd-x402-sdk';
-
-// Detect version from response
-const version = detectX402Version(response402);
-// Returns: 1 or 2
-
-// Convert between formats
-const caip2 = chainToCAIP2('base');
-// Returns: 'eip155:8453'
-
-const chainName = caip2ToChain('eip155:8453');
-// Returns: 'base'
-
-// Convert headers between versions
-const v2Header = convertX402Header(v1Header, 2);
-```
-
-### Configure Version
-
-```typescript
-const client = new X402Client({
-  defaultChain: 'base',
-  x402Version: 2, // Force v2 format
-  // or
-  x402Version: 'auto', // Auto-detect from 402 response (default)
-});
-```
-
----
-
-## Multi-Payment Support
-
-Accept payments on multiple networks simultaneously.
-
-### Configuration
-
-```typescript
-const client = new X402Client({
-  defaultChain: 'base',
-  multiPayment: {
-    networks: ['base', 'solana', 'stellar', 'near'],
-    defaultNetwork: 'base',
-    autoDetect: true, // Auto-select based on user's wallet
-  },
-});
-```
-
-### Generate Payment Options
-
-```typescript
-import { generatePaymentOptions, getEnabledChains } from 'uvd-x402-sdk';
-
-// Get all enabled chain configs
-const chains = getEnabledChains();
-
-// Generate v2 payment options
-const options = generatePaymentOptions(chains, '10.00');
-
-// Result:
-// [
-//   { network: 'eip155:8453', asset: '0x833...', amount: '10000000' },
-//   { network: 'solana:5eykt...', asset: 'EPjF...', amount: '10000000' },
-//   { network: 'stellar:pubnet', asset: 'CCW67...', amount: '100000000' },
-//   { network: 'near:mainnet', asset: '17208...', amount: '10000000' },
-// ]
-```
-
----
-
-## Multi-Stablecoin Support (EVM)
-
-EVM chains support multiple stablecoins beyond USDC. Token availability varies by chain.
-
-### Supported Tokens
-
-| Token | Description | Decimals | Chains |
-|-------|-------------|----------|--------|
-| USDC | USD Coin (Circle) | 6 | All EVM chains |
-| EURC | Euro Coin (Circle) | 6 | Ethereum, Base, Avalanche |
-| AUSD | Agora Dollar | 6 | Ethereum, Avalanche, Polygon, Arbitrum, Monad |
-| PYUSD | PayPal USD | 6 | Ethereum |
-| USDT | Tether USD (USDT0 Omnichain via LayerZero) | 6 | Ethereum, Arbitrum |
-
-### Basic Usage
-
-```typescript
-import { X402Client } from 'uvd-x402-sdk';
-
-const client = new X402Client({ defaultChain: 'base' });
-await client.connect('base');
-
-// Pay with EURC instead of USDC
-const result = await client.createPayment({
-  recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+const payload = await near.signPayment({
+  recipient: 'merchant.near',
   amount: '10.00',
-  tokenType: 'eurc', // 'usdc' | 'eurc' | 'ausd' | 'pyusd'
-});
+}, chainConfig);
+
+const header = near.encodePaymentHeader(payload);
 ```
 
-### Check Token Availability
-
-```typescript
-import {
-  getSupportedTokens,
-  isTokenSupported,
-  getTokenConfig,
-  getChainsByToken,
-} from 'uvd-x402-sdk';
-
-// Get all tokens supported on a chain
-const tokens = getSupportedTokens('ethereum');
-// Returns: ['usdc', 'eurc', 'ausd', 'pyusd']
-
-const baseTokens = getSupportedTokens('base');
-// Returns: ['usdc', 'eurc']
-
-// Check if a specific token is supported
-if (isTokenSupported('base', 'eurc')) {
-  console.log('EURC available on Base');
-}
-
-// Get token configuration (address, decimals, name)
-const eurcConfig = getTokenConfig('ethereum', 'eurc');
-// Returns: { address: '0x1aBa...', decimals: 6, name: 'EURC', version: '2' }
-
-// Find all chains that support a token
-const eurcChains = getChainsByToken('eurc');
-// Returns: [baseConfig, ethereumConfig, avalancheConfig]
-```
-
-### Check Token Balance
-
-```typescript
-import { EVMProvider } from 'uvd-x402-sdk';
-import { getChainByName } from 'uvd-x402-sdk';
-
-const evm = new EVMProvider();
-await evm.connect();
-
-const chainConfig = getChainByName('ethereum')!;
-
-// Check USDC balance (default)
-const usdcBalance = await evm.getBalance(chainConfig);
-
-// Check EURC balance
-const eurcBalance = await evm.getBalance(chainConfig, 'eurc');
-
-// Check PYUSD balance
-const pyusdBalance = await evm.getBalance(chainConfig, 'pyusd');
-```
-
-### Wagmi/RainbowKit with Multi-Token
+## Wagmi/RainbowKit
 
 ```typescript
 import { useWalletClient } from 'wagmi';
 import { createPaymentFromWalletClient } from 'uvd-x402-sdk/wagmi';
 
-function PayWithEURC() {
+function PayButton() {
   const { data: walletClient } = useWalletClient();
 
   const handlePay = async () => {
     const paymentHeader = await createPaymentFromWalletClient(walletClient, {
-      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
+      recipient: '0x...',
       amount: '10.00',
       chainName: 'base',
-      tokenType: 'eurc', // Pay with EURC
     });
 
     await fetch('/api/purchase', {
       headers: { 'X-PAYMENT': paymentHeader },
-      method: 'POST',
     });
   };
 
-  return <button onClick={handlePay}>Pay 10 EURC</button>;
+  return <button onClick={handlePay}>Pay $10</button>;
 }
 ```
 
-### Critical Implementation Notes
-
-#### EIP-712 Domain Names Vary by Chain
-
-The same token may use **different EIP-712 domain names on different chains**. This affects signature verification.
-
-| Token | Ethereum | Base | Avalanche |
-|-------|----------|------|-----------|
-| EURC | `"Euro Coin"` | `"EURC"` | `"Euro Coin"` |
-| USDC | `"USD Coin"` | `"USD Coin"` | `"USD Coin"` |
-| AUSD | `"AUSD"` | N/A | `"AUSD"` |
-| PYUSD | `"PayPal USD"` | N/A | N/A |
-
-**Important:** Always use `getTokenConfig()` to get the correct domain name for each chain. Never hardcode domain names.
+## Multi-Stablecoin (EVM)
 
 ```typescript
-// CORRECT: Use getTokenConfig for each chain
-const eurcBase = getTokenConfig('base', 'eurc');
-// Returns: { name: 'EURC', version: '2', ... }
-
-const eurcEthereum = getTokenConfig('ethereum', 'eurc');
-// Returns: { name: 'Euro Coin', version: '2', ... }
-```
-
-#### PYUSD Signature Format (PayPal USD)
-
-PYUSD uses the Paxos implementation which only supports the **v,r,s signature variant** of `transferWithAuthorization`. This is different from Circle's USDC/EURC which support both compact bytes and v,r,s variants.
-
-**Backend implications:**
-- The x402 facilitator (v1.9.0+) automatically handles this by detecting PYUSD and using `transferWithAuthorization_1(v,r,s)` instead of `transferWithAuthorization_0(bytes signature)`
-- If using a custom facilitator, ensure it supports the v,r,s variant for PYUSD
-
-#### Token Info Must Be Passed to Backend
-
-When using non-USDC tokens, you **must** pass the token info in your payment payload so the backend can validate the correct EIP-712 domain. The SDK handles this automatically when you specify `tokenType`.
-
-```typescript
-// The SDK automatically includes token info when you specify tokenType
-const paymentHeader = await client.createPayment({
+// Pay with EURC instead of USDC
+const result = await client.createPayment({
   recipient: '0x...',
   amount: '10.00',
-  tokenType: 'eurc', // This ensures token info is included
+  tokenType: 'eurc', // 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'usdt'
 });
 
-// Backend receives token info in the payload:
-// {
-//   "token": {
-//     "address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
-//     "symbol": "EURC",
-//     "decimals": 6,
-//     "eip712": { "name": "EURC", "version": "2" }
-//   }
-// }
+// Check token availability
+import { getSupportedTokens, isTokenSupported } from 'uvd-x402-sdk';
+
+getSupportedTokens('ethereum'); // ['usdc', 'eurc', 'ausd', 'pyusd']
+getSupportedTokens('base');     // ['usdc', 'eurc']
+isTokenSupported('base', 'eurc'); // true
 ```
 
----
+## AUSD on Solana (Token2022)
 
-## React Integration
+```typescript
+import { SVMProvider } from 'uvd-x402-sdk/solana';
+import { getChainByName } from 'uvd-x402-sdk';
+
+const svm = new SVMProvider();
+const chainConfig = getChainByName('solana')!;
+
+// AUSD uses Token2022 program
+const payload = await svm.signPayment({
+  recipient: '5Y32Dk...',
+  amount: '10.00',
+  token: 'ausd', // Token2022 AUSD
+}, chainConfig);
+
+const header = svm.encodePaymentHeader(payload, chainConfig);
+```
+
+## Supported Networks
+
+### EVM (10)
+
+| Network | Chain ID | Tokens |
+|---------|----------|--------|
+| Base | 8453 | USDC, EURC |
+| Ethereum | 1 | USDC, EURC, AUSD, PYUSD, USDT |
+| Polygon | 137 | USDC, AUSD |
+| Arbitrum | 42161 | USDC, AUSD, USDT |
+| Optimism | 10 | USDC |
+| Avalanche | 43114 | USDC, EURC, AUSD |
+| Celo | 42220 | USDC |
+| HyperEVM | 999 | USDC |
+| Unichain | 130 | USDC |
+| Monad | 143 | USDC, AUSD |
+
+### SVM (2)
+
+| Network | Tokens | Wallet |
+|---------|--------|--------|
+| Solana | USDC, AUSD | Phantom |
+| Fogo | USDC | Phantom |
+
+### Algorand (2)
+
+| Network | USDC ASA | Wallet |
+|---------|----------|--------|
+| Algorand | 31566704 | Lute, Pera |
+| Algorand Testnet | 10458941 | Lute, Pera |
+
+### Other (2)
+
+| Network | Wallet |
+|---------|--------|
+| Stellar | Freighter |
+| NEAR | MyNearWallet |
+
+## Facilitator Addresses
+
+The SDK includes built-in facilitator addresses. You don't need to configure them.
+
+```typescript
+import { FACILITATOR_ADDRESSES, getFacilitatorAddress } from 'uvd-x402-sdk';
+
+// Built-in addresses
+FACILITATOR_ADDRESSES.evm;      // 0x103040545AC5031A11E8C03dd11324C7333a13C7
+FACILITATOR_ADDRESSES.solana;   // F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq
+FACILITATOR_ADDRESSES.algorand; // KIMS5H6QLCUDL65L5UBTOXDPWLMTS7N3AAC3I6B2NCONEI5QIVK7LH2C2I
+FACILITATOR_ADDRESSES.stellar;  // GCHPGXJT2WFFRFCA5TV4G4E3PMMXLNIDUH27PKDYA4QJ2XGYZWGFZNHB
+FACILITATOR_ADDRESSES.near;     // uvd-facilitator.near
+
+// Or get by chain name
+getFacilitatorAddress('algorand'); // KIMS5H6...
+getFacilitatorAddress('base', 'evm'); // 0x1030...
+```
+
+## Backend
+
+```typescript
+import {
+  FacilitatorClient,
+  create402Response,
+  extractPaymentFromHeaders,
+  buildPaymentRequirements,
+} from 'uvd-x402-sdk/backend';
+
+// Return 402 if no payment
+app.post('/api/premium', async (req, res) => {
+  const payment = extractPaymentFromHeaders(req.headers);
+
+  if (!payment) {
+    const { status, headers, body } = create402Response({
+      amount: '1.00',
+      recipient: process.env.RECIPIENT,
+      resource: 'https://api.example.com/premium',
+      chainName: 'base',
+    });
+    return res.status(status).set(headers).json(body);
+  }
+
+  // Verify and settle
+  const client = new FacilitatorClient();
+  const requirements = buildPaymentRequirements({
+    amount: '1.00',
+    recipient: process.env.RECIPIENT,
+  });
+
+  const result = await client.verifyAndSettle(payment, requirements);
+
+  if (!result.verified) {
+    return res.status(402).json({ error: result.error });
+  }
+
+  res.json({ data: 'premium content', txHash: result.transactionHash });
+});
+```
+
+## React
 
 ```tsx
-import { X402Provider, useX402, usePayment, useBalance } from 'uvd-x402-sdk/react';
+import { X402Provider, useX402, usePayment } from 'uvd-x402-sdk/react';
 
 function App() {
   return (
@@ -853,183 +308,20 @@ function App() {
 }
 
 function PaymentPage() {
-  const { connect, disconnect, isConnected, address, network } = useX402();
-  const { balance, isLoading: balanceLoading } = useBalance();
-  const { pay, isPaying, error } = usePayment();
-
-  const handlePurchase = async () => {
-    const result = await pay({
-      recipient: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-      amount: '10.00',
-    });
-
-    await fetch('/api/purchase', {
-      headers: { 'X-PAYMENT': result.paymentHeader },
-      method: 'POST',
-      body: JSON.stringify({ item: 'premium' }),
-    });
-  };
+  const { connect, isConnected, address } = useX402();
+  const { pay, isPaying } = usePayment();
 
   if (!isConnected) {
-    return <button onClick={() => connect('base')}>Connect Wallet</button>;
+    return <button onClick={() => connect('base')}>Connect</button>;
   }
 
   return (
-    <div>
-      <p>Connected: {address}</p>
-      <p>Network: {network}</p>
-      <p>Balance: {balanceLoading ? 'Loading...' : `${balance} USDC`}</p>
-      <button onClick={handlePurchase} disabled={isPaying}>
-        {isPaying ? 'Processing...' : 'Pay $10 USDC'}
-      </button>
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-    </div>
+    <button onClick={() => pay({ recipient: '0x...', amount: '10.00' })} disabled={isPaying}>
+      {isPaying ? 'Processing...' : 'Pay $10'}
+    </button>
   );
 }
 ```
-
----
-
-## Supported Networks
-
-### EVM Networks (10)
-
-| Network | Chain ID | Tokens | Status |
-|---------|----------|--------|--------|
-| Ethereum | 1 | USDC, EURC, AUSD, PYUSD | Enabled |
-| Base | 8453 | USDC, EURC | Enabled |
-| Avalanche | 43114 | USDC, EURC, AUSD | Enabled |
-| Arbitrum | 42161 | USDC, AUSD | Enabled |
-| Polygon | 137 | USDC, AUSD | Enabled |
-| Monad | 143 | USDC, AUSD | Enabled |
-| Optimism | 10 | USDC | Enabled |
-| Celo | 42220 | USDC | Enabled |
-| HyperEVM | 999 | USDC | Enabled |
-| Unichain | 130 | USDC | Enabled |
-
-### SVM Networks (2)
-
-| Network | USDC Mint | Decimals | Wallet | Status |
-|---------|-----------|----------|--------|--------|
-| Solana | EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v | 6 | Phantom | Enabled |
-| Fogo | uSd2czE61Evaf76RNbq4KPpXnkiL3irdzgLFUMe3NoG | 6 | Phantom | Enabled |
-
-### Other Networks (2)
-
-| Network | USDC Address | Decimals | Wallet | Status |
-|---------|--------------|----------|--------|--------|
-| Stellar | CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75 | 7 | Freighter | Enabled |
-| NEAR | 17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1 | 6 | MyNearWallet | Enabled |
-
----
-
-## API Reference
-
-### X402Client
-
-```typescript
-const client = new X402Client(config?: X402ClientConfig);
-
-interface X402ClientConfig {
-  facilitatorUrl?: string;      // Default: 'https://facilitator.ultravioletadao.xyz'
-  defaultChain?: string;        // Default: 'base'
-  autoConnect?: boolean;        // Default: false
-  debug?: boolean;              // Default: false
-  x402Version?: 1 | 2 | 'auto'; // Default: 'auto'
-  customChains?: Record<string, Partial<ChainConfig>>;
-  rpcOverrides?: Record<string, string>;
-  multiPayment?: MultiPaymentConfig;
-}
-```
-
-#### Methods
-
-| Method | Description |
-|--------|-------------|
-| `connect(chainName?)` | Connect wallet to specified chain |
-| `disconnect()` | Disconnect current wallet |
-| `switchChain(chainName)` | Switch to different EVM chain |
-| `createPayment(paymentInfo)` | Create payment authorization (supports `tokenType` in paymentInfo) |
-| `getBalance(tokenType?)` | Get token balance on current chain (defaults to USDC) |
-| `getState()` | Get current wallet state |
-| `isConnected()` | Check if wallet is connected |
-| `on(event, handler)` | Subscribe to events |
-
-### Chain Utilities
-
-```typescript
-import {
-  SUPPORTED_CHAINS,
-  getChainByName,
-  getChainById,
-  getEnabledChains,
-  getChainsByNetworkType,
-  getSVMChains,
-  isSVMChain,
-  getExplorerTxUrl,
-  getExplorerAddressUrl,
-  // Multi-token utilities
-  getTokenConfig,
-  getSupportedTokens,
-  isTokenSupported,
-  getChainsByToken,
-} from 'uvd-x402-sdk';
-```
-
-### Token Utilities
-
-| Function | Description |
-|----------|-------------|
-| `getTokenConfig(chain, tokenType)` | Get token config (address, decimals, name, version) |
-| `getSupportedTokens(chain)` | Get array of supported token types for a chain |
-| `isTokenSupported(chain, tokenType)` | Check if token is available on chain |
-| `getChainsByToken(tokenType)` | Get all chains that support a specific token |
-
-### x402 Utilities
-
-```typescript
-import {
-  detectX402Version,
-  chainToCAIP2,
-  caip2ToChain,
-  createX402V1Header,
-  createX402V2Header,
-  encodeX402Header,
-  decodeX402Header,
-  convertX402Header,
-  generatePaymentOptions,
-} from 'uvd-x402-sdk';
-```
-
-### Wagmi Adapter
-
-```typescript
-import {
-  createPaymentFromWalletClient,
-  createPaymentWithResult,
-  useX402Wagmi,
-} from 'uvd-x402-sdk/wagmi';
-```
-
-| Function | Description |
-|----------|-------------|
-| `createPaymentFromWalletClient(walletClient, options)` | Create payment header using wagmi's WalletClient |
-| `createPaymentWithResult(walletClient, options)` | Same as above but returns full PaymentResult |
-| `useX402Wagmi(walletClient)` | Helper hook returning `{ createPayment, isReady }` |
-
-#### Options
-
-```typescript
-interface WagmiPaymentOptions {
-  recipient: string;        // Recipient address
-  amount: string;           // Amount in token (e.g., "10.00")
-  chainName?: string;       // Chain name (default: 'base')
-  tokenType?: TokenType;    // Token type (default: 'usdc')
-  validitySeconds?: number; // Signature validity window (default: 300)
-}
-```
-
----
 
 ## Error Handling
 
@@ -1041,493 +333,23 @@ try {
 } catch (error) {
   if (error instanceof X402Error) {
     switch (error.code) {
-      case 'WALLET_NOT_FOUND':
-        alert('Please install a wallet');
-        break;
-      case 'WALLET_CONNECTION_REJECTED':
-        alert('Connection cancelled');
-        break;
-      case 'INSUFFICIENT_BALANCE':
-        alert('Not enough USDC');
-        break;
-      case 'SIGNATURE_REJECTED':
-        alert('Payment cancelled');
-        break;
-      case 'CHAIN_NOT_SUPPORTED':
-        alert('Network not supported');
-        break;
-      default:
-        alert(error.message);
+      case 'WALLET_NOT_FOUND': // Install wallet
+      case 'WALLET_CONNECTION_REJECTED': // User rejected
+      case 'INSUFFICIENT_BALANCE': // Not enough USDC
+      case 'SIGNATURE_REJECTED': // User cancelled
+      case 'CHAIN_NOT_SUPPORTED': // Unsupported network
     }
   }
 }
 ```
 
-### Error Codes
-
-| Code | Description |
-|------|-------------|
-| `WALLET_NOT_FOUND` | No compatible wallet detected |
-| `WALLET_NOT_CONNECTED` | Wallet not connected |
-| `WALLET_CONNECTION_REJECTED` | User rejected connection |
-| `CHAIN_NOT_SUPPORTED` | Chain not supported |
-| `CHAIN_SWITCH_REJECTED` | User rejected chain switch |
-| `INSUFFICIENT_BALANCE` | Not enough USDC |
-| `SIGNATURE_REJECTED` | User rejected signature |
-| `PAYMENT_FAILED` | Payment processing failed |
-| `NETWORK_ERROR` | Network request failed |
-| `INVALID_CONFIG` | Invalid configuration |
-
----
-
-## Backend Utilities
-
-The SDK includes comprehensive server-side utilities for handling x402 payments.
-
-### Payment Flow Diagram
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────────┐     ┌──────────────┐
-│   Client    │     │  Your API   │     │   Facilitator   │     │  Blockchain  │
-└──────┬──────┘     └──────┬──────┘     └────────┬────────┘     └──────┬───────┘
-       │                   │                     │                     │
-       │ 1. Request resource (no payment)        │                     │
-       │ ────────────────> │                     │                     │
-       │                   │                     │                     │
-       │ 2. 402 Payment Required                 │                     │
-       │ <──────────────── │                     │                     │
-       │                   │                     │                     │
-       │ 3. User signs payment                   │                     │
-       │ (wallet popup)    │                     │                     │
-       │                   │                     │                     │
-       │ 4. Request with X-PAYMENT header        │                     │
-       │ ────────────────> │                     │                     │
-       │                   │                     │                     │
-       │                   │ 5. Verify payment   │                     │
-       │                   │ ────────────────────>                     │
-       │                   │                     │                     │
-       │                   │ 6. Payment valid    │                     │
-       │                   │ <────────────────── │                     │
-       │                   │                     │                     │
-       │ 7. Provide resource                     │                     │
-       │ <──────────────── │                     │                     │
-       │                   │                     │                     │
-       │                   │ 8. Settle payment   │                     │
-       │                   │ ────────────────────>                     │
-       │                   │                     │                     │
-       │                   │                     │ 9. Submit tx        │
-       │                   │                     │ ───────────────────>│
-       │                   │                     │                     │
-       │                   │                     │ 10. Confirmed       │
-       │                   │                     │ <───────────────────│
-       │                   │                     │                     │
-       │                   │ 11. Settlement done │                     │
-       │                   │ <────────────────── │                     │
-       └                   └                     └                     └
-```
-
-### Basic Backend Setup
-
-```typescript
-import {
-  parsePaymentHeader,
-  extractPaymentFromHeaders,
-  buildPaymentRequirements,
-  FacilitatorClient,
-  create402Response,
-  X402_CORS_HEADERS,
-} from 'uvd-x402-sdk/backend';
-
-// Configure CORS
-app.use((req, res, next) => {
-  Object.entries(X402_CORS_HEADERS).forEach(([key, value]) => {
-    res.setHeader(key, value);
-  });
-  next();
-});
-
-// Protected endpoint
-app.post('/api/premium', async (req, res) => {
-  // Extract payment from headers
-  const payment = extractPaymentFromHeaders(req.headers);
-
-  if (!payment) {
-    // Return 402 Payment Required
-    const { status, headers, body } = create402Response({
-      amount: '1.00',
-      recipient: process.env.PAYMENT_RECIPIENT,
-      resource: 'https://api.example.com/premium',
-      chainName: 'base',
-    });
-    return res.status(status).set(headers).json(body);
-  }
-
-  // Verify payment with facilitator
-  const client = new FacilitatorClient();
-  const requirements = buildPaymentRequirements({
-    amount: '1.00',
-    recipient: process.env.PAYMENT_RECIPIENT,
-    resource: 'https://api.example.com/premium',
-  });
-
-  const verifyResult = await client.verify(payment, requirements);
-
-  if (!verifyResult.isValid) {
-    return res.status(402).json({
-      error: 'Payment verification failed',
-      reason: verifyResult.invalidReason,
-    });
-  }
-
-  // Provide the resource
-  res.json({ data: 'premium content' });
-
-  // Settle payment after response
-  await client.settle(payment, requirements);
-});
-```
-
-### Using Payment Middleware
-
-```typescript
-import { createPaymentMiddleware } from 'uvd-x402-sdk/backend';
-
-const paymentMiddleware = createPaymentMiddleware(
-  (req) => ({
-    amount: '1.00',
-    recipient: process.env.PAYMENT_RECIPIENT,
-    resource: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
-  })
-);
-
-// Apply to specific routes
-app.get('/premium/*', paymentMiddleware, (req, res) => {
-  res.json({ premium: 'data' });
-});
-```
-
-### FacilitatorClient API
-
-```typescript
-const client = new FacilitatorClient({
-  baseUrl: 'https://facilitator.ultravioletadao.xyz', // default
-  timeout: 30000, // default: 30 seconds
-});
-
-// Verify a payment
-const verifyResult = await client.verify(payment, requirements);
-// Returns: { isValid: boolean, invalidReason?: string, payer?: string }
-
-// Settle a payment (execute on-chain)
-const settleResult = await client.settle(payment, requirements);
-// Returns: { success: boolean, transactionHash?: string, error?: string }
-
-// Combined verify + settle
-const result = await client.verifyAndSettle(payment, requirements);
-// Returns: { verified: boolean, settled: boolean, transactionHash?: string, error?: string }
-
-// Health check
-const isHealthy = await client.healthCheck();
-```
-
----
-
-## Bazaar Discovery API
-
-Discover and register x402-enabled resources across the ecosystem.
-
-```typescript
-import { BazaarClient } from 'uvd-x402-sdk/backend';
-
-// Discover resources (no auth required)
-const bazaar = new BazaarClient();
-
-const results = await bazaar.discover({
-  category: 'ai',       // 'api' | 'data' | 'ai' | 'media' | 'compute' | 'storage'
-  network: 'base',      // Filter by network
-  token: 'USDC',        // Filter by token
-  maxPrice: '0.10',     // Max price in dollars
-  query: 'image',       // Search query
-  sortBy: 'price',      // 'price' | 'createdAt' | 'name'
-  sortOrder: 'asc',
-});
-
-for (const resource of results.resources) {
-  console.log(`${resource.name}: ${resource.url} - $${resource.pricePerRequest}`);
-}
-```
-
-### Register a Resource
-
-```typescript
-// Registration requires API key
-const bazaar = new BazaarClient({
-  apiKey: process.env.BAZAAR_API_KEY,
-});
-
-const resource = await bazaar.register({
-  url: 'https://api.example.com/v1/generate',
-  name: 'AI Image Generator',
-  description: 'Generate high-quality images with AI',
-  category: 'ai',
-  networks: ['base', 'ethereum', 'polygon'],
-  tokens: ['USDC', 'EURC'],
-  price: '0.05',
-  payTo: '0xD3868E1eD738CED6945A574a7c769433BeD5d474',
-  tags: ['ai', 'image', 'generator'],
-});
-
-console.log('Registered:', resource.id);
-
-// Update resource
-await bazaar.update(resource.id, { price: '0.03' });
-
-// Deactivate (soft delete)
-await bazaar.deactivate(resource.id);
-
-// Reactivate
-await bazaar.reactivate(resource.id);
-
-// Delete permanently
-await bazaar.delete(resource.id);
-```
-
-### List Your Resources
-
-```typescript
-const myResources = await bazaar.listMyResources({
-  includeInactive: true,
-});
-```
-
----
-
-## Escrow & Refunds
-
-For services that may require refunds, use the escrow system.
-
-### Escrow Flow Diagram
-
-```
-┌─────────────┐     ┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
-│   Payer     │     │  Your API   │     │  Escrow Service  │     │  Blockchain  │
-└──────┬──────┘     └──────┬──────┘     └────────┬─────────┘     └──────┬───────┘
-       │                   │                     │                      │
-       │ 1. Pay with X-PAYMENT                   │                      │
-       │ ────────────────> │                     │                      │
-       │                   │                     │                      │
-       │                   │ 2. Create escrow    │                      │
-       │                   │ ────────────────────>                      │
-       │                   │                     │                      │
-       │                   │                     │ 3. Hold funds        │
-       │                   │                     │ ─────────────────────>
-       │                   │                     │                      │
-       │                   │ 4. Escrow created   │                      │
-       │                   │ <────────────────── │                      │
-       │                   │                     │                      │
-       │ 5. Provide service                      │                      │
-       │ <──────────────── │                     │                      │
-       │                   │                     │                      │
-       │   ┌───────────────────────────────────────────────────────────┐
-       │   │                  IF SERVICE DELIVERED                     │
-       │   └───────────────────────────────────────────────────────────┘
-       │                   │ 6a. Release escrow  │                      │
-       │                   │ ────────────────────>                      │
-       │                   │                     │                      │
-       │                   │                     │ 7a. Transfer to      │
-       │                   │                     │     recipient        │
-       │                   │                     │ ─────────────────────>
-       │                   │                     │                      │
-       │   ┌───────────────────────────────────────────────────────────┐
-       │   │                  IF SERVICE FAILED                        │
-       │   └───────────────────────────────────────────────────────────┘
-       │ 6b. Request refund│                     │                      │
-       │ ────────────────> │                     │                      │
-       │                   │ 7b. Process refund  │                      │
-       │                   │ ────────────────────>                      │
-       │                   │                     │                      │
-       │                   │                     │ 8b. Return to payer  │
-       │                   │                     │ ─────────────────────>
-       └                   └                     └                      └
-```
-
-### Basic Escrow Usage
-
-```typescript
-import {
-  EscrowClient,
-  canReleaseEscrow,
-  canRefundEscrow,
-  isEscrowExpired,
-} from 'uvd-x402-sdk/backend';
-
-const escrow = new EscrowClient({
-  apiKey: process.env.ESCROW_API_KEY,
-});
-
-// Create escrow payment
-const escrowPayment = await escrow.createEscrow({
-  paymentHeader: req.headers['x-payment'],
-  requirements: paymentRequirements,
-  escrowDuration: 86400, // 24 hours
-  releaseConditions: {
-    minHoldTime: 3600, // Minimum 1 hour before release
-  },
-});
-
-console.log('Escrow ID:', escrowPayment.id);
-console.log('Status:', escrowPayment.status); // 'held'
-
-// Check if we can release
-if (canReleaseEscrow(escrowPayment)) {
-  // After service is provided, release funds to recipient
-  const released = await escrow.release(escrowPayment.id);
-  console.log('Released, tx:', released.transactionHash);
-}
-```
-
-### Handling Refunds
-
-```typescript
-// Payer requests refund
-const refundRequest = await escrow.requestRefund({
-  escrowId: escrowPayment.id,
-  reason: 'Service not delivered within expected timeframe',
-  evidence: 'Order #12345 shows pending status after 48 hours',
-});
-
-// Recipient can approve or reject
-await escrow.approveRefund(refundRequest.id, refundRequest.amountRequested);
-// or
-await escrow.rejectRefund(refundRequest.id, 'Service was delivered, see tracking #XYZ');
-```
-
-### Dispute Resolution
-
-```typescript
-// If parties disagree, open a dispute
-const dispute = await escrow.openDispute(
-  escrowPayment.id,
-  'Service quality does not match description',
-  'Screenshots showing issues with delivered product'
-);
-
-// Submit additional evidence
-await escrow.submitEvidence(dispute.id, 'Additional documentation...');
-
-// Check dispute status
-const updatedDispute = await escrow.getDispute(dispute.id);
-console.log('Outcome:', updatedDispute.outcome);
-// 'pending' | 'payer_wins' | 'recipient_wins' | 'split'
-```
-
-### Helper Functions
-
-```typescript
-import {
-  canReleaseEscrow,
-  canRefundEscrow,
-  isEscrowExpired,
-  escrowTimeRemaining,
-} from 'uvd-x402-sdk/backend';
-
-// Check if escrow can be released
-if (canReleaseEscrow(escrowPayment)) {
-  await escrow.release(escrowPayment.id);
-}
-
-// Check if escrow can be refunded
-if (canRefundEscrow(escrowPayment)) {
-  await escrow.requestRefund({ escrowId: escrowPayment.id, reason: '...' });
-}
-
-// Check expiration
-if (isEscrowExpired(escrowPayment)) {
-  console.log('Escrow has expired');
-}
-
-// Time remaining
-const msRemaining = escrowTimeRemaining(escrowPayment);
-console.log(`Expires in ${msRemaining / 1000 / 60} minutes`);
-```
-
----
-
-## Troubleshooting
-
-### Common Issues
-
-#### "No Ethereum wallet found"
-
-Install MetaMask or another EVM wallet. For mobile, use WalletConnect.
-
-#### "Phantom wallet not installed"
-
-Install Phantom from [phantom.app](https://phantom.app) for Solana/Fogo support.
-
-#### "Freighter wallet not installed"
-
-Install Freighter from [freighter.app](https://www.freighter.app) for Stellar support.
-
-#### "No NEAR wallet found"
-
-Install MyNearWallet or Meteor wallet for NEAR support.
-
-#### "Chain not supported"
-
-Check if the chain is enabled in `SUPPORTED_CHAINS`.
-
-#### "Signature rejected by user"
-
-User clicked "Reject" in their wallet. This is not an error - just user cancellation.
-
-#### Wrong network in X-PAYMENT header
-
-For SVM chains, always pass `chainConfig` to `encodePaymentHeader()`:
-
-```typescript
-// WRONG - will use 'solana' for Fogo
-const header = svm.encodePaymentHeader(payload);
-
-// CORRECT - uses 'fogo' for Fogo
-const fogoConfig = getChainByName('fogo')!;
-const header = svm.encodePaymentHeader(payload, fogoConfig);
-```
-
-### Debug Mode
-
-Enable debug logging:
-
-```typescript
-const client = new X402Client({
-  debug: true,
-  defaultChain: 'base',
-});
-```
-
----
-
-## Security
-
-- Users NEVER pay gas or submit transactions directly
-- EVM: Users sign EIP-712 structured messages only
-- Solana/Fogo: Users sign partial transactions (USDC transfer instruction only)
-- Stellar: Users sign Soroban authorization entries only
-- NEAR: Users sign NEP-366 meta-transactions only
-- The facilitator submits and pays for all transactions
-
----
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
 ## Links
 
 - [x402 Protocol](https://x402.org)
 - [Ultravioleta DAO](https://ultravioletadao.xyz)
-- [402milly](https://402milly.xyz)
-- [GitHub](https://github.com/UltravioletaDAO/uvd-x402-sdk-typescript)
 - [npm](https://www.npmjs.com/package/uvd-x402-sdk)
+- [GitHub](https://github.com/UltravioletaDAO/uvd-x402-sdk-typescript)
+
+## License
+
+MIT
