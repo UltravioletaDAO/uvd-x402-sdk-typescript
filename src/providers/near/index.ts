@@ -10,6 +10,17 @@
  * 3. SignedDelegateAction is sent to facilitator
  * 4. Facilitator wraps it and submits to NEAR, paying all gas
  *
+ * NEP-366 Wallet Support:
+ * For apps that need wallet selector integration, call setupWalletSelector() early:
+ *
+ * ```ts
+ * // In your app's initialization (e.g., App.tsx or main.ts)
+ * await NEARProvider.setupWalletSelector({
+ *   walletUrl: 'https://mynearwallet.ultravioletadao.xyz',
+ *   contractId: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+ * });
+ * ```
+ *
  * @example
  * ```ts
  * import { NEARProvider } from 'uvd-x402-sdk/near';
@@ -222,6 +233,18 @@ interface MyNearWallet {
 }
 
 /**
+ * Options for configuring the NEAR wallet selector helper
+ */
+export interface WalletSelectorOptions {
+  /** URL of the MyNearWallet instance (default: https://mynearwallet.ultravioletadao.xyz) */
+  walletUrl?: string;
+  /** USDC contract ID for NEAR (default: 17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1) */
+  contractId?: string;
+  /** NEAR network ID (default: mainnet) */
+  networkId?: string;
+}
+
+/**
  * NEARProvider - Wallet adapter for NEAR Protocol via MyNearWallet/Meteor
  */
 export class NEARProvider implements WalletAdapter {
@@ -232,6 +255,83 @@ export class NEARProvider implements WalletAdapter {
   private accountId: string | null = null;
   private publicKey: Uint8Array | null = null;
   private rpcUrl: string = NEAR_CONFIG.nodeUrl;
+
+  /**
+   * Setup wallet selector for NEP-366 meta-transaction support.
+   *
+   * Call this once early in your app initialization (e.g., App.tsx or main.ts)
+   * to configure the NEAR wallet selector before using NEARProvider.
+   *
+   * @param options - Configuration options for wallet selector
+   * @example
+   * ```ts
+   * await NEARProvider.setupWalletSelector({
+   *   walletUrl: 'https://mynearwallet.ultravioletadao.xyz',
+   *   contractId: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+   * });
+   * ```
+   */
+  static async setupWalletSelector(options: WalletSelectorOptions = {}): Promise<void> {
+    const {
+      walletUrl = 'https://mynearwallet.ultravioletadao.xyz',
+      contractId = '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+      networkId = 'mainnet',
+    } = options;
+
+    if (typeof window === 'undefined') {
+      throw new X402Error(
+        'setupWalletSelector() must be called in a browser environment',
+        'WALLET_NOT_FOUND'
+      );
+    }
+
+    try {
+      // Dynamic imports for wallet selector packages
+      const [{ setupWalletSelector }, { setupMyNearWallet }] = await Promise.all([
+        import('@near-wallet-selector/core'),
+        import('@near-wallet-selector/my-near-wallet'),
+      ]);
+
+      // Setup the wallet selector with MyNearWallet module
+      const selector = await setupWalletSelector({
+        network: networkId as 'mainnet' | 'testnet',
+        modules: [
+          setupMyNearWallet({
+            walletUrl,
+          }),
+        ],
+      });
+
+      // Expose to window for SDK compatibility
+      const win = window as Window & { nearWalletSelector?: NEARWalletSelector };
+      win.nearWalletSelector = {
+        isSignedIn: () => selector.isSignedIn(),
+        getAccountId: () => {
+          const state = selector.store.getState();
+          return state.accounts[0]?.accountId || null;
+        },
+        signIn: async (signInOptions?: { contractId?: string }) => {
+          const wallet = await selector.wallet('my-near-wallet');
+          // BrowserWallet only requires contractId, cast to bypass union type requirement
+          const signInFn = wallet.signIn as unknown as (params: { contractId: string }) => Promise<void>;
+          await signInFn({
+            contractId: signInOptions?.contractId || contractId,
+          });
+        },
+        signOut: async () => {
+          const wallet = await selector.wallet('my-near-wallet');
+          await wallet.signOut();
+        },
+      };
+    } catch (error: unknown) {
+      throw new X402Error(
+        `Failed to setup wallet selector: ${error instanceof Error ? error.message : 'Unknown error'}. ` +
+        'Make sure @near-wallet-selector/core and @near-wallet-selector/my-near-wallet are installed.',
+        'WALLET_NOT_FOUND',
+        error
+      );
+    }
+  }
 
   /**
    * Check if NEAR wallet is available
@@ -300,7 +400,7 @@ export class NEARProvider implements WalletAdapter {
       }
 
       throw new X402Error(
-        'No NEAR wallet found. Please install MyNearWallet or Meteor.',
+        'No NEAR wallet found. Call NEARProvider.setupWalletSelector() first, or install MyNearWallet/Meteor.',
         'WALLET_NOT_FOUND'
       );
     } catch (error: unknown) {
