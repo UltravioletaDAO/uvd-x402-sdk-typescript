@@ -673,11 +673,38 @@ export class NEARProvider implements WalletAdapter {
    */
   private async signMessage(message: Uint8Array): Promise<Uint8Array> {
     const win = window as Window & {
-      nearWalletSelector?: NEARWalletSelector;
+      nearWalletSelector?: NEARWalletSelector & {
+        wallet?: () => Promise<{
+          signMessage?: (params: {
+            message: Uint8Array;
+            recipient: string;
+            nonce: Uint8Array;
+          }) => Promise<{ signature: Uint8Array; publicKey: string }>;
+        }>;
+      };
       myNearWallet?: MyNearWallet;
     };
 
-    // Try MyNearWallet signMessage
+    // Try wallet selector's wallet.signMessage() first (from setupWalletSelector)
+    if (win.nearWalletSelector?.wallet) {
+      try {
+        const wallet = await win.nearWalletSelector.wallet();
+        if (wallet?.signMessage) {
+          const nonce = crypto.getRandomValues(new Uint8Array(32));
+          const result = await wallet.signMessage({
+            message,
+            recipient: 'uvd-x402-sdk',
+            nonce,
+          });
+          return result.signature;
+        }
+      } catch (e) {
+        // Fall through to try other methods
+        console.debug('Wallet selector signMessage failed:', e);
+      }
+    }
+
+    // Try MyNearWallet browser extension signMessage
     if (win.myNearWallet?.signMessage) {
       const result = await win.myNearWallet.signMessage({
         message,
