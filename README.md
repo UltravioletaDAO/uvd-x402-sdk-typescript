@@ -118,12 +118,17 @@ const header = stellar.encodePaymentHeader(payload);
 
 ### NEAR
 
+> **Important:** The SDK's `NEARProvider.signPayment()` only works with **injected wallets** (browser extensions).
+> For **browser-redirect wallets** like MyNearWallet via `@near-wallet-selector`, you must use the popup flow below.
+
+#### Option 1: Injected Wallet (Browser Extension)
+
 ```typescript
 import { NEARProvider } from 'uvd-x402-sdk/near';
 import { getChainByName } from 'uvd-x402-sdk';
 
 const near = new NEARProvider();
-const accountId = await near.connect(); // MyNearWallet
+const accountId = await near.connect(); // MyNearWallet browser extension
 const chainConfig = getChainByName('near')!;
 
 const payload = await near.signPayment({
@@ -133,6 +138,209 @@ const payload = await near.signPayment({
 
 const header = near.encodePaymentHeader(payload);
 ```
+
+#### Option 2: Browser-Redirect Wallet (Popup Flow) - Recommended
+
+MyNearWallet via `@near-wallet-selector` is a browser-redirect wallet that requires a popup flow.
+This is the recommended approach and works with the custom MyNearWallet deployment that supports NEP-366.
+
+```typescript
+import { setupWalletSelector } from '@near-wallet-selector/core';
+import { setupModal } from '@near-wallet-selector/modal-ui';
+import { setupMyNearWallet } from '@near-wallet-selector/my-near-wallet';
+import '@near-wallet-selector/modal-ui/styles.css';
+
+// Configuration
+const NEAR_CONFIG = {
+  usdcContract: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+  recipientAccount: 'merchant.near',
+  // Custom MyNearWallet with NEP-366 signDelegateAction support
+  walletUrl: 'https://mynearwallet.ultravioletadao.xyz',
+};
+
+// Step 1: Initialize wallet selector
+const selector = await setupWalletSelector({
+  network: 'mainnet',
+  modules: [
+    setupMyNearWallet({ walletUrl: NEAR_CONFIG.walletUrl }),
+  ],
+});
+
+const modal = setupModal(selector, {
+  contractId: NEAR_CONFIG.usdcContract,
+});
+
+// Step 2: Connect wallet
+modal.show(); // User selects wallet
+// Wait for connection via selector.store.observable.subscribe()
+const state = selector.store.getState();
+const accountId = state.accounts[0].accountId;
+
+// Step 3: Create payment with popup flow
+async function createNearPayment(amount: string): Promise<string> {
+  const amountRaw = Math.floor(parseFloat(amount) * 1_000_000); // 6 decimals
+
+  // Get access key info and block height from RPC
+  const [accessKeyInfo, blockInfo] = await Promise.all([
+    getNearAccessKeyInfo(accountId),
+    getNearBlockHeight(),
+  ]);
+
+  const nonce = accessKeyInfo.nonce + 1;
+  const maxBlockHeight = blockInfo.blockHeight + 1000; // ~17 minutes
+
+  // Build wallet URL for signDelegateAction
+  const popupUrl = new URL(NEAR_CONFIG.walletUrl);
+  popupUrl.pathname = '/sign-delegate-action';
+  popupUrl.searchParams.set('receiverId', NEAR_CONFIG.usdcContract);
+  popupUrl.searchParams.set('actions', JSON.stringify([{
+    methodName: 'ft_transfer',
+    args: {
+      receiver_id: NEAR_CONFIG.recipientAccount,
+      amount: amountRaw.toString(),
+      memo: 'x402 payment',
+    },
+    gas: '30000000000000', // 30 TGas
+    deposit: '1', // 1 yoctoNEAR
+  }]));
+  popupUrl.searchParams.set('callbackUrl', window.location.origin + '/near-callback');
+  popupUrl.searchParams.set('meta', JSON.stringify({
+    sender: accountId,
+    nonce,
+    maxBlockHeight,
+    publicKey: accessKeyInfo.publicKey,
+  }));
+
+  // Open popup
+  const popup = window.open(popupUrl.toString(), 'nearWallet', 'width=500,height=700');
+  if (!popup) throw new Error('Popup blocked. Please allow popups.');
+
+  // Wait for redirect with signedDelegateAction
+  const signedDelegateAction = await new Promise<string>((resolve, reject) => {
+    const checkInterval = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(checkInterval);
+        reject(new Error('Wallet popup closed'));
+        return;
+      }
+      try {
+        const url = popup.location.href;
+        if (url.includes('signedDelegateAction=')) {
+          clearInterval(checkInterval);
+          popup.close();
+          const params = new URLSearchParams(new URL(url).search);
+          const errorCode = params.get('errorCode');
+          if (errorCode) {
+            reject(new Error(params.get('errorMessage') || errorCode));
+            return;
+          }
+          resolve(params.get('signedDelegateAction')!);
+        }
+      } catch { /* cross-origin, keep waiting */ }
+    }, 500);
+
+    setTimeout(() => {
+      clearInterval(checkInterval);
+      if (!popup.closed) popup.close();
+      reject(new Error('Popup timeout'));
+    }, 300000); // 5 min timeout
+  });
+
+  // Return x402 payload
+  return JSON.stringify({
+    signedDelegateAction,
+    network: 'near',
+  });
+}
+
+// Helper: Get access key info from NEAR RPC
+async function getNearAccessKeyInfo(accountId: string) {
+  const rpcUrls = [
+    'https://near.drpc.org',
+    'https://rpc.mainnet.near.org',
+  ];
+
+  for (const rpcUrl of rpcUrls) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'dontcare',
+          method: 'query',
+          params: {
+            request_type: 'view_access_key_list',
+            finality: 'final',
+            account_id: accountId,
+          },
+        }),
+      });
+      const data = await response.json();
+      if (data.error) continue;
+
+      const fullAccessKey = data.result.keys.find(
+        (k: any) => k.access_key.permission === 'FullAccess'
+      );
+      return {
+        nonce: fullAccessKey.access_key.nonce,
+        publicKey: fullAccessKey.public_key,
+      };
+    } catch { continue; }
+  }
+  throw new Error('Failed to get NEAR access key info');
+}
+
+// Helper: Get block height from NEAR RPC
+async function getNearBlockHeight() {
+  const rpcUrls = [
+    'https://near.drpc.org',
+    'https://rpc.mainnet.near.org',
+  ];
+
+  for (const rpcUrl of rpcUrls) {
+    try {
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'dontcare',
+          method: 'block',
+          params: { finality: 'final' },
+        }),
+      });
+      const data = await response.json();
+      if (data.error) continue;
+      return { blockHeight: data.result.header.height };
+    } catch { continue; }
+  }
+  throw new Error('Failed to get NEAR block height');
+}
+
+// Step 4: Encode payment header
+function encodeNearPaymentHeader(payload: string): string {
+  const parsed = JSON.parse(payload);
+  const x402Payload = {
+    x402Version: 1,
+    scheme: 'exact',
+    network: 'near',
+    payload: {
+      signedDelegateAction: parsed.signedDelegateAction,
+    },
+  };
+  return btoa(JSON.stringify(x402Payload));
+}
+
+// Usage
+const payload = await createNearPayment('10.00');
+const header = encodeNearPaymentHeader(payload);
+await fetch('/api/purchase', {
+  headers: { 'X-PAYMENT': header },
+});
+```
+
+See [402milly's full implementation](https://github.com/UltravioletaDAO/402milly/blob/main/frontend/src/services/x402-sdk.ts) for a production-ready example.
 
 ## Wagmi/RainbowKit
 
