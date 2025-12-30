@@ -626,6 +626,78 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       enabled: true,
     },
   },
+
+  // ============================================================================
+  // SUI (2 networks) - Uses sponsored transactions (facilitator pays gas)
+  // ============================================================================
+
+  sui: {
+    chainId: 0, // Non-EVM
+    chainIdHex: '0x0',
+    name: 'sui',
+    displayName: 'Sui',
+    networkType: 'sui',
+    rpcUrl: 'https://fullnode.mainnet.sui.io:443',
+    explorerUrl: 'https://suiscan.xyz/mainnet',
+    nativeCurrency: {
+      name: 'Sui',
+      symbol: 'SUI',
+      decimals: 9,
+    },
+    usdc: {
+      // USDC coin type on Sui mainnet
+      address: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+      decimals: 6,
+      name: 'USDC',
+      version: '1',
+    },
+    tokens: {
+      usdc: {
+        address: '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC',
+        decimals: 6,
+        name: 'USDC',
+        version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  'sui-testnet': {
+    chainId: 0, // Non-EVM
+    chainIdHex: '0x0',
+    name: 'sui-testnet',
+    displayName: 'Sui Testnet',
+    networkType: 'sui',
+    rpcUrl: 'https://fullnode.testnet.sui.io:443',
+    explorerUrl: 'https://suiscan.xyz/testnet',
+    nativeCurrency: {
+      name: 'Sui',
+      symbol: 'SUI',
+      decimals: 9,
+    },
+    usdc: {
+      // USDC coin type on Sui testnet
+      address: '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC',
+      decimals: 6,
+      name: 'USDC',
+      version: '1',
+    },
+    tokens: {
+      usdc: {
+        address: '0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC',
+        decimals: 6,
+        name: 'USDC',
+        version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
 };
 
 /**
@@ -698,6 +770,23 @@ export function isSVMChain(chainName: string): boolean {
 }
 
 /**
+ * Get list of Sui chains
+ */
+export function getSuiChains(): ChainConfig[] {
+  return Object.values(SUPPORTED_CHAINS).filter(
+    chain => chain.networkType === 'sui' && chain.x402.enabled
+  );
+}
+
+/**
+ * Check if a chain is Sui-based
+ */
+export function isSuiChain(chainName: string): boolean {
+  const chain = getChainByName(chainName);
+  return chain?.networkType === 'sui';
+}
+
+/**
  * Get network type from chain name
  */
 export function getNetworkType(chainName: string): NetworkType | undefined {
@@ -723,6 +812,8 @@ export function getExplorerTxUrl(chainName: string, txHash: string): string | nu
     case 'near':
       return `${chain.explorerUrl}/txns/${txHash}`;
     case 'algorand':
+      return `${chain.explorerUrl}/tx/${txHash}`;
+    case 'sui':
       return `${chain.explorerUrl}/tx/${txHash}`;
     default:
       return null;
