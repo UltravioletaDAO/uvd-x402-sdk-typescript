@@ -3,12 +3,13 @@
  *
  * x402 Payment SDK - Gasless crypto payments using the Ultravioleta facilitator.
  *
- * Supports 16 blockchain networks:
+ * Supports 18 blockchain networks:
  * - EVM (10): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad
  * - SVM (2): Solana, Fogo
  * - Stellar (1): Stellar
  * - NEAR (1): NEAR Protocol
  * - Algorand (2): Algorand mainnet and testnet
+ * - Sui (2): Sui mainnet and testnet
  *
  * Supports both x402 v1 and v2 protocols.
  *
@@ -73,6 +74,19 @@
  * const header = algorand.encodePaymentHeader(payload, algorandConfig);
  * ```
  *
+ * @example With Sui (Sponsored Transactions)
+ * ```ts
+ * import { SuiProvider } from 'uvd-x402-sdk/sui';
+ * import { getChainByName } from 'uvd-x402-sdk';
+ *
+ * const sui = new SuiProvider();
+ * const address = await sui.connect();
+ * const suiConfig = getChainByName('sui')!;
+ * const payload = await sui.signPayment(paymentInfo, suiConfig);
+ * const header = sui.encodePaymentHeader(payload, suiConfig);
+ * // User pays ZERO gas - facilitator sponsors the transaction
+ * ```
+ *
  * @example With React
  * ```tsx
  * import { X402Provider, useX402, usePayment } from 'uvd-x402-sdk/react';
@@ -116,6 +130,9 @@ export {
   // Algorand helper functions
   getAlgorandChains,
   isAlgorandChain,
+  // Sui helper functions
+  getSuiChains,
+  isSuiChain,
 } from './chains';
 
 // x402 utilities
@@ -171,6 +188,7 @@ export type {
   StellarPaymentPayload,
   NEARPaymentPayload,
   AlgorandPaymentPayload,
+  SuiPaymentPayload,
   X402HeaderName,
 
   // x402 header types (v1 and v2)
@@ -185,6 +203,7 @@ export type {
   X402StellarPayload,
   X402NEARPayload,
   X402AlgorandPayload,
+  X402SuiPayload,
 
   // Config types
   X402ClientConfig,

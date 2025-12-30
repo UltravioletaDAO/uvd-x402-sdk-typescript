@@ -16,10 +16,11 @@
  * - 'stellar': Stellar network (use Soroban)
  * - 'near': NEAR Protocol (use NEP-366)
  * - 'algorand': Algorand network (use ASA transfers with atomic transactions)
+ * - 'sui': Sui blockchain (use sponsored transactions)
  *
  * @deprecated 'solana' type is deprecated, use 'svm' instead
  */
-export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand';
+export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui';
 
 /**
  * Supported stablecoin token types
@@ -202,6 +203,7 @@ export interface PaymentInfo {
     near?: string;
     stellar?: string;
     algorand?: string;
+    sui?: string;
   };
   /** Facilitator address (for Solana fee payer) */
   facilitator?: string;
@@ -381,6 +383,31 @@ export interface AlgorandPaymentPayload {
 }
 
 /**
+ * Sui payment payload (sponsored transaction)
+ *
+ * Uses Sui sponsored transactions where:
+ * - User creates a programmable transaction for USDC transfer
+ * - User signs the transaction
+ * - Facilitator sponsors (pays gas in SUI) and submits
+ *
+ * User pays: ZERO SUI
+ */
+export interface SuiPaymentPayload {
+  /** Base64-encoded BCS serialized TransactionData */
+  transactionBytes: string;
+  /** Base64-encoded user signature */
+  senderSignature: string;
+  /** Sender address (0x + 64 hex chars) */
+  from: string;
+  /** Recipient address (0x + 64 hex chars) */
+  to: string;
+  /** Amount in base units (string to handle large numbers) */
+  amount: string;
+  /** Optional: Coin object ID used for the transfer */
+  coinObjectId?: string;
+}
+
+/**
  * Union type for all payment payloads
  */
 export type PaymentPayload =
@@ -388,7 +415,8 @@ export type PaymentPayload =
   | SolanaPaymentPayload
   | StellarPaymentPayload
   | NEARPaymentPayload
-  | AlgorandPaymentPayload;
+  | AlgorandPaymentPayload
+  | SuiPaymentPayload;
 
 // ============================================================================
 // X402 HEADER TYPES (v1 and v2)
@@ -425,6 +453,9 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   // Algorand
   algorand: 'algorand:mainnet',
   'algorand-testnet': 'algorand:testnet',
+  // Sui
+  sui: 'sui:mainnet',
+  'sui-testnet': 'sui:testnet',
 };
 
 /**
@@ -523,6 +554,22 @@ export interface X402AlgorandPayload {
 }
 
 /**
+ * Sui-specific payload in x402 header (sponsored transaction)
+ */
+export interface X402SuiPayload {
+  /** BCS-encoded transaction bytes (base64) */
+  transactionBytes: string;
+  /** User's signature on the transaction (base64) */
+  senderSignature: string;
+  /** Sender's Sui address (0x...) */
+  from: string;
+  /** Recipient's Sui address (0x...) */
+  to: string;
+  /** Amount in smallest unit (string to avoid precision issues) */
+  amount: string;
+}
+
+/**
  * Union of all x402 payload types
  */
 export type X402PayloadData =
@@ -530,7 +577,8 @@ export type X402PayloadData =
   | X402SolanaPayload
   | X402StellarPayload
   | X402NEARPayload
-  | X402AlgorandPayload;
+  | X402AlgorandPayload
+  | X402SuiPayload;
 
 // ============================================================================
 // CLIENT CONFIGURATION
@@ -656,6 +704,8 @@ export type X402EventHandler<E extends X402Event> = (data: X402EventData[E]) => 
 export type X402ErrorCode =
   | 'WALLET_NOT_FOUND'
   | 'WALLET_NOT_CONNECTED'
+  | 'WALLET_NOT_SUPPORTED'
+  | 'WALLET_CONNECTION_FAILED'
   | 'WALLET_CONNECTION_REJECTED'
   | 'WALLET_CONNECTION_TIMEOUT'
   | 'CHAIN_NOT_SUPPORTED'

@@ -11,6 +11,7 @@
  * - Algorand: Signing fee transactions in atomic groups
  * - Stellar: Signing authorization entries
  * - NEAR: Acting as relayer for meta-transactions
+ * - Sui: Sponsoring transactions (paying gas via sponsored txs)
  */
 
 /**
@@ -109,6 +110,20 @@ export const FACILITATOR_ADDRESSES = {
    * Algorand facilitator address (testnet)
    */
   'algorand-testnet': '5DPPDQNYUPCTXRZWRYSF3WPYU6RKAUR25F3YG4EKXQRHV5AUAI62H5GXL4',
+
+  // ============================================
+  // Sui
+  // ============================================
+  /**
+   * Sui facilitator address (mainnet)
+   * Used for: Sponsoring transactions (paying gas)
+   */
+  sui: '0xe7bbf2b13f7d72714760aa16e024fa1b35a978793f9893d0568a4fbf356a764a',
+
+  /**
+   * Sui facilitator address (testnet)
+   */
+  'sui-testnet': '0xabbd16a2fab2a502c9cfe835195a6fc7d70bfc27cffb40b8b286b52a97006e67',
 } as const;
 
 /**
@@ -143,6 +158,9 @@ export function getFacilitatorAddress(
   }
   if (networkType === 'near') {
     return FACILITATOR_ADDRESSES.near;
+  }
+  if (networkType === 'sui') {
+    return FACILITATOR_ADDRESSES.sui;
   }
 
   return undefined;
