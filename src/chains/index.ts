@@ -658,6 +658,13 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'USDC',
         version: '1',
       },
+      ausd: {
+        // AUSD (Agora USD) coin type on Sui mainnet
+        address: '0x2053d08c1e2bd02791056171aab0fd12bd7cd7efad2ab8f6b9c8902f14df2ff2::ausd::AUSD',
+        decimals: 6,
+        name: 'AUSD',
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
