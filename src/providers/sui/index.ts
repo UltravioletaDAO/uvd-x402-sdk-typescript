@@ -330,12 +330,14 @@ export class SuiProvider implements WalletAdapter {
     }
 
     // Build the payload for the facilitator
+    // CRITICAL: coinObjectId is REQUIRED by the facilitator for deserialization
     const payload: SuiPaymentPayload = {
       transactionBytes: signedTx.bytes,
       senderSignature: signedTx.signature,
       from: this.address,
       to: recipient,
       amount: amount.toString(),
+      coinObjectId: coinToUse,
     };
 
     return JSON.stringify(payload);

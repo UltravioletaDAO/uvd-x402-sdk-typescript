@@ -1,6 +1,6 @@
 {
   "name": "uvd-x402-sdk",
-  "version": "2.16.1",
+  "version": "2.16.2",
   "description": "x402 Payment SDK - Gasless crypto payments across 18 blockchains via Ultravioleta facilitator. Supports EVM, Solana, Fogo, Stellar, NEAR, Algorand, and Sui with multi-stablecoin support (USDC, EURC, AUSD, PYUSD, USDT).",
   "author": "Ultravioleta DAO <ultravioletadao@gmail.com>",
   "license": "MIT",

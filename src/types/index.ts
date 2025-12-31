@@ -403,8 +403,8 @@ export interface SuiPaymentPayload {
   to: string;
   /** Amount in base units (string to handle large numbers) */
   amount: string;
-  /** Optional: Coin object ID used for the transfer */
-  coinObjectId?: string;
+  /** Coin object ID used for the transfer (REQUIRED by facilitator) */
+  coinObjectId: string;
 }
 
 /**
@@ -567,6 +567,8 @@ export interface X402SuiPayload {
   to: string;
   /** Amount in smallest unit (string to avoid precision issues) */
   amount: string;
+  /** Coin object ID used for the transfer (REQUIRED by facilitator) */
+  coinObjectId: string;
 }
 
 /**
