@@ -1,12 +1,12 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 16 blockchain networks using the x402 protocol.
+Gasless crypto payments across 17 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
 ## Features
 
-- **16 Networks**: EVM (10), Solana, Fogo, Stellar, NEAR, Algorand (2)
+- **17 Networks**: EVM (10), Solana, Fogo, Stellar, NEAR, Algorand, Sui
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT
 - **x402 v1 & v2**: Both protocol versions with auto-detection
 - **Gasless**: Facilitator pays all network fees
@@ -36,6 +36,9 @@ npm install @near-wallet-selector/core @near-wallet-selector/my-near-wallet
 
 # Algorand
 npm install algosdk lute-connect
+
+# Sui
+npm install @mysten/sui
 ```
 
 ## Quick Start
@@ -97,6 +100,29 @@ const header = algorand.encodePaymentHeader(payload, chainConfig);
 Algorand uses atomic transaction groups:
 - Transaction 0: Fee payment (unsigned, facilitator signs)
 - Transaction 1: USDC ASA transfer (signed by user)
+
+### Sui
+
+```typescript
+import { SuiProvider } from 'uvd-x402-sdk/sui';
+import { getChainByName } from 'uvd-x402-sdk';
+
+const sui = new SuiProvider();
+const address = await sui.connect(); // Sui Wallet
+const chainConfig = getChainByName('sui')!;
+
+const payload = await sui.signPayment({
+  recipient: '0x1234...', // 66-char Sui address
+  amount: '10.00',
+}, chainConfig);
+
+const header = sui.encodePaymentHeader(payload, chainConfig);
+```
+
+Sui uses sponsored transactions:
+- User creates and signs a programmable transaction block
+- Facilitator sponsors gas (pays in SUI)
+- User pays zero gas fees
 
 ### Stellar
 
@@ -428,14 +454,19 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Solana | USDC, AUSD | Phantom |
 | Fogo | USDC | Phantom |
 
-### Algorand (2)
+### Algorand
 
 | Network | USDC ASA | Wallet |
 |---------|----------|--------|
 | Algorand | 31566704 | Lute, Pera |
-| Algorand Testnet | 10458941 | Lute, Pera |
 
-### Other (2)
+### Sui
+
+| Network | Tokens | Wallet |
+|---------|--------|--------|
+| Sui | USDC, AUSD | Sui Wallet |
+
+### Other
 
 | Network | Wallet |
 |---------|--------|
@@ -455,10 +486,12 @@ FACILITATOR_ADDRESSES.solana;   // F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq
 FACILITATOR_ADDRESSES.algorand; // KIMS5H6QLCUDL65L5UBTOXDPWLMTS7N3AAC3I6B2NCONEI5QIVK7LH2C2I
 FACILITATOR_ADDRESSES.stellar;  // GCHPGXJT2WFFRFCA5TV4G4E3PMMXLNIDUH27PKDYA4QJ2XGYZWGFZNHB
 FACILITATOR_ADDRESSES.near;     // uvd-facilitator.near
+FACILITATOR_ADDRESSES.sui;      // 0xe7bbf2b13f7d72714760aa16e024fa1b35a978793f9893d0568a4fbf356a764a
 
 // Or get by chain name
 getFacilitatorAddress('algorand'); // KIMS5H6...
 getFacilitatorAddress('base', 'evm'); // 0x1030...
+getFacilitatorAddress('sui'); // 0xe7bbf...
 ```
 
 ## Backend
