@@ -1,17 +1,19 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 17 blockchain networks using the x402 protocol.
+Gasless crypto payments across 21 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
 ## Features
 
-- **17 Networks**: EVM (10), Solana, Fogo, Stellar, NEAR, Algorand, Sui
+- **21 Networks**: EVM (13 including Scroll, SKALE), Solana, Fogo, Stellar, NEAR, Algorand, Sui
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT
 - **x402 v1 & v2**: Both protocol versions with auto-detection
 - **Gasless**: Facilitator pays all network fees
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
+- **ERC-8004 Trustless Agents**: On-chain reputation and identity
+- **Escrow & Refunds**: Hold payments with dispute resolution
 
 ## Installation
 
@@ -432,7 +434,7 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 
 ## Supported Networks
 
-### EVM (10)
+### EVM (13)
 
 | Network | Chain ID | Tokens |
 |---------|----------|--------|
@@ -440,12 +442,15 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Ethereum | 1 | USDC, EURC, AUSD, PYUSD, USDT |
 | Polygon | 137 | USDC, AUSD |
 | Arbitrum | 42161 | USDC, AUSD, USDT |
-| Optimism | 10 | USDC |
+| Optimism | 10 | USDC, USDT |
 | Avalanche | 43114 | USDC, EURC, AUSD |
-| Celo | 42220 | USDC |
+| Celo | 42220 | USDC, USDT |
 | HyperEVM | 999 | USDC |
 | Unichain | 130 | USDC |
 | Monad | 143 | USDC, AUSD |
+| Scroll | 534352 | USDC |
+| SKALE | 1187947933 | USDC |
+| SKALE Testnet | 324705682 | USDC |
 
 ### SVM (2)
 
@@ -582,6 +587,66 @@ try {
     }
   }
 }
+```
+
+## ERC-8004 Trustless Agents
+
+Build verifiable on-chain reputation for AI agents and services.
+
+```typescript
+import { Erc8004Client } from 'uvd-x402-sdk/backend';
+
+const erc8004 = new Erc8004Client();
+
+// Get agent identity
+const identity = await erc8004.getIdentity('ethereum', 42);
+console.log(identity.agentUri);
+
+// Get agent reputation
+const reputation = await erc8004.getReputation('ethereum', 42);
+console.log(`Score: ${reputation.summary.summaryValue}`);
+
+// Submit feedback after payment
+const result = await erc8004.submitFeedback({
+  x402Version: 1,
+  network: 'ethereum',
+  feedback: {
+    agentId: 42,
+    value: 95,
+    valueDecimals: 0,
+    tag1: 'quality',
+    proof: settleResponse.proofOfPayment,
+  },
+});
+
+// Respond to feedback (agents only)
+await erc8004.appendResponse('ethereum', 42, 1, 'Thank you for your feedback!');
+```
+
+## Escrow & Refunds
+
+Hold payments in escrow with dispute resolution.
+
+```typescript
+import { EscrowClient } from 'uvd-x402-sdk/backend';
+
+const escrow = new EscrowClient();
+
+// Create escrow payment
+const escrowPayment = await escrow.createEscrow({
+  paymentHeader: req.headers['x-payment'],
+  requirements: paymentRequirements,
+  escrowDuration: 86400, // 24 hours
+});
+
+// Release after service delivery
+await escrow.release(escrowPayment.id);
+
+// Or request refund if service failed
+await escrow.requestRefund({
+  escrowId: escrowPayment.id,
+  reason: 'Service not delivered',
+});
 ```
 
 ## Links

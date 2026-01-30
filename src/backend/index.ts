@@ -746,10 +746,14 @@ export type BazaarNetwork =
   | 'hyperevm'
   | 'unichain'
   | 'monad'
+  | 'scroll'
+  | 'skale'
   | 'solana'
   | 'fogo'
   | 'stellar'
-  | 'near';
+  | 'near'
+  | 'algorand'
+  | 'sui';
 
 /**
  * Token/asset filter for discovery
@@ -2128,4 +2132,694 @@ export function isEscrowExpired(escrow: EscrowPayment): boolean {
  */
 export function escrowTimeRemaining(escrow: EscrowPayment): number {
   return new Date(escrow.expiresAt).getTime() - Date.now();
+}
+
+// ============================================================================
+// ERC-8004 TRUSTLESS AGENTS
+// ============================================================================
+
+/**
+ * ERC-8004 extension identifier
+ */
+export const ERC8004_EXTENSION_ID = '8004-reputation';
+
+/**
+ * ERC-8004 contract addresses per network
+ */
+export const ERC8004_CONTRACTS: Record<string, {
+  identityRegistry?: string;
+  reputationRegistry?: string;
+  validationRegistry?: string;
+}> = {
+  ethereum: {
+    identityRegistry: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
+    reputationRegistry: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
+  },
+  'ethereum-sepolia': {
+    identityRegistry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
+    reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
+    validationRegistry: '0x8004Cb1BF31DAf7788923b405b754f57acEB4272',
+  },
+};
+
+/**
+ * Network type for ERC-8004 operations
+ */
+export type Erc8004Network = 'ethereum' | 'ethereum-sepolia';
+
+/**
+ * Proof of payment returned when settling with ERC-8004 extension
+ */
+export interface ProofOfPayment {
+  /** Transaction hash of the settled payment */
+  transactionHash: string;
+  /** Block number where the transaction was included */
+  blockNumber: number;
+  /** Network where the payment was settled */
+  network: string;
+  /** The payer (consumer/client) address */
+  payer: string;
+  /** The payee (agent/resource owner) address */
+  payee: string;
+  /** Amount paid in token base units */
+  amount: string;
+  /** Token contract address */
+  token: string;
+  /** Unix timestamp of the block */
+  timestamp: number;
+  /** Keccak256 hash of the payment data for verification */
+  paymentHash: string;
+}
+
+/**
+ * Extended settle response with ERC-8004 proof of payment
+ */
+export interface SettleResponseWithProof extends SettleResponse {
+  /** Proof of payment for ERC-8004 reputation submission */
+  proofOfPayment?: ProofOfPayment;
+}
+
+/**
+ * Agent identity from the Identity Registry
+ */
+export interface AgentIdentity {
+  /** The agent's ID (ERC-721 tokenId) */
+  agentId: number;
+  /** Owner address of the agent NFT */
+  owner: string;
+  /** URI pointing to agent registration file */
+  agentUri: string;
+  /** Payment wallet address (if set) */
+  agentWallet?: string;
+  /** Network where the agent is registered */
+  network: Erc8004Network;
+}
+
+/**
+ * Agent registration file structure (resolved from agentURI)
+ */
+export interface AgentRegistrationFile {
+  /** Type identifier */
+  type: string;
+  /** Agent name */
+  name: string;
+  /** Agent description */
+  description: string;
+  /** Image URL */
+  image?: string;
+  /** List of services the agent provides */
+  services: AgentService[];
+  /** Whether x402 payments are supported */
+  x402Support: boolean;
+  /** Whether the agent is active */
+  active: boolean;
+  /** List of registrations across chains */
+  registrations: AgentRegistration[];
+  /** Supported trust models */
+  supportedTrust: string[];
+}
+
+/**
+ * Agent service entry
+ */
+export interface AgentService {
+  name: string;
+  endpoint: string;
+  version?: string;
+}
+
+/**
+ * Agent registration reference
+ */
+export interface AgentRegistration {
+  agentId: number;
+  agentRegistry: string; // Format: {namespace}:{chainId}:{address}
+}
+
+/**
+ * Reputation summary for an agent
+ */
+export interface ReputationSummary {
+  /** Agent ID */
+  agentId: number;
+  /** Number of feedback entries */
+  count: number;
+  /** Aggregated value */
+  summaryValue: number;
+  /** Decimal places for summaryValue */
+  summaryValueDecimals: number;
+  /** Network */
+  network: Erc8004Network;
+}
+
+/**
+ * Individual feedback entry
+ */
+export interface FeedbackEntry {
+  /** Client who submitted the feedback */
+  client: string;
+  /** Feedback index (1-indexed) */
+  feedbackIndex: number;
+  /** Feedback value */
+  value: number;
+  /** Value decimals */
+  valueDecimals: number;
+  /** Primary tag */
+  tag1: string;
+  /** Secondary tag */
+  tag2: string;
+  /** Whether this feedback was revoked */
+  isRevoked: boolean;
+}
+
+/**
+ * Parameters for submitting reputation feedback
+ */
+export interface FeedbackParams {
+  /** The agent's ID (tokenId in Identity Registry) */
+  agentId: number;
+  /** Feedback value (e.g., 87 for 87/100) */
+  value: number;
+  /** Decimal places for value interpretation (0-18) */
+  valueDecimals?: number;
+  /** Primary categorization tag (e.g., "starred", "uptime") */
+  tag1?: string;
+  /** Secondary categorization tag */
+  tag2?: string;
+  /** Service endpoint that was used */
+  endpoint?: string;
+  /** URI to off-chain feedback file (IPFS, HTTPS) */
+  feedbackUri?: string;
+  /** Keccak256 hash of feedback content (for integrity) */
+  feedbackHash?: string;
+  /** Proof of payment (required for authorized feedback) */
+  proof?: ProofOfPayment;
+}
+
+/**
+ * Feedback request body for POST /feedback
+ */
+export interface FeedbackRequest {
+  /** x402 protocol version */
+  x402Version: 1 | 2;
+  /** Network where feedback will be submitted */
+  network: Erc8004Network;
+  /** Feedback parameters */
+  feedback: FeedbackParams;
+}
+
+/**
+ * Feedback response from POST /feedback
+ */
+export interface FeedbackResponse {
+  /** Whether the feedback was successfully submitted */
+  success: boolean;
+  /** Transaction hash of the feedback submission */
+  transaction?: string;
+  /** Feedback index assigned (1-indexed) */
+  feedbackIndex?: number;
+  /** Error message (if failed) */
+  error?: string;
+  /** Network where feedback was submitted */
+  network: Erc8004Network;
+}
+
+/**
+ * Reputation query response
+ */
+export interface ReputationResponse {
+  agentId: number;
+  summary: ReputationSummary;
+  feedback?: FeedbackEntry[];
+  network: Erc8004Network;
+}
+
+/**
+ * Options for the ERC8004Client
+ */
+export interface Erc8004ClientOptions {
+  /** Base URL of the facilitator (default: https://facilitator.ultravioletadao.xyz) */
+  baseUrl?: string;
+  /** Request timeout in milliseconds (default: 30000) */
+  timeout?: number;
+}
+
+/**
+ * Client for ERC-8004 Trustless Agents API
+ *
+ * Provides methods for:
+ * - Querying agent identity
+ * - Querying agent reputation
+ * - Submitting reputation feedback
+ * - Revoking feedback
+ *
+ * @example
+ * ```ts
+ * const client = new Erc8004Client();
+ *
+ * // Get agent identity
+ * const identity = await client.getIdentity('ethereum', 42);
+ * console.log(identity.agentUri);
+ *
+ * // Get agent reputation
+ * const reputation = await client.getReputation('ethereum', 42);
+ * console.log(`Score: ${reputation.summary.summaryValue}`);
+ *
+ * // Submit feedback after payment
+ * const result = await client.submitFeedback({
+ *   x402Version: 1,
+ *   network: 'ethereum',
+ *   feedback: {
+ *     agentId: 42,
+ *     value: 95,
+ *     valueDecimals: 0,
+ *     tag1: 'quality',
+ *     proof: settleResponse.proofOfPayment,
+ *   },
+ * });
+ * ```
+ */
+export class Erc8004Client {
+  private readonly baseUrl: string;
+  private readonly timeout: number;
+
+  constructor(options: Erc8004ClientOptions = {}) {
+    this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
+    this.timeout = options.timeout || 30000;
+  }
+
+  /**
+   * Get agent identity from the Identity Registry
+   *
+   * @param network - Network where agent is registered
+   * @param agentId - Agent's tokenId
+   * @returns Agent identity information
+   */
+  async getIdentity(network: Erc8004Network, agentId: number): Promise<AgentIdentity> {
+    const url = `${this.baseUrl}/identity/${network}/${agentId}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve agent registration file from agentURI
+   *
+   * @param agentUri - URI pointing to agent registration file
+   * @returns Resolved agent registration file
+   */
+  async resolveAgentUri(agentUri: string): Promise<AgentRegistrationFile> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      // Handle IPFS URIs
+      let url = agentUri;
+      if (agentUri.startsWith('ipfs://')) {
+        const cid = agentUri.replace('ipfs://', '');
+        url = `https://ipfs.io/ipfs/${cid}`;
+      }
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Failed to resolve agentURI: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get agent reputation from the Reputation Registry
+   *
+   * @param network - Network where agent is registered
+   * @param agentId - Agent's tokenId
+   * @param options - Query options (tag filters, include individual feedback)
+   * @returns Reputation summary and optionally individual feedback entries
+   */
+  async getReputation(
+    network: Erc8004Network,
+    agentId: number,
+    options: {
+      tag1?: string;
+      tag2?: string;
+      includeFeedback?: boolean;
+    } = {}
+  ): Promise<ReputationResponse> {
+    const params = new URLSearchParams();
+    if (options.tag1) params.set('tag1', options.tag1);
+    if (options.tag2) params.set('tag2', options.tag2);
+    if (options.includeFeedback) params.set('includeFeedback', 'true');
+
+    const url = `${this.baseUrl}/reputation/${network}/${agentId}${params.toString() ? `?${params}` : ''}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Submit reputation feedback for an agent
+   *
+   * Requires proof of payment for authorized feedback submission.
+   *
+   * @param request - Feedback request with agent ID, value, and proof
+   * @returns Feedback response with transaction hash
+   *
+   * @example
+   * ```ts
+   * // After settling a payment with ERC-8004 extension
+   * const settleResult = await facilitator.settle(payment, {
+   *   ...requirements,
+   *   extra: { '8004-reputation': { includeProof: true } },
+   * });
+   *
+   * // Submit feedback with proof of payment
+   * const feedback = await erc8004.submitFeedback({
+   *   x402Version: 1,
+   *   network: 'ethereum',
+   *   feedback: {
+   *     agentId: 42,
+   *     value: 95,  // 95/100
+   *     valueDecimals: 0,
+   *     tag1: 'quality',
+   *     tag2: 'response-time',
+   *     proof: settleResult.proofOfPayment,
+   *   },
+   * });
+   * ```
+   */
+  async submitFeedback(request: FeedbackRequest): Promise<FeedbackResponse> {
+    const url = `${this.baseUrl}/feedback`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `Facilitator error: ${response.status} - ${errorText}`,
+          network: request.network,
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network: request.network,
+      };
+    }
+  }
+
+  /**
+   * Revoke previously submitted feedback
+   *
+   * Only the original submitter can revoke their feedback.
+   *
+   * @param network - Network where feedback was submitted
+   * @param agentId - Agent ID
+   * @param feedbackIndex - Index of feedback to revoke
+   * @returns Revocation result
+   */
+  async revokeFeedback(
+    network: Erc8004Network,
+    agentId: number,
+    feedbackIndex: number
+  ): Promise<FeedbackResponse> {
+    const url = `${this.baseUrl}/feedback/revoke`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          x402Version: 1,
+          network,
+          agentId,
+          feedbackIndex,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `Facilitator error: ${response.status} - ${errorText}`,
+          network,
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network,
+      };
+    }
+  }
+
+  /**
+   * Get ERC-8004 contract addresses for a network
+   *
+   * @param network - Network to get contracts for
+   * @returns Contract addresses or undefined if not deployed
+   */
+  getContracts(network: Erc8004Network): typeof ERC8004_CONTRACTS[Erc8004Network] | undefined {
+    return ERC8004_CONTRACTS[network];
+  }
+
+  /**
+   * Check if ERC-8004 is available on a network
+   *
+   * @param network - Network to check
+   * @returns True if ERC-8004 contracts are deployed
+   */
+  isAvailable(network: string): network is Erc8004Network {
+    return network in ERC8004_CONTRACTS;
+  }
+
+  /**
+   * Get feedback endpoint metadata
+   *
+   * @returns Endpoint information for /feedback
+   */
+  async getFeedbackMetadata(): Promise<{
+    endpoint: string;
+    supportedNetworks: Erc8004Network[];
+    version: string;
+  }> {
+    const url = `${this.baseUrl}/feedback`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Failed to get feedback metadata: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Append a response to existing feedback
+   *
+   * Allows agents to respond to feedback they received.
+   * Only the agent (identity owner) can append responses.
+   *
+   * @param network - Network where feedback was submitted
+   * @param agentId - Agent ID
+   * @param feedbackIndex - Index of feedback to respond to
+   * @param response - Response content
+   * @param responseUri - Optional URI to off-chain response file
+   * @returns Response result
+   *
+   * @example
+   * ```ts
+   * // Agent responds to feedback
+   * const result = await erc8004.appendResponse(
+   *   'ethereum',
+   *   42,
+   *   1,
+   *   'Thank you for your feedback! We have addressed the issue.',
+   * );
+   * ```
+   */
+  async appendResponse(
+    network: Erc8004Network,
+    agentId: number,
+    feedbackIndex: number,
+    response: string,
+    responseUri?: string
+  ): Promise<FeedbackResponse> {
+    const url = `${this.baseUrl}/feedback/response`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const fetchResponse = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          x402Version: 1,
+          network,
+          agentId,
+          feedbackIndex,
+          response,
+          responseUri,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!fetchResponse.ok) {
+        const errorText = await fetchResponse.text();
+        return {
+          success: false,
+          error: `Facilitator error: ${fetchResponse.status} - ${errorText}`,
+          network,
+        };
+      }
+
+      return await fetchResponse.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network,
+      };
+    }
+  }
+}
+
+/**
+ * Build payment requirements with ERC-8004 extension
+ *
+ * Adds the 8004-reputation extension to include proof of payment
+ * in settlement responses for reputation submission.
+ *
+ * @param options - Base payment requirements options
+ * @returns Payment requirements with ERC-8004 extension
+ *
+ * @example
+ * ```ts
+ * const requirements = buildErc8004PaymentRequirements({
+ *   amount: '1.00',
+ *   recipient: '0x...',
+ *   resource: 'https://api.example.com/service',
+ *   chainName: 'ethereum',
+ * });
+ *
+ * // Settlement will include proofOfPayment
+ * const result = await facilitator.settle(payment, requirements);
+ * console.log(result.proofOfPayment);
+ * ```
+ */
+export function buildErc8004PaymentRequirements(
+  options: PaymentRequirementsOptions
+): PaymentRequirements & { extra: { '8004-reputation': { includeProof: boolean } } } {
+  const base = buildPaymentRequirements(options);
+  return {
+    ...base,
+    extra: {
+      [ERC8004_EXTENSION_ID]: {
+        includeProof: true,
+      },
+    },
+  };
 }
