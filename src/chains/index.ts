@@ -1,12 +1,13 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 16 supported blockchain networks.
- * EVM chains (10): Use ERC-3009 TransferWithAuthorization
+ * Complete configuration for all 21 supported blockchain networks.
+ * EVM chains (13): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE mainnet + testnet)
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
  * NEAR (1): Uses NEP-366 meta-transactions
  * Algorand (2): Uses ASA transfers with atomic transaction groups
+ * Sui (2): Uses sponsored transactions (facilitator pays gas)
  */
 
 import type { ChainConfig, NetworkType, TokenType, TokenConfig } from '../types';
@@ -423,6 +424,105 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'Agora Dollar',
         version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  scroll: {
+    chainId: 534352,
+    chainIdHex: '0x82750',
+    name: 'scroll',
+    displayName: 'Scroll',
+    networkType: 'evm',
+    rpcUrl: 'https://rpc.scroll.io',
+    explorerUrl: 'https://scrollscan.com',
+    nativeCurrency: {
+      name: 'Ethereum',
+      symbol: 'ETH',
+      decimals: 18,
+    },
+    usdc: {
+      address: '0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4',
+      decimals: 6,
+      name: 'USD Coin',
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  skale: {
+    chainId: 1187947933,
+    chainIdHex: '0x46cea59d',
+    name: 'skale',
+    displayName: 'SKALE',
+    networkType: 'evm',
+    rpcUrl: 'https://mainnet.skalenodes.com/v1/honorable-steel-rasalhague',
+    explorerUrl: 'https://honorable-steel-rasalhague.explorer.mainnet.skalenodes.com',
+    nativeCurrency: {
+      name: 'sFUEL',
+      symbol: 'sFUEL',
+      decimals: 18,
+    },
+    usdc: {
+      address: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
+      decimals: 6,
+      name: 'USDC',  // SKALE uses "USDC"
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
+        decimals: 6,
+        name: 'USDC',  // SKALE uses "USDC"
+        version: '2',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  'skale-testnet': {
+    chainId: 324705682,
+    chainIdHex: '0x135a9d92',
+    name: 'skale-testnet',
+    displayName: 'SKALE Testnet',
+    networkType: 'evm',
+    rpcUrl: 'https://testnet.skalenodes.com/v1/lanky-ill-funny-testnet',
+    explorerUrl: 'https://lanky-ill-funny-testnet.explorer.testnet.skalenodes.com',
+    nativeCurrency: {
+      name: 'sFUEL',
+      symbol: 'sFUEL',
+      decimals: 18,
+    },
+    usdc: {
+      address: '0x2e08028E3C4c2356572E096d8EF835cD5C6030bD',
+      decimals: 6,
+      name: 'USDC',  // SKALE testnet uses "USDC"
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x2e08028E3C4c2356572E096d8EF835cD5C6030bD',
+        decimals: 6,
+        name: 'USDC',  // SKALE testnet uses "USDC"
+        version: '2',
       },
     },
     x402: {
