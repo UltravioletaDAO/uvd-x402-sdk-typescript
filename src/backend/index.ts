@@ -2823,3 +2823,559 @@ export function buildErc8004PaymentRequirements(
     },
   };
 }
+
+// ============================================================================
+// ADVANCED ESCROW (PaymentOperator - On-Chain Escrow)
+// ============================================================================
+//
+// The 5 Advanced Escrow flows via the PaymentOperator contract:
+// 1. AUTHORIZE          - Lock funds in escrow (via facilitator)
+// 2. RELEASE            - Capture escrowed funds to receiver (on-chain)
+// 3. REFUND IN ESCROW   - Return escrowed funds to payer (on-chain)
+// 4. CHARGE             - Direct instant payment without escrow (on-chain)
+// 5. REFUND POST ESCROW - Dispute refund after release (on-chain)
+//
+// Contract mapping:
+//   operator.authorize()        -> escrow.authorize()   (lock funds)
+//   operator.release()          -> escrow.capture()      (pay receiver)
+//   operator.refundInEscrow()   -> escrow.partialVoid()  (refund payer)
+//   operator.charge()           -> escrow.charge()       (direct payment)
+//   operator.refundPostEscrow() -> escrow.refund()       (dispute refund)
+// ============================================================================
+
+/**
+ * PAYMENT_INFO_TYPEHASH used for nonce computation.
+ * Must match the on-chain AuthCaptureEscrow contract.
+ */
+export const PAYMENT_INFO_TYPEHASH =
+  '0xae68ac7ce30c86ece8196b61a7c486d8f0061f575037fbd34e7fe4e2820c6591';
+
+export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/**
+ * Contract deposit limit (enforced by PaymentOperator condition).
+ * As of 2026-02-03, commerce-payments contracts enforce $100 max per deposit.
+ */
+export const DEPOSIT_LIMIT_USDC = '100000000'; // $100 in atomic units (6 decimals)
+
+/**
+ * Base Mainnet contract addresses for the Advanced Escrow system.
+ */
+export const BASE_MAINNET_CONTRACTS = {
+  operator: '0xa06958D93135BEd7e43893897C0d9fA931EF051C',
+  escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+  tokenCollector: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+  usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+};
+
+/**
+ * Task tiers determine timing parameters for escrow operations.
+ */
+export type AdvancedEscrowTaskTier = 'micro' | 'standard' | 'premium' | 'enterprise';
+
+/**
+ * Timing configuration per task tier (in seconds).
+ */
+export const TIER_TIMINGS: Record<AdvancedEscrowTaskTier, { pre: number; auth: number; refund: number }> = {
+  micro:      { pre: 3600,   auth: 7200,    refund: 86400 },
+  standard:   { pre: 7200,   auth: 86400,   refund: 604800 },
+  premium:    { pre: 14400,  auth: 172800,  refund: 1209600 },
+  enterprise: { pre: 86400,  auth: 604800,  refund: 2592000 },
+};
+
+/**
+ * PaymentInfo struct matching the on-chain PaymentOperator contract.
+ */
+export interface AdvancedPaymentInfo {
+  operator: string;
+  receiver: string;
+  token: string;
+  maxAmount: string;
+  preApprovalExpiry: number;
+  authorizationExpiry: number;
+  refundExpiry: number;
+  minFeeBps: number;
+  maxFeeBps: number;
+  feeReceiver: string;
+  salt: string;
+}
+
+/**
+ * Result of an AUTHORIZE operation.
+ */
+export interface AdvancedAuthorizationResult {
+  success: boolean;
+  transactionHash?: string;
+  paymentInfo?: AdvancedPaymentInfo;
+  salt?: string;
+  error?: string;
+}
+
+/**
+ * Result of an on-chain transaction (release, refund, charge).
+ */
+export interface AdvancedTransactionResult {
+  success: boolean;
+  transactionHash?: string;
+  gasUsed?: number;
+  error?: string;
+}
+
+/**
+ * Contract addresses configuration for AdvancedEscrowClient.
+ */
+export interface AdvancedEscrowContracts {
+  operator: string;
+  escrow: string;
+  tokenCollector: string;
+  usdc: string;
+}
+
+/**
+ * Configuration options for AdvancedEscrowClient.
+ */
+export interface AdvancedEscrowClientOptions {
+  /** Facilitator URL for AUTHORIZE operations */
+  facilitatorUrl?: string;
+  /** JSON-RPC URL for on-chain operations */
+  rpcUrl?: string;
+  /** Chain ID (default: 8453 for Base Mainnet) */
+  chainId?: number;
+  /** Contract addresses (default: Base Mainnet) */
+  contracts?: AdvancedEscrowContracts;
+  /** Gas limit for transactions (default: 300000) */
+  gasLimit?: number;
+}
+
+/**
+ * Minimal PaymentOperator ABI for the 4 on-chain functions.
+ * (AUTHORIZE goes through the facilitator, not directly on-chain)
+ */
+export const OPERATOR_ABI = [
+  'function release(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount)',
+  'function refundInEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint120 amount)',
+  'function charge(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
+  'function refundPostEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
+];
+
+/**
+ * AdvancedEscrowClient provides the 5 Advanced Escrow flows via the
+ * PaymentOperator contract on Base Mainnet.
+ *
+ * @example
+ * ```typescript
+ * import { ethers } from 'ethers';
+ * import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
+ *
+ * const client = new AdvancedEscrowClient(signer, {
+ *   facilitatorUrl: 'https://facilitator.ultravioletadao.xyz',
+ *   rpcUrl: 'https://mainnet.base.org',
+ * });
+ *
+ * // Lock funds in escrow
+ * const pi = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
+ * const auth = await client.authorize(pi);
+ *
+ * // After work is done, release to worker
+ * const tx = await client.release(pi);
+ *
+ * // Or cancel and refund
+ * const refund = await client.refundInEscrow(pi);
+ * ```
+ */
+export class AdvancedEscrowClient {
+  private facilitatorUrl: string;
+  private chainId: number;
+  private gasLimit: number;
+  private contracts: AdvancedEscrowContracts;
+  private signer: any; // ethers.Signer
+  private provider: any; // ethers.Provider
+  private payerAddress: string = '';
+
+  constructor(signer: any, options: AdvancedEscrowClientOptions = {}) {
+    this.signer = signer;
+    this.facilitatorUrl = (options.facilitatorUrl || 'https://facilitator.ultravioletadao.xyz').replace(/\/$/, '');
+    this.chainId = options.chainId || 8453;
+    this.gasLimit = options.gasLimit || 300000;
+    this.contracts = options.contracts || BASE_MAINNET_CONTRACTS;
+    this.provider = signer.provider;
+  }
+
+  /**
+   * Initialize the client (resolves signer address).
+   * Call this before using any methods.
+   */
+  async init(): Promise<void> {
+    this.payerAddress = await this.signer.getAddress();
+  }
+
+  /**
+   * Build a PaymentInfo struct with appropriate timing for the task tier.
+   *
+   * @param receiver - Worker's wallet address
+   * @param amount - Amount in token atomic units (e.g., '5000000' for $5 USDC)
+   * @param tier - Task tier determines timing parameters
+   * @param salt - Random salt (auto-generated if not provided)
+   */
+  buildPaymentInfo(
+    receiver: string,
+    amount: string,
+    tier: AdvancedEscrowTaskTier = 'standard',
+    salt?: string,
+  ): AdvancedPaymentInfo {
+    const now = Math.floor(Date.now() / 1000);
+    const t = TIER_TIMINGS[tier];
+    // Use crypto-safe randomness (Node.js crypto or Web Crypto API)
+    let generatedSalt = salt;
+    if (!generatedSalt) {
+      const bytes = new Uint8Array(32);
+      if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
+        globalThis.crypto.getRandomValues(bytes);
+      } else {
+        // Node.js fallback
+        const nodeCrypto = require('crypto');
+        const buf = nodeCrypto.randomBytes(32);
+        bytes.set(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
+      }
+      generatedSalt = '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    return {
+      operator: this.contracts.operator,
+      receiver,
+      token: this.contracts.usdc,
+      maxAmount: amount,
+      preApprovalExpiry: now + t.pre,
+      authorizationExpiry: now + t.auth,
+      refundExpiry: now + t.refund,
+      minFeeBps: 0,
+      maxFeeBps: 800,
+      feeReceiver: this.contracts.operator,
+      salt: generatedSalt,
+    };
+  }
+
+  /**
+   * Compute the correct nonce (with PAYMENT_INFO_TYPEHASH).
+   * Matches the on-chain AuthCaptureEscrow nonce derivation.
+   */
+  private async computeNonce(paymentInfo: AdvancedPaymentInfo): Promise<string> {
+    // Dynamic import of ethers to avoid hard dependency at module level
+    const { ethers } = await import('ethers');
+
+    const piTuple = ethers.AbiCoder.defaultAbiCoder().encode(
+      ['bytes32', 'tuple(address,address,address,address,uint120,uint48,uint48,uint48,uint16,uint16,address,uint256)'],
+      [
+        PAYMENT_INFO_TYPEHASH,
+        [
+          paymentInfo.operator,
+          ZERO_ADDRESS, // payer = 0 for payer-agnostic hash
+          paymentInfo.receiver,
+          paymentInfo.token,
+          paymentInfo.maxAmount,
+          paymentInfo.preApprovalExpiry,
+          paymentInfo.authorizationExpiry,
+          paymentInfo.refundExpiry,
+          paymentInfo.minFeeBps,
+          paymentInfo.maxFeeBps,
+          paymentInfo.feeReceiver,
+          paymentInfo.salt,
+        ],
+      ],
+    );
+    const piHash = ethers.keccak256(piTuple);
+
+    const finalEncoded = ethers.AbiCoder.defaultAbiCoder().encode(
+      ['uint256', 'address', 'bytes32'],
+      [this.chainId, this.contracts.escrow, piHash],
+    );
+    return ethers.keccak256(finalEncoded);
+  }
+
+  /**
+   * Sign ReceiveWithAuthorization for ERC-3009.
+   */
+  private async signErc3009(auth: Record<string, string>): Promise<string> {
+    const domain = {
+      name: 'USD Coin',
+      version: '2',
+      chainId: this.chainId,
+      verifyingContract: this.contracts.usdc,
+    };
+
+    const types = {
+      ReceiveWithAuthorization: [
+        { name: 'from', type: 'address' },
+        { name: 'to', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'validAfter', type: 'uint256' },
+        { name: 'validBefore', type: 'uint256' },
+        { name: 'nonce', type: 'bytes32' },
+      ],
+    };
+
+    const message = {
+      from: auth.from,
+      to: auth.to,
+      value: auth.value,
+      validAfter: auth.validAfter,
+      validBefore: auth.validBefore,
+      nonce: auth.nonce,
+    };
+
+    return this.signer.signTypedData(domain, types, message);
+  }
+
+  /**
+   * Build the on-chain PaymentInfo tuple for contract calls.
+   */
+  private buildTuple(pi: AdvancedPaymentInfo): any[] {
+    return [
+      pi.operator,
+      this.payerAddress,
+      pi.receiver,
+      pi.token,
+      pi.maxAmount,
+      pi.preApprovalExpiry,
+      pi.authorizationExpiry,
+      pi.refundExpiry,
+      pi.minFeeBps,
+      pi.maxFeeBps,
+      pi.feeReceiver,
+      pi.salt,
+    ];
+  }
+
+  /**
+   * AUTHORIZE: Lock funds in escrow via the facilitator.
+   *
+   * Sends an ERC-3009 ReceiveWithAuthorization to the facilitator,
+   * which calls PaymentOperator.authorize() on-chain.
+   */
+  async authorize(paymentInfo: AdvancedPaymentInfo): Promise<AdvancedAuthorizationResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const nonce = await this.computeNonce(paymentInfo);
+
+      const auth = {
+        from: this.payerAddress,
+        to: this.contracts.tokenCollector,
+        value: paymentInfo.maxAmount,
+        validAfter: '0',
+        validBefore: String(paymentInfo.preApprovalExpiry),
+        nonce,
+      };
+      const signature = await this.signErc3009(auth);
+
+      const payload = {
+        x402Version: 2,
+        scheme: 'escrow',
+        payload: {
+          authorization: auth,
+          signature,
+          paymentInfo: paymentInfo,
+        },
+        paymentRequirements: {
+          scheme: 'escrow',
+          network: `eip155:${this.chainId}`,
+          maxAmountRequired: paymentInfo.maxAmount,
+          asset: this.contracts.usdc,
+          payTo: paymentInfo.receiver,
+          extra: {
+            escrowAddress: this.contracts.escrow,
+            operatorAddress: this.contracts.operator,
+            tokenCollector: this.contracts.tokenCollector,
+          },
+        },
+      };
+
+      const response = await fetch(`${this.facilitatorUrl}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        return {
+          success: true,
+          transactionHash: result.transaction,
+          paymentInfo,
+          salt: paymentInfo.salt,
+        };
+      }
+      return { success: false, error: result.errorReason };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  /**
+   * RELEASE: Capture escrowed funds to receiver (worker gets paid).
+   *
+   * Calls PaymentOperator.release() -> escrow.capture()
+   *
+   * @param paymentInfo - PaymentInfo from the authorize step
+   * @param amount - Amount to release (defaults to maxAmount)
+   */
+  async release(paymentInfo: AdvancedPaymentInfo, amount?: string): Promise<AdvancedTransactionResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const { ethers } = await import('ethers');
+      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
+      const amt = amount || paymentInfo.maxAmount;
+      const tuple = this.buildTuple(paymentInfo);
+
+      const tx = await contract.release(tuple, amt, { gasLimit: this.gasLimit });
+      const receipt = await tx.wait();
+
+      return {
+        success: receipt.status === 1,
+        transactionHash: receipt.hash,
+        gasUsed: Number(receipt.gasUsed),
+        error: receipt.status !== 1 ? 'Transaction reverted' : undefined,
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  /**
+   * REFUND IN ESCROW: Return escrowed funds to payer (cancel task).
+   *
+   * Calls PaymentOperator.refundInEscrow() -> escrow.partialVoid()
+   *
+   * @param paymentInfo - PaymentInfo from the authorize step
+   * @param amount - Amount to refund (defaults to maxAmount)
+   */
+  async refundInEscrow(paymentInfo: AdvancedPaymentInfo, amount?: string): Promise<AdvancedTransactionResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const { ethers } = await import('ethers');
+      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
+      const amt = amount || paymentInfo.maxAmount;
+      const tuple = this.buildTuple(paymentInfo);
+
+      const tx = await contract.refundInEscrow(tuple, amt, { gasLimit: this.gasLimit });
+      const receipt = await tx.wait();
+
+      return {
+        success: receipt.status === 1,
+        transactionHash: receipt.hash,
+        gasUsed: Number(receipt.gasUsed),
+        error: receipt.status !== 1 ? 'Transaction reverted' : undefined,
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  /**
+   * CHARGE: Direct instant payment (no escrow hold).
+   *
+   * Calls PaymentOperator.charge() -> escrow.charge()
+   * Funds go directly from payer to receiver.
+   *
+   * @param paymentInfo - PaymentInfo with receiver and amount
+   * @param amount - Amount to charge (defaults to maxAmount)
+   */
+  async charge(paymentInfo: AdvancedPaymentInfo, amount?: string): Promise<AdvancedTransactionResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const { ethers } = await import('ethers');
+      const nonce = await this.computeNonce(paymentInfo);
+      const amt = amount || paymentInfo.maxAmount;
+
+      const auth = {
+        from: this.payerAddress,
+        to: this.contracts.tokenCollector,
+        value: String(amt),
+        validAfter: '0',
+        validBefore: String(paymentInfo.preApprovalExpiry),
+        nonce,
+      };
+      const signature = await this.signErc3009(auth);
+      // Pass raw signature bytes as collectorData (ethers handles hex -> bytes)
+      const collectorData = ethers.getBytes(signature);
+
+      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
+      const tuple = this.buildTuple(paymentInfo);
+
+      const tx = await contract.charge(
+        tuple,
+        amt,
+        this.contracts.tokenCollector,
+        collectorData,
+        { gasLimit: this.gasLimit },
+      );
+      const receipt = await tx.wait();
+
+      return {
+        success: receipt.status === 1,
+        transactionHash: receipt.hash,
+        gasUsed: Number(receipt.gasUsed),
+        error: receipt.status !== 1 ? 'Transaction reverted' : undefined,
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  /**
+   * REFUND POST ESCROW: Dispute refund after funds were released.
+   *
+   * Calls PaymentOperator.refundPostEscrow() -> escrow.refund()
+   *
+   * WARNING: NOT FUNCTIONAL IN PRODUCTION (as of 2026-02-03).
+   * The protocol team has not implemented the required tokenCollector
+   * contract. This call will fail on-chain.
+   *
+   * For dispute resolution, use refundInEscrow() instead: keep funds
+   * in escrow and refund before releasing. This guarantees funds are
+   * available and under arbiter control.
+   *
+   * Kept for future use when tokenCollector is implemented.
+   *
+   * @param paymentInfo - PaymentInfo from the original authorization
+   * @param amount - Amount to refund (defaults to maxAmount)
+   * @param tokenCollector - Address of token collector for refund sourcing
+   * @param collectorData - Data for the token collector
+   */
+  async refundPostEscrow(
+    paymentInfo: AdvancedPaymentInfo,
+    amount?: string,
+    tokenCollector?: string,
+    collectorData?: string,
+  ): Promise<AdvancedTransactionResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const { ethers } = await import('ethers');
+      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
+      const amt = amount || paymentInfo.maxAmount;
+      const tuple = this.buildTuple(paymentInfo);
+
+      const tx = await contract.refundPostEscrow(
+        tuple,
+        amt,
+        tokenCollector || ZERO_ADDRESS,
+        collectorData || '0x',
+        { gasLimit: this.gasLimit },
+      );
+      const receipt = await tx.wait();
+
+      return {
+        success: receipt.status === 1,
+        transactionHash: receipt.hash,
+        gasUsed: Number(receipt.gasUsed),
+        error: receipt.status !== 1 ? 'Transaction reverted' : undefined,
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+}
