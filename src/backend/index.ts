@@ -2146,31 +2146,91 @@ export const ERC8004_EXTENSION_ID = '8004-reputation';
 /**
  * ERC-8004 contract addresses per network
  */
+// Mainnet addresses (CREATE2 deterministic - same on all mainnets)
+const MAINNET_IDENTITY = '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432';
+const MAINNET_REPUTATION = '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63';
+
+// Testnet addresses (same on all testnets)
+const TESTNET_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
+const TESTNET_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
+const TESTNET_VALIDATION = '0x8004Cb1BF31DAf7788923b405b754f57acEB4272';
+
+/**
+ * ERC-8004 contract addresses per network (12 networks)
+ */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
   reputationRegistry?: string;
   validationRegistry?: string;
 }> = {
+  // Mainnets (7)
   ethereum: {
-    identityRegistry: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
-    reputationRegistry: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
   },
-  'ethereum-sepolia': {
-    identityRegistry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
-    reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
-    validationRegistry: '0x8004Cb1BF31DAf7788923b405b754f57acEB4272',
-  },
-  // Base Mainnet - Same addresses as Ethereum (CREATE2 deterministic deployment)
   'base-mainnet': {
-    identityRegistry: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
-    reputationRegistry: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  polygon: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  arbitrum: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  celo: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  bsc: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  monad: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  // Testnets (5)
+  'ethereum-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
+  'base-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
+  'polygon-amoy': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
+  'arbitrum-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
+  'celo-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
   },
 };
 
 /**
  * Network type for ERC-8004 operations
  */
-export type Erc8004Network = 'ethereum' | 'ethereum-sepolia' | 'base-mainnet';
+/**
+ * Network type for ERC-8004 operations (12 networks)
+ */
+export type Erc8004Network =
+  // Mainnets
+  | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'celo' | 'bsc' | 'monad'
+  // Testnets
+  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'celo-sepolia';
 
 /**
  * Proof of payment returned when settling with ERC-8004 extension
