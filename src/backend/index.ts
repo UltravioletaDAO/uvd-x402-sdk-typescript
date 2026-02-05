@@ -2160,12 +2160,17 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
     validationRegistry: '0x8004Cb1BF31DAf7788923b405b754f57acEB4272',
   },
+  // Base Mainnet - Same addresses as Ethereum (CREATE2 deterministic deployment)
+  'base-mainnet': {
+    identityRegistry: '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432',
+    reputationRegistry: '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63',
+  },
 };
 
 /**
  * Network type for ERC-8004 operations
  */
-export type Erc8004Network = 'ethereum' | 'ethereum-sepolia';
+export type Erc8004Network = 'ethereum' | 'ethereum-sepolia' | 'base-mainnet';
 
 /**
  * Proof of payment returned when settling with ERC-8004 extension
@@ -2989,7 +2994,6 @@ export class AdvancedEscrowClient {
   private gasLimit: number;
   private contracts: AdvancedEscrowContracts;
   private signer: any; // ethers.Signer
-  private provider: any; // ethers.Provider
   private payerAddress: string = '';
 
   constructor(signer: any, options: AdvancedEscrowClientOptions = {}) {
@@ -2998,7 +3002,6 @@ export class AdvancedEscrowClient {
     this.chainId = options.chainId || 8453;
     this.gasLimit = options.gasLimit || 300000;
     this.contracts = options.contracts || BASE_MAINNET_CONTRACTS;
-    this.provider = signer.provider;
   }
 
   /**
