@@ -2420,6 +2420,78 @@ export interface ReputationResponse {
 }
 
 /**
+ * Key-value metadata entry for agent registration
+ */
+export interface MetadataEntryParam {
+  /** Metadata key */
+  key: string;
+  /** Metadata value (hex-encoded bytes or UTF-8 string) */
+  value: string;
+}
+
+/**
+ * Request body for POST /register
+ */
+export interface RegisterAgentRequest {
+  /** x402 protocol version */
+  x402Version: 1 | 2;
+  /** Network where agent will be registered */
+  network: Erc8004Network;
+  /** URI pointing to agent registration file (IPFS, HTTPS) */
+  agentUri: string;
+  /** Optional metadata key-value pairs */
+  metadata?: MetadataEntryParam[];
+  /** Optional recipient address - NFT is transferred to this address after minting */
+  recipient?: string;
+}
+
+/**
+ * Response from POST /register
+ */
+export interface RegisterAgentResponse {
+  /** Whether registration succeeded */
+  success: boolean;
+  /** The newly assigned agent ID (ERC-721 tokenId) */
+  agentId?: number;
+  /** Registration transaction hash */
+  transaction?: string;
+  /** Transfer transaction hash (if recipient was specified) */
+  transferTransaction?: string;
+  /** Owner address of the agent NFT */
+  owner?: string;
+  /** Error message if failed */
+  error?: string;
+  /** Network where agent was registered */
+  network: string;
+}
+
+/**
+ * Response from GET /identity/{network}/{agent_id}/metadata/{key}
+ */
+export interface IdentityMetadataResponse {
+  /** Agent ID */
+  agentId: number;
+  /** Metadata key */
+  key: string;
+  /** Raw hex-encoded value */
+  valueHex: string;
+  /** UTF-8 decoded value (if decodable) */
+  valueUtf8?: string;
+  /** Network */
+  network: string;
+}
+
+/**
+ * Response from GET /identity/{network}/total-supply
+ */
+export interface IdentityTotalSupplyResponse {
+  /** Total number of registered agents */
+  totalSupply: number;
+  /** Network */
+  network: string;
+}
+
+/**
  * Options for the ERC8004Client
  */
 export interface Erc8004ClientOptions {
@@ -2433,7 +2505,9 @@ export interface Erc8004ClientOptions {
  * Client for ERC-8004 Trustless Agents API
  *
  * Provides methods for:
- * - Querying agent identity
+ * - Registering new agents (gasless, facilitator pays gas)
+ * - Registering agents on behalf of users (gasless delegation)
+ * - Querying agent identity, metadata, and total supply
  * - Querying agent reputation
  * - Submitting reputation feedback
  * - Revoking feedback
@@ -2848,6 +2922,178 @@ export class Erc8004Client {
         error: error instanceof Error ? error.message : 'Unknown error',
         network,
       };
+    }
+  }
+
+  /**
+   * Register a new agent on the Identity Registry
+   *
+   * The facilitator pays gas fees. Optionally transfer the NFT to a
+   * recipient address (gasless delegation).
+   *
+   * @param request - Registration request
+   * @returns Registration response with agent ID and transaction hash
+   *
+   * @example
+   * ```ts
+   * // Register agent owned by facilitator
+   * const result = await client.registerAgent({
+   *   x402Version: 1,
+   *   network: 'ethereum',
+   *   agentUri: 'ipfs://QmYourAgentFile',
+   * });
+   * console.log(`Agent #${result.agentId} registered`);
+   *
+   * // Register agent and transfer to user
+   * const result = await client.registerAgent({
+   *   x402Version: 1,
+   *   network: 'ethereum',
+   *   agentUri: 'ipfs://QmYourAgentFile',
+   *   recipient: '0xUserAddress...',
+   * });
+   * console.log(`Agent #${result.agentId} transferred to user`);
+   * ```
+   */
+  async registerAgent(request: RegisterAgentRequest): Promise<RegisterAgentResponse> {
+    const url = `${this.baseUrl}/register`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `Facilitator error: ${response.status} - ${errorText}`,
+          network: request.network,
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network: request.network,
+      };
+    }
+  }
+
+  /**
+   * Get registration endpoint metadata
+   *
+   * @returns Endpoint information for POST /register
+   */
+  async getRegisterInfo(): Promise<Record<string, unknown>> {
+    const url = `${this.baseUrl}/register`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a specific metadata entry for an agent
+   *
+   * @param network - Network where agent is registered
+   * @param agentId - Agent's tokenId
+   * @param key - Metadata key to retrieve
+   * @returns Metadata value (hex-encoded and UTF-8 decoded if possible)
+   */
+  async getIdentityMetadata(
+    network: Erc8004Network,
+    agentId: number,
+    key: string,
+  ): Promise<IdentityMetadataResponse> {
+    const url = `${this.baseUrl}/identity/${network}/${agentId}/metadata/${encodeURIComponent(key)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get total number of registered agents on a network
+   *
+   * @param network - Network to query
+   * @returns Total supply count
+   */
+  async getIdentityTotalSupply(network: Erc8004Network): Promise<IdentityTotalSupplyResponse> {
+    const url = `${this.baseUrl}/identity/${network}/total-supply`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
     }
   }
 }
