@@ -3170,14 +3170,144 @@ export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 export const DEPOSIT_LIMIT_USDC = '100000000'; // $100 in atomic units (6 decimals)
 
 /**
- * Base Mainnet contract addresses for the Advanced Escrow system.
+ * USDC EIP-712 domain name per chain.
+ * Most chains use "USD Coin", but some (Celo, Monad, HyperEVM) use "USDC".
+ * This must match the on-chain token's name() for EIP-712 signing to work.
  */
-export const BASE_MAINNET_CONTRACTS = {
-  operator: '0xa06958D93135BEd7e43893897C0d9fA931EF051C',
-  escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
-  tokenCollector: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
-  usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+export const USDC_DOMAIN_NAME: Record<number, string> = {
+  8453: 'USD Coin',       // Base Mainnet
+  84532: 'USD Coin',      // Base Sepolia
+  1: 'USD Coin',          // Ethereum Mainnet
+  11155111: 'USD Coin',   // Ethereum Sepolia
+  137: 'USD Coin',        // Polygon
+  42161: 'USD Coin',      // Arbitrum
+  43114: 'USD Coin',      // Avalanche
+  42220: 'USDC',          // Celo
+  143: 'USDC',            // Monad
 };
+
+/**
+ * Multi-chain escrow contract addresses for the Advanced Escrow system.
+ * Keyed by EVM chain ID. Source: x402r-sdk A1igator/multichain-config deployment.
+ */
+export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
+  // Base Sepolia (testnet, chain 84532)
+  84532: {
+    operator: '0x97d53e63A9CB97556c00BeFd325AF810c9b267B2',
+    escrow: '0x29025c0E9D4239d438e169570818dB9FE0A80873',
+    tokenCollector: '0x5cA789000070DF15b4663DB64a50AeF5D49c5Ee0',
+    protocolFeeConfig: '0x8F96C493bAC365E41f0315cf45830069EBbDCaCe',
+    refundRequest: '0x1C2Ab244aC8bDdDB74d43389FF34B118aF2E90F4',
+    usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+  },
+  // Base Mainnet (chain 8453)
+  8453: {
+    operator: '0x3D0837fF8Ea36F417261577b9BA568400A840260',
+    escrow: '0xb9488351E48b23D798f24e8174514F28B741Eb4f',
+    tokenCollector: '0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8',
+    protocolFeeConfig: '0x59314674BAbb1a24Eb2704468a9cCdD50668a1C6',
+    refundRequest: '0x35fb2EFEfAc3Ee9f6E52A9AAE5C9655bC08dEc00',
+    usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  },
+  // Ethereum Sepolia (testnet, chain 11155111)
+  11155111: {
+    operator: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    tokenCollector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    protocolFeeConfig: '0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838',
+    refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+  },
+  // Ethereum Mainnet (chain 1)
+  1: {
+    operator: '0xed02d3E5167BCc9582D851885A89b050AB816a56',
+    escrow: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    tokenCollector: '0xE78648e7af7B1BaDE717FF6E410B922F92adE80f',
+    protocolFeeConfig: '0xb33D6502EdBbC47201cd1E53C49d703EC0a660b8',
+    refundRequest: '0xc9BbA6A2CF9838e7Dd8c19BC8B3BAC620B9D8178',
+    usdc: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  },
+  // Polygon (chain 137)
+  137: {
+    operator: '0xb33D6502EdBbC47201cd1E53C49d703EC0a660b8',
+    escrow: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    tokenCollector: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    protocolFeeConfig: '0xE78648e7af7B1BaDE717FF6E410B922F92adE80f',
+    refundRequest: '0xed02d3E5167BCc9582D851885A89b050AB816a56',
+    usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+  },
+  // Arbitrum (chain 42161)
+  42161: {
+    operator: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    tokenCollector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    protocolFeeConfig: '0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838',
+    refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  },
+  // Celo (chain 42220)
+  42220: {
+    operator: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    tokenCollector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    protocolFeeConfig: '0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838',
+    refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
+  },
+  // Monad (chain 143)
+  143: {
+    operator: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    tokenCollector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    protocolFeeConfig: '0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838',
+    refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0x754704Bc059F8C67012fEd69BC8a327a5aafb603',
+  },
+  // Avalanche (chain 43114)
+  43114: {
+    operator: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    tokenCollector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    protocolFeeConfig: '0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838',
+    refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+  },
+};
+
+/**
+ * Base Mainnet contract addresses for the Advanced Escrow system.
+ * @deprecated Use ESCROW_CONTRACTS[8453] or getEscrowContractsByChainId(8453) instead.
+ */
+export const BASE_MAINNET_CONTRACTS: AdvancedEscrowContracts = ESCROW_CONTRACTS[8453];
+
+/**
+ * Get escrow contract addresses for a given chain ID.
+ *
+ * @param chainId - EVM chain ID (e.g., 8453 for Base, 1 for Ethereum)
+ * @returns Contract addresses or undefined if chain is not supported
+ */
+export function getEscrowContractsByChainId(chainId: number): AdvancedEscrowContracts | undefined {
+  return ESCROW_CONTRACTS[chainId];
+}
+
+/**
+ * Get all chain IDs that have escrow contracts deployed.
+ *
+ * @returns Array of chain IDs with escrow support
+ */
+export function getEscrowSupportedChainIds(): number[] {
+  return Object.keys(ESCROW_CONTRACTS).map(Number);
+}
+
+/**
+ * Check if escrow contracts are deployed on a given chain.
+ *
+ * @param chainId - EVM chain ID
+ * @returns True if escrow is supported on this chain
+ */
+export function isEscrowSupportedOnChain(chainId: number): boolean {
+  return chainId in ESCROW_CONTRACTS;
+}
 
 /**
  * Task tiers determine timing parameters for escrow operations.
@@ -3234,11 +3364,27 @@ export interface AdvancedTransactionResult {
 
 /**
  * Contract addresses configuration for AdvancedEscrowClient.
+ *
+ * Maps to the on-chain x402r escrow contracts:
+ * - operator: PaymentOperatorFactory
+ * - escrow: AuthCaptureEscrow
+ * - tokenCollector: TokenCollector
+ * - protocolFeeConfig: ProtocolFeeConfig
+ * - refundRequest: RefundRequest
+ * - usdc: USDC token contract
  */
 export interface AdvancedEscrowContracts {
+  /** PaymentOperatorFactory contract address */
   operator: string;
+  /** AuthCaptureEscrow contract address */
   escrow: string;
+  /** TokenCollector contract address */
   tokenCollector: string;
+  /** ProtocolFeeConfig contract address */
+  protocolFeeConfig: string;
+  /** RefundRequest contract address */
+  refundRequest: string;
+  /** USDC token contract address */
   usdc: string;
 }
 
@@ -3250,9 +3396,14 @@ export interface AdvancedEscrowClientOptions {
   facilitatorUrl?: string;
   /** JSON-RPC URL for on-chain operations */
   rpcUrl?: string;
-  /** Chain ID (default: 8453 for Base Mainnet) */
+  /**
+   * Chain ID (default: 8453 for Base Mainnet).
+   * Supported chains: 8453 (Base), 84532 (Base Sepolia), 1 (Ethereum),
+   * 11155111 (Ethereum Sepolia), 137 (Polygon), 42161 (Arbitrum),
+   * 42220 (Celo), 143 (Monad), 43114 (Avalanche).
+   */
   chainId?: number;
-  /** Contract addresses (default: Base Mainnet) */
+  /** Contract addresses (auto-resolved from chainId if not provided) */
   contracts?: AdvancedEscrowContracts;
   /** Gas limit for transactions (default: 300000) */
   gasLimit?: number;
@@ -3271,16 +3422,30 @@ export const OPERATOR_ABI = [
 
 /**
  * AdvancedEscrowClient provides the 5 Advanced Escrow flows via the
- * PaymentOperator contract on Base Mainnet.
+ * PaymentOperator contract on 9 supported EVM networks.
+ *
+ * Supported chains: Base (8453), Base Sepolia (84532), Ethereum (1),
+ * Ethereum Sepolia (11155111), Polygon (137), Arbitrum (42161),
+ * Celo (42220), Monad (143), Avalanche (43114).
+ *
+ * Contract addresses are auto-resolved from the chain ID.
+ * Pass custom contracts to override.
  *
  * @example
  * ```typescript
  * import { ethers } from 'ethers';
  * import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
  *
+ * // Base Mainnet (default)
  * const client = new AdvancedEscrowClient(signer, {
  *   facilitatorUrl: 'https://facilitator.ultravioletadao.xyz',
  *   rpcUrl: 'https://mainnet.base.org',
+ * });
+ *
+ * // Polygon
+ * const polyClient = new AdvancedEscrowClient(signer, {
+ *   chainId: 137,
+ *   rpcUrl: 'https://polygon-rpc.com',
  * });
  *
  * // Lock funds in escrow
@@ -3307,7 +3472,20 @@ export class AdvancedEscrowClient {
     this.facilitatorUrl = (options.facilitatorUrl || 'https://facilitator.ultravioletadao.xyz').replace(/\/$/, '');
     this.chainId = options.chainId || 8453;
     this.gasLimit = options.gasLimit || 300000;
-    this.contracts = options.contracts || BASE_MAINNET_CONTRACTS;
+
+    if (options.contracts) {
+      this.contracts = options.contracts;
+    } else {
+      const resolved = ESCROW_CONTRACTS[this.chainId];
+      if (!resolved) {
+        throw new Error(
+          `No escrow contracts found for chain ID ${this.chainId}. ` +
+          `Supported chains: ${getEscrowSupportedChainIds().join(', ')}. ` +
+          `Pass custom contracts via options.contracts to use an unsupported chain.`
+        );
+      }
+      this.contracts = resolved;
+    }
   }
 
   /**
@@ -3406,7 +3584,7 @@ export class AdvancedEscrowClient {
    */
   private async signErc3009(auth: Record<string, string>): Promise<string> {
     const domain = {
-      name: 'USD Coin',
+      name: USDC_DOMAIN_NAME[this.chainId] || 'USD Coin',
       version: '2',
       chainId: this.chainId,
       verifyingContract: this.contracts.usdc,
