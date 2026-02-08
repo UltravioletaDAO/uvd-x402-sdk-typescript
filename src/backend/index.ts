@@ -2623,7 +2623,9 @@ export class Erc8004Client {
    *
    * @param network - Network where agent is registered
    * @param agentId - Agent's tokenId
-   * @param options - Query options (tag filters, include individual feedback)
+   * @param options - Query options (tag filters, include individual feedback, client addresses)
+   * @param options.clientAddresses - Comma-separated client addresses to filter by.
+   *   If omitted, the facilitator auto-discovers all clients via getClients().
    * @returns Reputation summary and optionally individual feedback entries
    */
   async getReputation(
@@ -2633,12 +2635,14 @@ export class Erc8004Client {
       tag1?: string;
       tag2?: string;
       includeFeedback?: boolean;
+      clientAddresses?: string;
     } = {}
   ): Promise<ReputationResponse> {
     const params = new URLSearchParams();
     if (options.tag1) params.set('tag1', options.tag1);
     if (options.tag2) params.set('tag2', options.tag2);
     if (options.includeFeedback) params.set('includeFeedback', 'true');
+    if (options.clientAddresses) params.set('clientAddresses', options.clientAddresses);
 
     const url = `${this.baseUrl}/reputation/${network}/${agentId}${params.toString() ? `?${params}` : ''}`;
 
