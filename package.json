@@ -118,7 +118,8 @@
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build",
+    "release": "bash scripts/publish-npm.sh"
   },
   "dependencies": {
     "ethers": "^6.13.0"
