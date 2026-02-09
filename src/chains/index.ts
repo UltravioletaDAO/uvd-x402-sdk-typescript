@@ -425,6 +425,12 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'Agora Dollar',
         version: '1',
       },
+      usdt: {
+        address: '0xe7cd86e13AC4309349F30B3435a9d337750fC82D',
+        decimals: 6,
+        name: 'USD\u20AE0',  // USD₮0 (USDT0 omnichain via LayerZero)
+        version: '1',
+      },
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
