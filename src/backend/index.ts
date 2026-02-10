@@ -2156,14 +2156,14 @@ const TESTNET_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const TESTNET_VALIDATION = '0x8004Cb1BF31DAf7788923b405b754f57acEB4272';
 
 /**
- * ERC-8004 contract addresses per network (12 networks)
+ * ERC-8004 contract addresses per network (16 networks)
  */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
   reputationRegistry?: string;
   validationRegistry?: string;
 }> = {
-  // Mainnets (7)
+  // Mainnets (9)
   ethereum: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
@@ -2180,6 +2180,10 @@ export const ERC8004_CONTRACTS: Record<string, {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
   },
+  optimism: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
   celo: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
@@ -2192,7 +2196,11 @@ export const ERC8004_CONTRACTS: Record<string, {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
   },
-  // Testnets (5)
+  avalanche: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  // Testnets (7)
   'ethereum-sepolia': {
     identityRegistry: TESTNET_IDENTITY,
     reputationRegistry: TESTNET_REPUTATION,
@@ -2213,7 +2221,17 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
   },
+  'optimism-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
   'celo-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
+  'avalanche-fuji': {
     identityRegistry: TESTNET_IDENTITY,
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
@@ -2224,13 +2242,13 @@ export const ERC8004_CONTRACTS: Record<string, {
  * Network type for ERC-8004 operations
  */
 /**
- * Network type for ERC-8004 operations (12 networks)
+ * Network type for ERC-8004 operations (16 networks)
  */
 export type Erc8004Network =
   // Mainnets
-  | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'celo' | 'bsc' | 'monad'
+  | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche'
   // Testnets
-  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'celo-sepolia';
+  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji';
 
 /**
  * Proof of payment returned when settling with ERC-8004 extension
