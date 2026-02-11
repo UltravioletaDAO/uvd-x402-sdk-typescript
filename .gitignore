@@ -31,3 +31,6 @@ coverage/
 # Misc
 *.tgz
 .npmrc
+
+# Local scratch / IRC logs
+.unused/

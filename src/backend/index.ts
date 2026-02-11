@@ -3385,6 +3385,23 @@ export interface AdvancedTransactionResult {
 }
 
 /**
+ * Response from the facilitator's /escrow/state endpoint.
+ * Represents the on-chain state of an escrow for a given paymentInfo + payer.
+ */
+export interface EscrowStateResponse {
+  /** Whether the payment has already been collected (released) */
+  hasCollectedPayment: boolean;
+  /** Amount that can still be captured/released (in atomic units) */
+  capturableAmount: string;
+  /** Amount that can still be refunded to the payer (in atomic units) */
+  refundableAmount: string;
+  /** Keccak256 hash of the paymentInfo struct */
+  paymentInfoHash: string;
+  /** Network in CAIP-2 format (e.g., "eip155:8453") */
+  network: string;
+}
+
+/**
  * Contract addresses configuration for AdvancedEscrowClient.
  *
  * Maps to the on-chain x402r escrow contracts:
@@ -3780,6 +3797,226 @@ export class AdvancedEscrowClient {
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
+  }
+
+  // ==========================================================================
+  // GASLESS FACILITATOR METHODS
+  // ==========================================================================
+
+  /**
+   * GASLESS RELEASE: Release escrowed funds via the facilitator.
+   *
+   * Instead of calling the PaymentOperator contract directly (which requires
+   * gas), this sends a release request to the facilitator, which submits
+   * the transaction on your behalf.
+   *
+   * @param paymentInfo - PaymentInfo from the authorize step
+   * @param amount - Amount to release in atomic units (defaults to maxAmount)
+   * @returns Transaction result from the facilitator
+   *
+   * @example
+   * ```typescript
+   * const pi = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
+   * await client.authorize(pi);
+   * // Worker completes task...
+   * const result = await client.releaseViaFacilitator(pi);
+   * console.log(result.transactionHash);
+   * ```
+   */
+  async releaseViaFacilitator(
+    paymentInfo: AdvancedPaymentInfo,
+    amount?: string,
+  ): Promise<AdvancedTransactionResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const payload = {
+        x402Version: 2,
+        scheme: 'escrow',
+        action: 'release',
+        payload: {
+          paymentInfo: {
+            operator: paymentInfo.operator,
+            receiver: paymentInfo.receiver,
+            token: paymentInfo.token,
+            maxAmount: paymentInfo.maxAmount,
+            preApprovalExpiry: paymentInfo.preApprovalExpiry,
+            authorizationExpiry: paymentInfo.authorizationExpiry,
+            refundExpiry: paymentInfo.refundExpiry,
+            minFeeBps: paymentInfo.minFeeBps,
+            maxFeeBps: paymentInfo.maxFeeBps,
+            feeReceiver: paymentInfo.feeReceiver,
+            salt: paymentInfo.salt,
+          },
+          payer: this.payerAddress,
+          amount: amount || paymentInfo.maxAmount,
+        },
+        paymentRequirements: {
+          scheme: 'escrow',
+          network: `eip155:${this.chainId}`,
+          extra: {
+            escrowAddress: this.contracts.escrow,
+            operatorAddress: this.contracts.operator,
+            tokenCollector: this.contracts.tokenCollector,
+          },
+        },
+      };
+
+      const response = await fetch(`${this.facilitatorUrl}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        return {
+          success: true,
+          transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
+        };
+      }
+      return { success: false, error: result.errorReason || result.error || 'Release failed' };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  /**
+   * GASLESS REFUND: Refund escrowed funds via the facilitator.
+   *
+   * Instead of calling the PaymentOperator contract directly (which requires
+   * gas), this sends a refundInEscrow request to the facilitator, which
+   * submits the transaction on your behalf.
+   *
+   * @param paymentInfo - PaymentInfo from the authorize step
+   * @param amount - Amount to refund in atomic units (defaults to maxAmount)
+   * @returns Transaction result from the facilitator
+   *
+   * @example
+   * ```typescript
+   * const pi = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
+   * await client.authorize(pi);
+   * // Task cancelled...
+   * const result = await client.refundViaFacilitator(pi);
+   * console.log(result.transactionHash);
+   * ```
+   */
+  async refundViaFacilitator(
+    paymentInfo: AdvancedPaymentInfo,
+    amount?: string,
+  ): Promise<AdvancedTransactionResult> {
+    if (!this.payerAddress) await this.init();
+
+    try {
+      const payload = {
+        x402Version: 2,
+        scheme: 'escrow',
+        action: 'refundInEscrow',
+        payload: {
+          paymentInfo: {
+            operator: paymentInfo.operator,
+            receiver: paymentInfo.receiver,
+            token: paymentInfo.token,
+            maxAmount: paymentInfo.maxAmount,
+            preApprovalExpiry: paymentInfo.preApprovalExpiry,
+            authorizationExpiry: paymentInfo.authorizationExpiry,
+            refundExpiry: paymentInfo.refundExpiry,
+            minFeeBps: paymentInfo.minFeeBps,
+            maxFeeBps: paymentInfo.maxFeeBps,
+            feeReceiver: paymentInfo.feeReceiver,
+            salt: paymentInfo.salt,
+          },
+          payer: this.payerAddress,
+          amount: amount || paymentInfo.maxAmount,
+        },
+        paymentRequirements: {
+          scheme: 'escrow',
+          network: `eip155:${this.chainId}`,
+          extra: {
+            escrowAddress: this.contracts.escrow,
+            operatorAddress: this.contracts.operator,
+            tokenCollector: this.contracts.tokenCollector,
+          },
+        },
+      };
+
+      const response = await fetch(`${this.facilitatorUrl}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+
+      if (result.success) {
+        return {
+          success: true,
+          transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
+        };
+      }
+      return { success: false, error: result.errorReason || result.error || 'Refund failed' };
+    } catch (e: any) {
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  /**
+   * QUERY ESCROW STATE: Read on-chain escrow state via the facilitator.
+   *
+   * This is a read-only operation that queries the facilitator for the
+   * current escrow state without requiring gas or a signer.
+   *
+   * @param paymentInfo - PaymentInfo to query state for
+   * @returns Escrow state including capturable/refundable amounts
+   *
+   * @example
+   * ```typescript
+   * const pi = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
+   * await client.authorize(pi);
+   *
+   * const state = await client.queryEscrowState(pi);
+   * console.log(`Capturable: ${state.capturableAmount}`);
+   * console.log(`Refundable: ${state.refundableAmount}`);
+   * console.log(`Already collected: ${state.hasCollectedPayment}`);
+   * ```
+   */
+  async queryEscrowState(paymentInfo: AdvancedPaymentInfo): Promise<EscrowStateResponse> {
+    if (!this.payerAddress) await this.init();
+
+    const payload = {
+      paymentInfo: {
+        operator: paymentInfo.operator,
+        receiver: paymentInfo.receiver,
+        token: paymentInfo.token,
+        maxAmount: paymentInfo.maxAmount,
+        preApprovalExpiry: paymentInfo.preApprovalExpiry,
+        authorizationExpiry: paymentInfo.authorizationExpiry,
+        refundExpiry: paymentInfo.refundExpiry,
+        minFeeBps: paymentInfo.minFeeBps,
+        maxFeeBps: paymentInfo.maxFeeBps,
+        feeReceiver: paymentInfo.feeReceiver,
+        salt: paymentInfo.salt,
+      },
+      payer: this.payerAddress,
+      network: `eip155:${this.chainId}`,
+      extra: {
+        escrowAddress: this.contracts.escrow,
+        operatorAddress: this.contracts.operator,
+        tokenCollector: this.contracts.tokenCollector,
+      },
+    };
+
+    const response = await fetch(`${this.facilitatorUrl}/escrow/state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Escrow state query failed: ${response.status} - ${errorText}`);
+    }
+
+    return await response.json() as EscrowStateResponse;
   }
 
   /**
