@@ -3294,6 +3294,15 @@ export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
     refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
     usdc: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
   },
+  // Optimism (chain 10)
+  10: {
+    operator: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    tokenCollector: '0x0DdF51E62DDD41B5f67BEaF2DCE9F2e99E2C5aF5',
+    protocolFeeConfig: '0xe968AA7530b9C3336FED14FD5D5D4dD3Cf82655D',
+    refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+  },
 };
 
 /**
