@@ -3240,13 +3240,13 @@ export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
     refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
     usdc: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
   },
-  // Ethereum Mainnet (chain 1)
+  // Ethereum Mainnet (chain 1) - Updated from Ali's redeploy (commit e6cf29d)
   1: {
-    operator: '0xed02d3E5167BCc9582D851885A89b050AB816a56',
-    escrow: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
-    tokenCollector: '0xE78648e7af7B1BaDE717FF6E410B922F92adE80f',
-    protocolFeeConfig: '0xb33D6502EdBbC47201cd1E53C49d703EC0a660b8',
-    refundRequest: '0xc9BbA6A2CF9838e7Dd8c19BC8B3BAC620B9D8178',
+    operator: '0x69B67962ffb7c5C7078ff348a87DF604dfA8001b',
+    escrow: '0x9D4146EF898c8E60B3e865AE254ef438E7cEd2A0',
+    tokenCollector: '0x206D4DbB6E7b876e4B5EFAAD2a04e7d7813FB6ba',
+    protocolFeeConfig: '0x5b3e33791C1764cF7e2573Bf8116F1D361FD97Cd',
+    refundRequest: '0xFa8C4Cb156053b867Ae7489220A29b5939E3Df70',
     usdc: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   },
   // Polygon (chain 137)
