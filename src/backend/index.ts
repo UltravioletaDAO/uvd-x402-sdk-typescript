@@ -405,7 +405,12 @@ export function getCorsHeaders(origin: string = '*'): Record<string, string> {
 export interface FacilitatorClientOptions {
   /** Base URL of the facilitator (default: https://facilitator.ultravioletadao.xyz) */
   baseUrl?: string;
-  /** Request timeout in milliseconds (default: 30000) */
+  /**
+   * Request timeout in milliseconds (default: auto per network).
+   * When not set, the client uses per-network defaults from ESCROW_TIMEOUT_MS
+   * (960s for Ethereum L1, 90s for L2s, 30s for others).
+   * Set explicitly to override per-network auto-detection.
+   */
   timeout?: number;
 }
 
@@ -432,10 +437,29 @@ export interface FacilitatorClientOptions {
 export class FacilitatorClient {
   private readonly baseUrl: string;
   private readonly timeout: number;
+  private readonly explicitTimeout: boolean;
 
   constructor(options: FacilitatorClientOptions = {}) {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
+    this.explicitTimeout = options.timeout !== undefined;
     this.timeout = options.timeout || 30000;
+  }
+
+  /**
+   * Get timeout for a specific network, using per-chain defaults when no explicit timeout was set.
+   */
+  private getTimeout(network?: string): number {
+    if (this.explicitTimeout) return this.timeout;
+    if (!network) return this.timeout;
+    // Extract chainId from CAIP-2 format (eip155:1) or legacy names
+    const match = network.match(/^eip155:(\d+)$/);
+    if (match) {
+      const chainId = parseInt(match[1], 10);
+      return ESCROW_TIMEOUT_MS[chainId] || this.timeout;
+    }
+    // Legacy network name mapping for Ethereum
+    if (network === 'ethereum' || network === 'ethereum-mainnet') return ESCROW_TIMEOUT_MS[1];
+    return this.timeout;
   }
 
   /**
@@ -498,9 +522,10 @@ export class FacilitatorClient {
     requirements: PaymentRequirements
   ): Promise<SettleResponse> {
     const body = buildSettleRequest(paymentHeader, requirements);
+    const settleTimeout = this.getTimeout(requirements.network);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), settleTimeout);
 
     try {
       const response = await fetch(`${this.baseUrl}/settle`, {
@@ -3192,6 +3217,27 @@ export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 export const DEPOSIT_LIMIT_USDC = '100000000'; // $100 in atomic units (6 decimals)
 
 /**
+ * Default facilitator request timeout per chain in milliseconds.
+ * Ethereum L1 (~12s blocks) needs much longer than L2s (~2s blocks).
+ * Timeout chain: Client > SDK > Facilitator. The facilitator uses 900s for Ethereum L1.
+ */
+export const ESCROW_TIMEOUT_MS: Record<number, number> = {
+  1: 960_000,         // Ethereum L1: 960s (facilitator uses 900s TxWatcher)
+  11155111: 960_000,  // Ethereum Sepolia: same as L1
+  137: 90_000,        // Polygon: 90s
+  8453: 90_000,       // Base: 90s
+  84532: 90_000,      // Base Sepolia: 90s
+  42161: 90_000,      // Arbitrum: 90s
+  10: 90_000,         // Optimism: 90s
+  43114: 90_000,      // Avalanche: 90s
+  42220: 90_000,      // Celo: 90s
+  143: 90_000,        // Monad: 90s
+};
+
+/** Default timeout when chain is not in ESCROW_TIMEOUT_MS */
+const DEFAULT_ESCROW_TIMEOUT_MS = 30_000;
+
+/**
  * USDC EIP-712 domain name per chain.
  * Most chains use "USD Coin", but some (Celo, Monad, HyperEVM) use "USDC".
  * This must match the on-chain token's name() for EIP-712 signing to work.
@@ -3448,13 +3494,19 @@ export interface AdvancedEscrowClientOptions {
    * Chain ID (default: 8453 for Base Mainnet).
    * Supported chains: 8453 (Base), 84532 (Base Sepolia), 1 (Ethereum),
    * 11155111 (Ethereum Sepolia), 137 (Polygon), 42161 (Arbitrum),
-   * 42220 (Celo), 143 (Monad), 43114 (Avalanche).
+   * 10 (Optimism), 42220 (Celo), 143 (Monad), 43114 (Avalanche).
    */
   chainId?: number;
   /** Contract addresses (auto-resolved from chainId if not provided) */
   contracts?: AdvancedEscrowContracts;
   /** Gas limit for transactions (default: 300000) */
   gasLimit?: number;
+  /**
+   * Request timeout in milliseconds for facilitator HTTP calls (authorize, gasless release/refund).
+   * Default is per-network: 960s for Ethereum L1, 90s for L2s.
+   * Ethereum L1 confirmations can take several minutes under congestion.
+   */
+  timeout?: number;
 }
 
 /**
@@ -3474,7 +3526,7 @@ export const OPERATOR_ABI = [
  *
  * Supported chains: Base (8453), Base Sepolia (84532), Ethereum (1),
  * Ethereum Sepolia (11155111), Polygon (137), Arbitrum (42161),
- * Celo (42220), Monad (143), Avalanche (43114).
+ * Optimism (10), Celo (42220), Monad (143), Avalanche (43114).
  *
  * Contract addresses are auto-resolved from the chain ID.
  * Pass custom contracts to override.
@@ -3511,6 +3563,7 @@ export class AdvancedEscrowClient {
   private facilitatorUrl: string;
   private chainId: number;
   private gasLimit: number;
+  private readonly timeout: number;
   private contracts: AdvancedEscrowContracts;
   private signer: any; // ethers.Signer
   private payerAddress: string = '';
@@ -3520,6 +3573,7 @@ export class AdvancedEscrowClient {
     this.facilitatorUrl = (options.facilitatorUrl || 'https://facilitator.ultravioletadao.xyz').replace(/\/$/, '');
     this.chainId = options.chainId || 8453;
     this.gasLimit = options.gasLimit || 300000;
+    this.timeout = options.timeout || ESCROW_TIMEOUT_MS[this.chainId] || DEFAULT_ESCROW_TIMEOUT_MS;
 
     if (options.contracts) {
       this.contracts = options.contracts;
@@ -3725,22 +3779,47 @@ export class AdvancedEscrowClient {
         },
       };
 
-      const response = await fetch(`${this.facilitatorUrl}/settle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await response.json();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      if (result.success) {
-        return {
-          success: true,
-          transactionHash: result.transaction,
-          paymentInfo,
-          salt: paymentInfo.salt,
-        };
+      try {
+        const response = await fetch(`${this.facilitatorUrl}/settle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        const result = await response.json();
+
+        if (result.success) {
+          return {
+            success: true,
+            transactionHash: result.transaction,
+            paymentInfo,
+            salt: paymentInfo.salt,
+          };
+        }
+        return { success: false, error: result.errorReason };
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+
+        // On timeout, check on-chain state as fallback
+        if (fetchErr.name === 'AbortError') {
+          try {
+            const state = await this.queryEscrowState(paymentInfo);
+            if (state.capturableAmount && BigInt(state.capturableAmount) > 0n) {
+              return {
+                success: true,
+                paymentInfo,
+                salt: paymentInfo.salt,
+              };
+            }
+          } catch { /* fallback query failed, report original timeout */ }
+          return { success: false, error: `Authorize timed out after ${this.timeout}ms. On-chain state could not confirm escrow lock.` };
+        }
+        throw fetchErr;
       }
-      return { success: false, error: result.errorReason };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
@@ -3871,20 +3950,41 @@ export class AdvancedEscrowClient {
         },
       };
 
-      const response = await fetch(`${this.facilitatorUrl}/settle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await response.json();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      if (result.success) {
-        return {
-          success: true,
-          transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
-        };
+      try {
+        const response = await fetch(`${this.facilitatorUrl}/settle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        const result = await response.json();
+
+        if (result.success) {
+          return {
+            success: true,
+            transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
+          };
+        }
+        return { success: false, error: result.errorReason || result.error || 'Release failed' };
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+
+        // On timeout, check on-chain state as fallback
+        if (fetchErr.name === 'AbortError') {
+          try {
+            const state = await this.queryEscrowState(paymentInfo);
+            if (state.capturableAmount === '0' && state.hasCollectedPayment) {
+              return { success: true };
+            }
+          } catch { /* fallback query failed */ }
+          return { success: false, error: `Gasless release timed out after ${this.timeout}ms. Check escrow state on-chain.` };
+        }
+        throw fetchErr;
       }
-      return { success: false, error: result.errorReason || result.error || 'Release failed' };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
@@ -3949,20 +4049,41 @@ export class AdvancedEscrowClient {
         },
       };
 
-      const response = await fetch(`${this.facilitatorUrl}/settle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await response.json();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      if (result.success) {
-        return {
-          success: true,
-          transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
-        };
+      try {
+        const response = await fetch(`${this.facilitatorUrl}/settle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        const result = await response.json();
+
+        if (result.success) {
+          return {
+            success: true,
+            transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
+          };
+        }
+        return { success: false, error: result.errorReason || result.error || 'Refund failed' };
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+
+        // On timeout, check on-chain state as fallback
+        if (fetchErr.name === 'AbortError') {
+          try {
+            const state = await this.queryEscrowState(paymentInfo);
+            if (state.refundableAmount === '0') {
+              return { success: true };
+            }
+          } catch { /* fallback query failed */ }
+          return { success: false, error: `Gasless refund timed out after ${this.timeout}ms. Check escrow state on-chain.` };
+        }
+        throw fetchErr;
       }
-      return { success: false, error: result.errorReason || result.error || 'Refund failed' };
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
