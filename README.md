@@ -12,8 +12,9 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Gasless**: Facilitator pays all network fees
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
-- **ERC-8004 Trustless Agents**: On-chain reputation and identity
+- **ERC-8004 Trustless Agents**: On-chain reputation and identity (EVM + Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
+- **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
 
 ## Installation
 
@@ -591,16 +592,22 @@ try {
 
 ## ERC-8004 Trustless Agents
 
-Build verifiable on-chain reputation for AI agents and services.
+Build verifiable on-chain reputation for AI agents and services. Supports **18 networks** (16 EVM + Solana + Solana devnet).
+
+On EVM networks, agent IDs are sequential numbers. On Solana, agent IDs are base58 pubkey strings. The `AgentId` type (`number | string`) handles both.
 
 ```typescript
-import { Erc8004Client } from 'uvd-x402-sdk/backend';
+import { Erc8004Client, AgentId } from 'uvd-x402-sdk/backend';
 
 const erc8004 = new Erc8004Client();
 
-// Get agent identity
+// EVM: agent ID is a number
 const identity = await erc8004.getIdentity('ethereum', 42);
 console.log(identity.agentUri);
+
+// Solana: agent ID is a base58 pubkey string
+const solIdentity = await erc8004.getIdentity('solana', '8oo4dC4JvBLwy5...');
+console.log(solIdentity.agentUri);
 
 // Get agent reputation
 const reputation = await erc8004.getReputation('ethereum', 42);
@@ -620,7 +627,30 @@ const result = await erc8004.submitFeedback({
 });
 
 // Respond to feedback (agents only)
+// sealHash is required for Solana, optional for EVM
 await erc8004.appendResponse('ethereum', 42, 1, 'Thank you for your feedback!');
+```
+
+## `/accepts` Negotiation
+
+Discover what the facilitator can settle before constructing payment authorizations. Used by Faremeter middleware and clients.
+
+```typescript
+import { FacilitatorClient } from 'uvd-x402-sdk/backend';
+
+const client = new FacilitatorClient();
+
+// Ask facilitator what it can settle
+const enriched = await client.accepts([
+  {
+    scheme: 'exact',
+    network: 'base-mainnet',
+    maxAmountRequired: '1000000',
+    resource: 'https://api.example.com/data',
+    payTo: '0xMerchant...',
+  },
+]);
+// enriched[0].extra now has feePayer, tokens, escrow config
 ```
 
 ## Escrow & Refunds

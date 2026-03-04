@@ -527,6 +527,25 @@ export interface X402SolanaPayload {
 }
 
 /**
+ * Settlement account payload for Crossmint and other custodial wallets
+ * that can only sendTransaction (not signTransaction).
+ *
+ * In this mode, the client already submitted the transaction on-chain.
+ * The facilitator verifies the on-chain tx, then sweeps USDC from the
+ * settlement account to the payTo address.
+ *
+ * Used by: Crossmint smart wallets via @faremeter/wallet-crossmint
+ */
+export interface X402SettlementAccountPayload {
+  /** On-chain transaction signature (already submitted) */
+  transactionSignature: string;
+  /** Base58 secret key for sweeping settlement account (optional) */
+  settleSecretKey?: string;
+  /** Address to receive rent from closed settlement ATA (optional) */
+  settlementRentDestination?: string;
+}
+
+/**
  * Stellar-specific payload in x402 header
  */
 export interface X402StellarPayload {
@@ -580,6 +599,7 @@ export interface X402SuiPayload {
 export type X402PayloadData =
   | X402EVMPayload
   | X402SolanaPayload
+  | X402SettlementAccountPayload
   | X402StellarPayload
   | X402NEARPayload
   | X402AlgorandPayload

@@ -200,6 +200,7 @@ export type {
   X402PayloadData,
   X402EVMPayload,
   X402SolanaPayload,
+  X402SettlementAccountPayload,
   X402StellarPayload,
   X402NEARPayload,
   X402AlgorandPayload,

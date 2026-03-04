@@ -614,6 +614,136 @@ export class FacilitatorClient {
       return false;
     }
   }
+
+  /**
+   * Get the facilitator version info
+   *
+   * @returns Version info (e.g., { version: "1.37.0" })
+   */
+  async getVersion(): Promise<{ version: string; [key: string]: unknown }> {
+    const response = await fetch(`${this.baseUrl}/version`, {
+      method: 'GET',
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GET /version failed: ${response.status} - ${errorText}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Get the facilitator's supported networks and payment schemes
+   *
+   * @returns Supported networks/schemes with 'kinds' array
+   *
+   * @example
+   * ```ts
+   * const supported = await client.getSupported();
+   * for (const kind of supported.kinds) {
+   *   console.log(`${kind.network} - ${kind.scheme}`);
+   * }
+   * ```
+   */
+  async getSupported(): Promise<{
+    kinds: Array<{ network: string; scheme: string; [key: string]: unknown }>;
+    [key: string]: unknown;
+  }> {
+    const response = await fetch(`${this.baseUrl}/supported`, {
+      method: 'GET',
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GET /supported failed: ${response.status} - ${errorText}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Get the facilitator's blocked/sanctioned addresses
+   *
+   * @returns Blacklist info (totalBlocked, loadedAtStartup, addresses)
+   *
+   * @example
+   * ```ts
+   * const bl = await client.getBlacklist();
+   * console.log(`Blocked: ${bl.totalBlocked} addresses`);
+   * ```
+   */
+  async getBlacklist(): Promise<{
+    totalBlocked: number;
+    loadedAtStartup: boolean;
+    [key: string]: unknown;
+  }> {
+    const response = await fetch(`${this.baseUrl}/blacklist`, {
+      method: 'GET',
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GET /blacklist failed: ${response.status} - ${errorText}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Negotiate payment requirements with the facilitator via POST /accepts.
+   *
+   * Sends merchant payment requirements to the facilitator, which matches
+   * them against its supported capabilities and returns enriched requirements
+   * with facilitator data (feePayer, tokens, escrow configuration).
+   *
+   * This is used by Faremeter middleware and clients that need to discover
+   * what the facilitator can settle before constructing payment authorizations.
+   *
+   * @param paymentRequirements - List of payment requirement objects
+   * @param x402Version - x402 protocol version (default: 2)
+   * @returns List of enriched payment requirements with facilitator extras
+   *
+   * @example
+   * ```ts
+   * const enriched = await client.accepts([
+   *   {
+   *     scheme: 'exact',
+   *     network: 'base-mainnet',
+   *     maxAmountRequired: '1000000',
+   *     resource: 'https://api.example.com/data',
+   *     payTo: '0xMerchant...',
+   *   },
+   * ]);
+   * // enriched[0].extra.feePayer is now set
+   * ```
+   */
+  async accepts(
+    paymentRequirements: PaymentRequirements[],
+    x402Version: number = 2
+  ): Promise<PaymentRequirements[]> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(`${this.baseUrl}/accepts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          x402Version,
+          accepts: paymentRequirements,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Facilitator /accepts error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data.accepts || [];
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
 }
 
 // ============================================================================
@@ -2078,6 +2208,58 @@ export class EscrowClient {
   }
 
   /**
+   * Query on-chain escrow state from the facilitator
+   *
+   * Calls POST /escrow/state to read current escrow state without settlement.
+   *
+   * @param options - Escrow state query parameters
+   * @returns On-chain escrow state (status, balance, timestamps)
+   *
+   * @example
+   * ```ts
+   * const state = await escrow.getEscrowState({
+   *   network: 'base-mainnet',
+   *   payer: '0xPayer...',
+   *   recipient: '0xRecipient...',
+   *   nonce: '0x1234...',
+   * });
+   * console.log(`Status: ${state.status}`);
+   * ```
+   */
+  async getEscrowState(options: {
+    network: string;
+    payer: string;
+    recipient: string;
+    nonce: string;
+  }): Promise<Record<string, unknown>> {
+    const url = `${this.baseUrl}/escrow/state`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(options),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Escrow API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
    * Check Escrow API health
    *
    * @returns True if healthy
@@ -2169,6 +2351,11 @@ export function escrowTimeRemaining(escrow: EscrowPayment): number {
 export const ERC8004_EXTENSION_ID = '8004-reputation';
 
 /**
+ * Agent ID type: EVM uses sequential uint256 (number), Solana uses base58 pubkey (string)
+ */
+export type AgentId = number | string;
+
+/**
  * ERC-8004 contract addresses per network
  */
 // Mainnet addresses (CREATE2 deterministic - same on all mainnets)
@@ -2180,13 +2367,19 @@ const TESTNET_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const TESTNET_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const TESTNET_VALIDATION = '0x8004Cb1BF31DAf7788923b405b754f57acEB4272';
 
+// Solana program IDs (QuantuLabs 8004-solana)
+const SOLANA_AGENT_REGISTRY = '8oo4dC4JvBLwy5tGgiH3WwK4B9PWxL9Z4XjA2jzkQMbQ';
+const SOLANA_ATOM_ENGINE = 'AToMw53aiPQ8j7iHVb4fGt6nzUNxUhcPc3tbPBZuzVVb';
+
 /**
- * ERC-8004 contract addresses per network (16 networks)
+ * ERC-8004 contract addresses per network (18 networks: 16 EVM + 2 Solana)
  */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
   reputationRegistry?: string;
   validationRegistry?: string;
+  agentRegistryProgram?: string;
+  atomEngineProgram?: string;
 }> = {
   // Mainnets (9)
   ethereum: {
@@ -2261,19 +2454,27 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
   },
+  // Solana (2) - uses QuantuLabs 8004-solana Anchor program + ATOM Engine
+  solana: {
+    agentRegistryProgram: SOLANA_AGENT_REGISTRY,
+    atomEngineProgram: SOLANA_ATOM_ENGINE,
+  },
+  'solana-devnet': {
+    agentRegistryProgram: SOLANA_AGENT_REGISTRY,
+    atomEngineProgram: SOLANA_ATOM_ENGINE,
+  },
 };
 
 /**
- * Network type for ERC-8004 operations
- */
-/**
- * Network type for ERC-8004 operations (16 networks)
+ * Network type for ERC-8004 operations (18 networks: 16 EVM + 2 Solana)
  */
 export type Erc8004Network =
-  // Mainnets
+  // EVM Mainnets
   | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche'
-  // Testnets
-  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji';
+  // EVM Testnets
+  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji'
+  // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)
+  | 'solana' | 'solana-devnet';
 
 /**
  * Proof of payment returned when settling with ERC-8004 extension
@@ -2311,8 +2512,8 @@ export interface SettleResponseWithProof extends SettleResponse {
  * Agent identity from the Identity Registry
  */
 export interface AgentIdentity {
-  /** The agent's ID (ERC-721 tokenId) */
-  agentId: number;
+  /** The agent's ID (EVM: sequential uint256, Solana: base58 pubkey string) */
+  agentId: AgentId;
   /** Owner address of the agent NFT */
   owner: string;
   /** URI pointing to agent registration file */
@@ -2360,7 +2561,7 @@ export interface AgentService {
  * Agent registration reference
  */
 export interface AgentRegistration {
-  agentId: number;
+  agentId: AgentId;
   agentRegistry: string; // Format: {namespace}:{chainId}:{address}
 }
 
@@ -2368,8 +2569,8 @@ export interface AgentRegistration {
  * Reputation summary for an agent
  */
 export interface ReputationSummary {
-  /** Agent ID */
-  agentId: number;
+  /** Agent ID (EVM: number, Solana: string) */
+  agentId: AgentId;
   /** Number of feedback entries */
   count: number;
   /** Aggregated value */
@@ -2404,8 +2605,8 @@ export interface FeedbackEntry {
  * Parameters for submitting reputation feedback
  */
 export interface FeedbackParams {
-  /** The agent's ID (tokenId in Identity Registry) */
-  agentId: number;
+  /** The agent's ID (EVM: tokenId number, Solana: base58 pubkey string) */
+  agentId: AgentId;
   /** Feedback value (e.g., 87 for 87/100) */
   value: number;
   /** Decimal places for value interpretation (0-18) */
@@ -2456,7 +2657,7 @@ export interface FeedbackResponse {
  * Reputation query response
  */
 export interface ReputationResponse {
-  agentId: number;
+  agentId: AgentId;
   summary: ReputationSummary;
   feedback?: FeedbackEntry[];
   network: Erc8004Network;
@@ -2494,8 +2695,8 @@ export interface RegisterAgentRequest {
 export interface RegisterAgentResponse {
   /** Whether registration succeeded */
   success: boolean;
-  /** The newly assigned agent ID (ERC-721 tokenId) */
-  agentId?: number;
+  /** The newly assigned agent ID (EVM: tokenId number, Solana: base58 pubkey string) */
+  agentId?: AgentId;
   /** Registration transaction hash */
   transaction?: string;
   /** Transfer transaction hash (if recipient was specified) */
@@ -2512,8 +2713,8 @@ export interface RegisterAgentResponse {
  * Response from GET /identity/{network}/{agent_id}/metadata/{key}
  */
 export interface IdentityMetadataResponse {
-  /** Agent ID */
-  agentId: number;
+  /** Agent ID (EVM: number, Solana: string) */
+  agentId: AgentId;
   /** Metadata key */
   key: string;
   /** Raw hex-encoded value */
@@ -2597,7 +2798,7 @@ export class Erc8004Client {
    * @param agentId - Agent's tokenId
    * @returns Agent identity information
    */
-  async getIdentity(network: Erc8004Network, agentId: number): Promise<AgentIdentity> {
+  async getIdentity(network: Erc8004Network, agentId: AgentId): Promise<AgentIdentity> {
     const url = `${this.baseUrl}/identity/${network}/${agentId}`;
 
     const controller = new AbortController();
@@ -2673,7 +2874,7 @@ export class Erc8004Client {
    */
   async getReputation(
     network: Erc8004Network,
-    agentId: number,
+    agentId: AgentId,
     options: {
       tag1?: string;
       tag2?: string;
@@ -2795,13 +2996,24 @@ export class Erc8004Client {
    */
   async revokeFeedback(
     network: Erc8004Network,
-    agentId: number,
-    feedbackIndex: number
+    agentId: AgentId,
+    feedbackIndex: number,
+    options?: { sealHash?: string }
   ): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback/revoke`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    const payload: Record<string, unknown> = {
+      x402Version: 1,
+      network,
+      agentId,
+      feedbackIndex,
+    };
+    if (options?.sealHash) {
+      payload.sealHash = options.sealHash;
+    }
 
     try {
       const response = await fetch(url, {
@@ -2810,12 +3022,7 @@ export class Erc8004Client {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          x402Version: 1,
-          network,
-          agentId,
-          feedbackIndex,
-        }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -2922,15 +3129,29 @@ export class Erc8004Client {
    */
   async appendResponse(
     network: Erc8004Network,
-    agentId: number,
+    agentId: AgentId,
     feedbackIndex: number,
     response: string,
-    responseUri?: string
+    options?: { responseUri?: string; sealHash?: string }
   ): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback/response`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    const payload: Record<string, unknown> = {
+      x402Version: 1,
+      network,
+      agentId,
+      feedbackIndex,
+      response,
+    };
+    if (options?.responseUri) {
+      payload.responseUri = options.responseUri;
+    }
+    if (options?.sealHash) {
+      payload.sealHash = options.sealHash;
+    }
 
     try {
       const fetchResponse = await fetch(url, {
@@ -2939,14 +3160,7 @@ export class Erc8004Client {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          x402Version: 1,
-          network,
-          agentId,
-          feedbackIndex,
-          response,
-          responseUri,
-        }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -3082,7 +3296,7 @@ export class Erc8004Client {
    */
   async getIdentityMetadata(
     network: Erc8004Network,
-    agentId: number,
+    agentId: AgentId,
     key: string,
   ): Promise<IdentityMetadataResponse> {
     const url = `${this.baseUrl}/identity/${network}/${agentId}/metadata/${encodeURIComponent(key)}`;
