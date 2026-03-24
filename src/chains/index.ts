@@ -2,7 +2,7 @@
  * uvd-x402-sdk - Chain Registry
  *
  * Complete configuration for all 21 supported blockchain networks.
- * EVM chains (13): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE mainnet + testnet)
+ * EVM chains (13): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base mainnet + testnet)
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
  * NEAR (1): Uses NEP-366 meta-transactions
@@ -471,30 +471,30 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     },
   },
 
-  skale: {
+  'skale-base': {
     chainId: 1187947933,
     chainIdHex: '0x46cea59d',
-    name: 'skale',
-    displayName: 'SKALE',
+    name: 'skale-base',
+    displayName: 'SKALE Base',
     networkType: 'evm',
-    rpcUrl: 'https://mainnet.skalenodes.com/v1/honorable-steel-rasalhague',
-    explorerUrl: 'https://honorable-steel-rasalhague.explorer.mainnet.skalenodes.com',
+    rpcUrl: 'https://skale-base.skalenodes.com/v1/base',
+    explorerUrl: 'https://skale-base-explorer.skalenodes.com',
     nativeCurrency: {
-      name: 'sFUEL',
-      symbol: 'sFUEL',
+      name: 'CREDIT',
+      symbol: 'CREDIT',
       decimals: 18,
     },
     usdc: {
       address: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
       decimals: 6,
-      name: 'USDC',  // SKALE uses "USDC"
+      name: 'Bridged USDC (SKALE Bridge)',  // Must match on-chain EIP-712 domain exactly
       version: '2',
     },
     tokens: {
       usdc: {
         address: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
         decimals: 6,
-        name: 'USDC',  // SKALE uses "USDC"
+        name: 'Bridged USDC (SKALE Bridge)',  // Must match on-chain EIP-712 domain exactly
         version: '2',
       },
     },
@@ -504,30 +504,30 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     },
   },
 
-  'skale-testnet': {
+  'skale-base-sepolia': {
     chainId: 324705682,
     chainIdHex: '0x135a9d92',
-    name: 'skale-testnet',
-    displayName: 'SKALE Testnet',
+    name: 'skale-base-sepolia',
+    displayName: 'SKALE Base Sepolia',
     networkType: 'evm',
-    rpcUrl: 'https://testnet.skalenodes.com/v1/lanky-ill-funny-testnet',
-    explorerUrl: 'https://lanky-ill-funny-testnet.explorer.testnet.skalenodes.com',
+    rpcUrl: 'https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha',
+    explorerUrl: 'https://base-sepolia-testnet-explorer.skalenodes.com',
     nativeCurrency: {
-      name: 'sFUEL',
-      symbol: 'sFUEL',
+      name: 'CREDIT',
+      symbol: 'CREDIT',
       decimals: 18,
     },
     usdc: {
       address: '0x2e08028E3C4c2356572E096d8EF835cD5C6030bD',
       decimals: 6,
-      name: 'USDC',  // SKALE testnet uses "USDC"
+      name: 'Bridged USDC (SKALE Bridge)',  // Must match on-chain EIP-712 domain exactly
       version: '2',
     },
     tokens: {
       usdc: {
         address: '0x2e08028E3C4c2356572E096d8EF835cD5C6030bD',
         decimals: 6,
-        name: 'USDC',  // SKALE testnet uses "USDC"
+        name: 'Bridged USDC (SKALE Bridge)',  // Must match on-chain EIP-712 domain exactly
         version: '2',
       },
     },

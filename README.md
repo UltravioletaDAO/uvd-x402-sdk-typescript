@@ -6,7 +6,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 
 ## Features
 
-- **21 Networks**: EVM (13 including Scroll, SKALE), Solana, Fogo, Stellar, NEAR, Algorand, Sui
+- **21 Networks**: EVM (13 including Scroll, SKALE Base), Solana, Fogo, Stellar, NEAR, Algorand, Sui
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT
 - **x402 v1 & v2**: Both protocol versions with auto-detection
 - **Gasless**: Facilitator pays all network fees
@@ -15,6 +15,8 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **ERC-8004 Trustless Agents**: On-chain reputation and identity (EVM + Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
+- **Bazaar Discovery**: Register and discover paid resources across the x402 network
+- **Facilitator Info**: Query version, supported networks, blacklist, and health
 
 ## Installation
 
@@ -450,8 +452,8 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Unichain | 130 | USDC |
 | Monad | 143 | USDC, AUSD |
 | Scroll | 534352 | USDC |
-| SKALE | 1187947933 | USDC |
-| SKALE Testnet | 324705682 | USDC |
+| SKALE Base | 1187947933 | USDC.e |
+| SKALE Base Sepolia | 324705682 | USDC.e |
 
 ### SVM (2)
 
@@ -677,6 +679,73 @@ await escrow.requestRefund({
   escrowId: escrowPayment.id,
   reason: 'Service not delivered',
 });
+
+// Query on-chain escrow state
+const state = await escrow.getEscrowState({
+  network: 'base-mainnet',
+  payer: '0xPayer...',
+  recipient: '0xRecipient...',
+  nonce: '0x1234...',
+});
+```
+
+## Bazaar Discovery
+
+Register and discover paid x402 resources across the network.
+
+```typescript
+import { BazaarClient } from 'uvd-x402-sdk/backend';
+
+const bazaar = new BazaarClient({ apiKey: 'your-api-key' });
+
+// Discover resources
+const results = await bazaar.discover({
+  category: 'ai',
+  network: 'base',
+  maxPrice: '0.10',
+});
+
+for (const resource of results.resources) {
+  console.log(`${resource.name}: ${resource.url}`);
+}
+
+// Register a resource
+const resource = await bazaar.register({
+  url: 'https://api.example.com/v1/generate',
+  name: 'Image Generator API',
+  description: 'Generate images with AI',
+  category: 'ai',
+  networks: ['base', 'ethereum'],
+  price: '0.05',
+  payTo: '0x1234...',
+});
+```
+
+## Facilitator Info
+
+Query the facilitator for version, supported networks, and compliance data.
+
+```typescript
+import { FacilitatorClient } from 'uvd-x402-sdk/backend';
+
+const client = new FacilitatorClient();
+
+// Check version
+const { version } = await client.getVersion();
+console.log(`Facilitator: v${version}`);
+
+// List supported networks
+const supported = await client.getSupported();
+for (const kind of supported.kinds) {
+  console.log(`  ${kind.network} - ${kind.scheme}`);
+}
+
+// Check blacklist
+const bl = await client.getBlacklist();
+console.log(`Blocked addresses: ${bl.totalBlocked}`);
+
+// Health check
+const isHealthy = await client.healthCheck();
 ```
 
 ## Links
