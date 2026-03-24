@@ -902,7 +902,7 @@ export type BazaarNetwork =
   | 'unichain'
   | 'monad'
   | 'scroll'
-  | 'skale'
+  | 'skale-base'
   | 'solana'
   | 'fogo'
   | 'stellar'
