@@ -526,22 +526,31 @@ app.post('/api/premium', async (req, res) => {
     return res.status(status).set(headers).json(body);
   }
 
-  // Verify and settle
+  // Verify first, then settle when you're ready to fulfill the request
   const client = new FacilitatorClient();
   const requirements = buildPaymentRequirements({
     amount: '1.00',
     recipient: process.env.RECIPIENT,
+    resource: 'https://api.example.com/premium',
+    chainName: 'base',
+    x402Version: payment.x402Version,
   });
 
-  const result = await client.verifyAndSettle(payment, requirements);
-
-  if (!result.verified) {
-    return res.status(402).json({ error: result.error });
+  const verifyResult = await client.verify(payment, requirements);
+  if (!verifyResult.isValid) {
+    return res.status(402).json({ error: verifyResult.invalidReason });
   }
 
-  res.json({ data: 'premium content', txHash: result.transactionHash });
+  const settleResult = await client.settle(payment, requirements);
+  if (!settleResult.success) {
+    return res.status(500).json({ error: settleResult.error });
+  }
+
+  res.json({ data: 'premium content', txHash: settleResult.transactionHash });
 });
 ```
+
+`createPaymentMiddleware()` and `createHonoMiddleware()` verify by default and attach settlement context for manual control. Use `settlementStrategy: 'before-handler'` only if you intentionally want eager settlement before your handler runs.
 
 ## React
 

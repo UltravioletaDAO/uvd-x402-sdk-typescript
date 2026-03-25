@@ -206,6 +206,19 @@ export class X402Client {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
     }
 
+    // Private key connections cannot use wallet_switchEthereumChain — re-create provider
+    if (this.provider instanceof ethers.JsonRpcProvider && this.signer instanceof ethers.Wallet) {
+      const rpcProvider = new ethers.JsonRpcProvider(chain.rpcUrl);
+      const wallet = new ethers.Wallet(this.signer.privateKey, rpcProvider);
+      this.provider = rpcProvider;
+      this.signer = wallet;
+      this.currentChainId = chain.chainId;
+      this.currentChainName = chain.name;
+      this.emit('chainChanged', { chainId: chain.chainId, chainName: chain.name });
+      this.log('Switched chain (private key mode)', { chain: chain.name });
+      return;
+    }
+
     await this.switchEVMChain(chain);
   }
 
