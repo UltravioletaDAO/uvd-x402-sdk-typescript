@@ -225,3 +225,25 @@ export { X402Error, DEFAULT_CONFIG, CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from './
 // Facilitator configuration
 export { FACILITATOR_ADDRESSES, getFacilitatorAddress } from './facilitator';
 export type { FacilitatorAddresses } from './facilitator';
+
+// Server-side middleware and facilitator client
+export {
+  FacilitatorClient,
+  createPaymentMiddleware,
+  createHonoMiddleware,
+  create402Response,
+  extractPaymentFromHeaders,
+  buildPaymentRequirements,
+  buildVerifyRequest,
+  buildSettleRequest,
+  getCorsHeaders,
+  X402_CORS_HEADERS,
+  X402_HEADER_NAMES,
+} from './backend';
+export type {
+  FacilitatorClientOptions,
+  HonoMiddlewareOptions,
+  PaymentAcceptance,
+  PaymentMiddlewareOptions,
+  VerifiedPaymentState,
+} from './backend';

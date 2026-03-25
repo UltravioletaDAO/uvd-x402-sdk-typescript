@@ -69,7 +69,7 @@ import type {
   X402Header,
   X402Version,
 } from '../types';
-import { decodeX402Header, chainToCAIP2 } from '../utils';
+import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
 import { getChainByName } from '../chains';
 
 // ============================================================================
@@ -163,6 +163,59 @@ export interface PaymentRequirementsOptions {
   /** x402 version to use */
   x402Version?: X402Version;
 }
+
+/**
+ * x402 payment option advertised in a 402 response.
+ *
+ * The SDK keeps the response shape richer than the minimal protocol fields so
+ * servers can preserve settlement-critical metadata such as payTo and extra.
+ */
+export interface PaymentAcceptance {
+  network: string;
+  asset: string;
+  amount: string;
+  payTo?: string;
+  facilitator?: string;
+  resource?: string;
+  description?: string;
+  mimeType?: string;
+  maxTimeoutSeconds?: number;
+  outputSchema?: unknown;
+  extra?: unknown;
+}
+
+/**
+ * Verified payment context attached by server middleware.
+ */
+export interface VerifiedPaymentState {
+  payment: X402Header;
+  requirements: PaymentRequirements;
+  verifyResult: VerifyResponse;
+  settle: () => Promise<SettleResponse>;
+}
+
+/**
+ * Shared server middleware options.
+ */
+export interface PaymentMiddlewareOptions extends FacilitatorClientOptions {
+  /** Alias for baseUrl to keep middleware options ergonomic */
+  facilitatorUrl?: string;
+  /**
+   * Settlement behavior after verification.
+   * - manual: verify only; caller settles explicitly
+   * - before-handler: settle immediately before calling next()
+   */
+  settlementStrategy?: 'manual' | 'before-handler';
+}
+
+/**
+ * Custom resolver for selecting the correct payment requirement when multiple
+ * accepts are advertised.
+ */
+export type PaymentRequirementResolver = (
+  payment: X402Header,
+  requirements: PaymentRequirements[]
+) => PaymentRequirements | null | Promise<PaymentRequirements | null>;
 
 // ============================================================================
 // HEADER PARSING
@@ -779,23 +832,27 @@ export class FacilitatorClient {
 export function create402Response(
   requirements: PaymentRequirementsOptions,
   options: {
-    accepts?: Array<{ network: string; asset: string; amount: string }>;
+    accepts?: PaymentAcceptance[];
   } = {}
 ): {
   status: 402;
   headers: Record<string, string>;
   body: Record<string, unknown>;
 } {
-  const reqs = buildPaymentRequirements(requirements);
-
-  const body: Record<string, unknown> = {
-    x402Version: requirements.x402Version || 1,
-    ...reqs,
-  };
-
-  if (options.accepts) {
-    body.accepts = options.accepts;
-  }
+  const primaryRequirement = buildPaymentRequirements(requirements);
+  const version = requirements.x402Version
+    || ((options.accepts && options.accepts.length > 0)
+      || primaryRequirement.network.includes(':')
+      || (options.accepts || []).some((accept) => accept.network.includes(':'))
+      ? 2
+      : 1);
+  const advertisedRequirements = [
+    normalizeRequirementForVersion(primaryRequirement, version),
+    ...(options.accepts || []).map((accept) =>
+      buildRequirementFromAcceptance(accept, primaryRequirement.resource, version, primaryRequirement)
+    ),
+  ];
+  const body = create402ResponseBody(advertisedRequirements[0], advertisedRequirements, version);
 
   return {
     status: 402,
@@ -804,6 +861,275 @@ export function create402Response(
       ...X402_CORS_HEADERS,
     },
     body,
+  };
+}
+
+const DEFAULT_PAYMENT_DESCRIPTION = 'Payment required';
+const DEFAULT_PAYMENT_MIME_TYPE = 'application/json';
+const DEFAULT_PAYMENT_TIMEOUT_SECONDS = 300;
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function resolveAdvertisedVersion(
+  accepts: PaymentAcceptance[],
+  requestedVersion?: X402Version | 'auto'
+): X402Version {
+  if (requestedVersion && requestedVersion !== 'auto') {
+    return requestedVersion;
+  }
+
+  if (accepts.length > 1 || accepts.some((accept) => accept.network.includes(':'))) {
+    return 2;
+  }
+
+  return 1;
+}
+
+function normalizeRequirementForVersion(
+  requirements: PaymentRequirements,
+  version: X402Version
+): PaymentRequirements {
+  return {
+    ...requirements,
+    network: version === 2
+      ? (requirements.network.includes(':') ? requirements.network : chainToCAIP2(requirements.network))
+      : (requirements.network.includes(':') ? parseNetworkIdentifier(requirements.network) : requirements.network),
+  };
+}
+
+function buildRequirementFromAcceptance(
+  accept: PaymentAcceptance,
+  resource: string,
+  version: X402Version,
+  defaults?: PaymentRequirements
+): PaymentRequirements {
+  const payTo = accept.payTo ?? defaults?.payTo;
+  if (!payTo) {
+    throw new Error('Payment accepts entries must include payTo');
+  }
+
+  return normalizeRequirementForVersion({
+    scheme: 'exact',
+    network: accept.network,
+    maxAmountRequired: accept.amount,
+    resource: accept.resource ?? defaults?.resource ?? resource,
+    description: accept.description ?? defaults?.description ?? DEFAULT_PAYMENT_DESCRIPTION,
+    mimeType: accept.mimeType ?? defaults?.mimeType ?? DEFAULT_PAYMENT_MIME_TYPE,
+    payTo,
+    asset: accept.asset,
+    maxTimeoutSeconds: accept.maxTimeoutSeconds ?? defaults?.maxTimeoutSeconds ?? DEFAULT_PAYMENT_TIMEOUT_SECONDS,
+    ...(accept.outputSchema !== undefined
+      ? { outputSchema: accept.outputSchema }
+      : defaults?.outputSchema !== undefined
+        ? { outputSchema: defaults.outputSchema }
+        : {}),
+    ...(accept.extra !== undefined
+      ? { extra: accept.extra }
+      : defaults?.extra !== undefined
+        ? { extra: defaults.extra }
+        : {}),
+  }, version);
+}
+
+function toPaymentAcceptance(
+  requirements: PaymentRequirements,
+  facilitator?: string
+): PaymentAcceptance {
+  return {
+    network: requirements.network,
+    asset: requirements.asset,
+    amount: requirements.maxAmountRequired,
+    payTo: requirements.payTo,
+    resource: requirements.resource,
+    description: requirements.description,
+    mimeType: requirements.mimeType,
+    maxTimeoutSeconds: requirements.maxTimeoutSeconds,
+    ...(facilitator ? { facilitator } : {}),
+    ...(requirements.outputSchema !== undefined ? { outputSchema: requirements.outputSchema } : {}),
+    ...(requirements.extra !== undefined ? { extra: requirements.extra } : {}),
+  };
+}
+
+function create402ResponseBody(
+  primaryRequirement: PaymentRequirements,
+  advertisedRequirements: PaymentRequirements[],
+  version: X402Version,
+  facilitator?: string
+): Record<string, unknown> {
+  const normalizedPrimary = normalizeRequirementForVersion(primaryRequirement, version);
+  const normalizedAdvertised = advertisedRequirements.map((requirements) =>
+    normalizeRequirementForVersion(requirements, version)
+  );
+
+  const body: Record<string, unknown> = {
+    x402Version: version,
+    ...normalizedPrimary,
+  };
+
+  if (version === 2 && normalizedAdvertised.length > 1) {
+    body.accepts = normalizedAdvertised.map((requirements) =>
+      toPaymentAcceptance(requirements, facilitator)
+    );
+  }
+
+  return body;
+}
+
+function getComparableNetwork(network: string): string {
+  return parseNetworkIdentifier(network).toLowerCase();
+}
+
+function getPaymentRecipient(payment: X402Header): string | undefined {
+  const payload = payment.payload as unknown;
+  if (!isObject(payload)) {
+    return undefined;
+  }
+  const authorization = payload.authorization;
+
+  if (isObject(authorization) && typeof authorization.to === 'string') {
+    return authorization.to.toLowerCase();
+  }
+
+  if (typeof payload.to === 'string') {
+    return payload.to.toLowerCase();
+  }
+
+  return undefined;
+}
+
+function getPaymentAmount(payment: X402Header): string | undefined {
+  const payload = payment.payload as unknown;
+  if (!isObject(payload)) {
+    return undefined;
+  }
+  const authorization = payload.authorization;
+
+  if (isObject(authorization) && typeof authorization.value === 'string') {
+    return authorization.value;
+  }
+
+  if (typeof payload.amount === 'string') {
+    return payload.amount;
+  }
+
+  return undefined;
+}
+
+function getPaymentAsset(payment: X402Header): string | undefined {
+  const payload = payment.payload as unknown;
+  if (!isObject(payload)) {
+    return undefined;
+  }
+
+  if (typeof payload.tokenContract === 'string') {
+    return payload.tokenContract.toLowerCase();
+  }
+
+  return undefined;
+}
+
+async function resolvePaymentRequirement(
+  payment: X402Header,
+  requirements: PaymentRequirements[],
+  resolver?: PaymentRequirementResolver
+): Promise<{ requirement: PaymentRequirements | null; reason?: string }> {
+  const normalizedRequirements = requirements.map((requirements) =>
+    normalizeRequirementForVersion(requirements, payment.x402Version)
+  );
+
+  if (resolver) {
+    const resolved = await resolver(payment, normalizedRequirements);
+    return {
+      requirement: resolved
+        ? normalizeRequirementForVersion(resolved, payment.x402Version)
+        : null,
+      ...(resolved ? {} : { reason: 'Custom requirement resolver did not return a matching requirement.' }),
+    };
+  }
+
+  const networkMatches = normalizedRequirements.filter((requirements) =>
+    getComparableNetwork(requirements.network) === getComparableNetwork(payment.network)
+  );
+
+  if (networkMatches.length === 0) {
+    return {
+      requirement: null,
+      reason: `No advertised payment requirement matched network ${payment.network}.`,
+    };
+  }
+
+  let matches = networkMatches;
+
+  const paymentRecipient = getPaymentRecipient(payment);
+  if (paymentRecipient) {
+    const recipientMatches = matches.filter((requirements) =>
+      requirements.payTo.toLowerCase() === paymentRecipient
+    );
+    if (recipientMatches.length === 0) {
+      return {
+        requirement: null,
+        reason: 'Payment recipient does not match any advertised requirement.',
+      };
+    }
+    matches = recipientMatches;
+  }
+
+  const paymentAmount = getPaymentAmount(payment);
+  if (paymentAmount) {
+    const amountMatches = matches.filter((requirements) =>
+      requirements.maxAmountRequired === paymentAmount
+    );
+    if (amountMatches.length === 0) {
+      return {
+        requirement: null,
+        reason: 'Payment amount does not match any advertised requirement.',
+      };
+    }
+    matches = amountMatches;
+  }
+
+  const paymentAsset = getPaymentAsset(payment);
+  if (paymentAsset) {
+    const assetMatches = matches.filter((requirements) =>
+      requirements.asset.toLowerCase() === paymentAsset
+    );
+    if (assetMatches.length === 0) {
+      return {
+        requirement: null,
+        reason: 'Payment asset does not match any advertised requirement.',
+      };
+    }
+    matches = assetMatches;
+  }
+
+  if (matches.length !== 1) {
+    return {
+      requirement: null,
+      reason: 'Payment matched multiple advertised requirements. Advertise unique network/payTo/amount combinations or provide resolveRequirement().',
+    };
+  }
+
+  return { requirement: matches[0] };
+}
+
+function createVerifiedPaymentState(
+  client: FacilitatorClient,
+  payment: X402Header,
+  requirements: PaymentRequirements,
+  verifyResult: VerifyResponse
+): VerifiedPaymentState {
+  let settleResult: SettleResponse | null = null;
+  return {
+    payment,
+    requirements,
+    verifyResult,
+    settle: async () => {
+      if (settleResult) return settleResult;
+      settleResult = await client.settle(payment, requirements);
+      return settleResult;
+    },
   };
 }
 
@@ -825,20 +1151,29 @@ export function create402Response(
  *   { facilitatorUrl: 'https://facilitator.uvd.xyz' }
  * );
  *
- * app.get('/premium/*', paymentMiddleware, (req, res) => {
+ * app.get('/premium/*', paymentMiddleware, async (req, res) => {
+ *   const settleResult = await req.x402?.settle();
+ *   if (!settleResult?.success) {
+ *     return res.status(500).json({ error: settleResult?.error });
+ *   }
+ *
  *   res.json({ premium: 'data' });
  * });
  * ```
  */
 export function createPaymentMiddleware(
   getRequirements: (req: { headers: Record<string, string | string[] | undefined> }) => PaymentRequirementsOptions,
-  options: FacilitatorClientOptions = {}
+  options: PaymentMiddlewareOptions = {}
 ): (
-  req: { headers: Record<string, string | string[] | undefined> },
+  req: { headers: Record<string, string | string[] | undefined>; x402?: VerifiedPaymentState },
   res: { status: (code: number) => { json: (body: unknown) => void; set: (headers: Record<string, string>) => { json: (body: unknown) => void } } },
   next: () => void
 ) => Promise<void> {
-  const client = new FacilitatorClient(options);
+  const client = new FacilitatorClient({
+    baseUrl: options.facilitatorUrl || options.baseUrl,
+    timeout: options.timeout,
+  });
+  const settlementStrategy = options.settlementStrategy || 'before-handler';
 
   return async (req, res, next) => {
     // Extract payment header
@@ -865,9 +1200,147 @@ export function createPaymentMiddleware(
       return;
     }
 
-    // Payment is valid, continue to handler
-    // Note: Settlement should be done after the response is sent
+    req.x402 = createVerifiedPaymentState(client, payment, requirements, verifyResult);
+
+    if (settlementStrategy === 'before-handler') {
+      const settleResult = await req.x402.settle();
+      if (!settleResult.success) {
+        res.status(500).json({
+          error: 'Payment settlement failed',
+          reason: settleResult.error || 'Unknown settlement error',
+        });
+        return;
+      }
+    }
+
     next();
+  };
+}
+
+// ============================================================================
+// HONO MIDDLEWARE
+// ============================================================================
+
+/**
+ * Options for creating a Hono x402 payment middleware
+ */
+export interface HonoMiddlewareOptions extends PaymentMiddlewareOptions {
+  /** Payment requirements to advertise */
+  accepts: PaymentAcceptance[];
+  /** Response version to advertise (defaults to auto) */
+  x402Version?: X402Version | 'auto';
+  /** Custom requirement resolver for ambiguous multi-accept flows */
+  resolveRequirement?: PaymentRequirementResolver;
+}
+
+/**
+ * Create a Hono-compatible middleware for x402 payments.
+ *
+ * Handles the x402 payment flow:
+ * 1. Returns 402 with payment requirements if no X-PAYMENT header
+ * 2. Verifies the payment with the facilitator
+ * 3. Optionally settles before the handler when settlementStrategy is set
+ * 4. Passes control to the next handler on success
+ *
+ * @param options - Middleware options with facilitator URL and payment accepts
+ * @returns Hono middleware function
+ *
+ * @example
+ * ```ts
+ * import { createHonoMiddleware } from 'uvd-x402-sdk';
+ *
+ * const paywall = createHonoMiddleware({
+ *   accepts: [{
+ *     network: 'skale-base',
+ *     asset: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
+ *     amount: '1000000',
+ *     payTo: '0xYourWallet',
+ *     extra: { name: 'Bridged USDC (SKALE Bridge)', version: '2' },
+ *   }],
+ * });
+ *
+ * app.get('/api/premium', paywall, (c) => {
+ *   return c.json({ message: 'Premium content!' });
+ * });
+ * ```
+ */
+export function createHonoMiddleware(options: HonoMiddlewareOptions) {
+  const client = new FacilitatorClient({
+    baseUrl: options.facilitatorUrl || options.baseUrl,
+    timeout: options.timeout,
+  });
+  const settlementStrategy = options.settlementStrategy || 'before-handler';
+
+  if (!options.accepts[0]) {
+    throw new Error('At least one accept entry is required');
+  }
+
+  return async (
+    c: {
+      req: { header: (name: string) => string | undefined; url: string };
+      json: (body: unknown, status?: number) => unknown;
+      set?: (key: string, value: unknown) => void;
+    },
+    next: () => Promise<void>
+  ) => {
+    const paymentHeader = c.req.header('X-PAYMENT') || c.req.header('x-payment');
+    const advertisedVersion = resolveAdvertisedVersion(options.accepts, options.x402Version);
+    const advertisedRequirements = options.accepts.map((accept) =>
+      buildRequirementFromAcceptance(accept, c.req.url, advertisedVersion)
+    );
+
+    if (!paymentHeader) {
+      return c.json(
+        create402ResponseBody(
+          advertisedRequirements[0],
+          advertisedRequirements,
+          advertisedVersion,
+          options.facilitatorUrl
+        ),
+        402
+      );
+    }
+
+    const parsed = parsePaymentHeader(paymentHeader);
+    if (!parsed) {
+      return c.json({ error: 'Invalid X-PAYMENT header' }, 400);
+    }
+
+    const { requirement, reason } = await resolvePaymentRequirement(
+      parsed,
+      advertisedRequirements,
+      options.resolveRequirement
+    );
+
+    if (!requirement) {
+      return c.json({
+        error: 'Payment verification failed',
+        reason,
+      }, 402);
+    }
+
+    const verifyResult = await client.verify(parsed, requirement);
+    if (!verifyResult.isValid) {
+      return c.json({
+        error: 'Payment verification failed',
+        reason: verifyResult.invalidReason,
+      }, 402);
+    }
+
+    const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult);
+    c.set?.('x402', verifiedPayment);
+
+    if (settlementStrategy === 'before-handler') {
+      const settleResult = await verifiedPayment.settle();
+      if (!settleResult.success) {
+        return c.json({
+          error: 'Payment settlement failed',
+          reason: settleResult.error || 'Unknown error',
+        }, 500);
+      }
+    }
+
+    await next();
   };
 }
 
