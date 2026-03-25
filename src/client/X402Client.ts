@@ -53,7 +53,7 @@ export class X402Client {
   private readonly config: Required<Pick<X402ClientConfig, 'facilitatorUrl' | 'defaultChain' | 'autoConnect' | 'debug'>> & X402ClientConfig;
 
   // Wallet state
-  private provider: ethers.BrowserProvider | null = null;
+  private provider: ethers.BrowserProvider | ethers.JsonRpcProvider | null = null;
   private signer: ethers.Signer | null = null;
   private connectedAddress: string | null = null;
   private currentChainId: number | null = null;
@@ -130,6 +130,44 @@ export class X402Client {
       default:
         throw new X402Error(`Unknown network type for chain ${targetChain}`, 'CHAIN_NOT_SUPPORTED');
     }
+  }
+
+  /**
+   * Connect using a private key (Node.js / server-side, no browser wallet needed)
+   */
+  async connectWithPrivateKey(privateKey: string, chainName?: string): Promise<string> {
+    const targetChain = chainName || this.config.defaultChain;
+    const chain = getChainByName(targetChain);
+
+    if (!chain) {
+      throw new X402Error(`Unsupported chain: ${targetChain}`, 'CHAIN_NOT_SUPPORTED');
+    }
+
+    if (!chain.x402.enabled) {
+      throw new X402Error(`Chain ${targetChain} is not enabled for x402 payments`, 'CHAIN_NOT_SUPPORTED');
+    }
+
+    if (chain.networkType !== 'evm') {
+      throw new X402Error('connectWithPrivateKey is only supported for EVM chains', 'CHAIN_NOT_SUPPORTED');
+    }
+
+    this.log(`Connecting with private key on ${chain.displayName}...`);
+
+    const rpcProvider = new ethers.JsonRpcProvider(chain.rpcUrl);
+    const wallet = new ethers.Wallet(privateKey, rpcProvider);
+
+    this.provider = rpcProvider;
+    this.signer = wallet;
+    this.connectedAddress = wallet.address;
+    this.currentChainId = chain.chainId;
+    this.currentNetwork = 'evm';
+    this.currentChainName = chain.name;
+
+    const state = this.getState();
+    this.emit('connect', state);
+    this.log('Private key wallet connected', { address: this.connectedAddress, chain: chain.name });
+
+    return this.connectedAddress;
   }
 
   /**
