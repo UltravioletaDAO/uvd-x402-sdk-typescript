@@ -1120,15 +1120,16 @@ function createVerifiedPaymentState(
   requirements: PaymentRequirements,
   verifyResult: VerifyResponse
 ): VerifiedPaymentState {
-  let settleResult: SettleResponse | null = null;
+  let settlePromise: Promise<SettleResponse> | null = null;
   return {
     payment,
     requirements,
     verifyResult,
-    settle: async () => {
-      if (settleResult) return settleResult;
-      settleResult = await client.settle(payment, requirements);
-      return settleResult;
+    settle: () => {
+      if (!settlePromise) {
+        settlePromise = client.settle(payment, requirements);
+      }
+      return settlePromise;
     },
   };
 }

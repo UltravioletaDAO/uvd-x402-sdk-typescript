@@ -550,7 +550,7 @@ app.post('/api/premium', async (req, res) => {
 });
 ```
 
-`createPaymentMiddleware()` and `createHonoMiddleware()` verify by default and attach settlement context for manual control. Use `settlementStrategy: 'before-handler'` only if you intentionally want eager settlement before your handler runs.
+`createPaymentMiddleware()` and `createHonoMiddleware()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
 
 ## React
 
