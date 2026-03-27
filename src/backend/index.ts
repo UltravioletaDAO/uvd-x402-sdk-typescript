@@ -4218,6 +4218,20 @@ export const OPERATOR_ABI = [
 ];
 
 /**
+ * CREATE3-deployed operators (SKALE, future chains) use updated ABI with extra `bytes data` param
+ * on release() and refundInEscrow(). Pass empty bytes (0x) for the data parameter.
+ */
+export const OPERATOR_ABI_CREATE3 = [
+  'function release(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, bytes data)',
+  'function refundInEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint120 amount, bytes data)',
+  'function charge(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
+  'function refundPostEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
+];
+
+/** Chain IDs using CREATE3-deployed operators with updated ABI */
+const CREATE3_CHAIN_IDS = new Set([1187947933]);
+
+/**
  * AdvancedEscrowClient provides the 5 Advanced Escrow flows via the
  * PaymentOperator contract on 9 supported EVM networks.
  *
@@ -4535,11 +4549,15 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
+      const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
+      const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
+      const contract = new ethers.Contract(this.contracts.operator, abi, this.signer);
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
 
-      const tx = await contract.release(tuple, amt, { gasLimit: this.gasLimit });
+      const tx = isCreate3
+        ? await contract.release(tuple, amt, '0x', { gasLimit: this.gasLimit })
+        : await contract.release(tuple, amt, { gasLimit: this.gasLimit });
       const receipt = await tx.wait();
 
       return {
@@ -4566,11 +4584,15 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
+      const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
+      const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
+      const contract = new ethers.Contract(this.contracts.operator, abi, this.signer);
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
 
-      const tx = await contract.refundInEscrow(tuple, amt, { gasLimit: this.gasLimit });
+      const tx = isCreate3
+        ? await contract.refundInEscrow(tuple, amt, '0x', { gasLimit: this.gasLimit })
+        : await contract.refundInEscrow(tuple, amt, { gasLimit: this.gasLimit });
       const receipt = await tx.wait();
 
       return {
