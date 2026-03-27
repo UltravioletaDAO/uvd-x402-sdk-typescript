@@ -48,7 +48,85 @@ npm install @mysten/sui
 
 ## Quick Start
 
-### EVM Chains
+### Server + Client (Private Key)
+
+The fastest way to get up and running. No browser wallet needed — works in Node.js, scripts, and agents.
+
+**.env**
+
+```bash
+RECEIVING_ADDRESS=0xYourWalletAddress
+PRIVATE_KEY=0xYourPrivateKey
+```
+
+**Server (Hono)**
+
+```bash
+npm install hono @hono/node-server uvd-x402-sdk dotenv
+```
+
+```typescript
+import { Hono } from 'hono';
+import { serve } from '@hono/node-server';
+import { createHonoMiddleware } from 'uvd-x402-sdk';
+import 'dotenv/config';
+
+const app = new Hono();
+const receiver = process.env.RECEIVING_ADDRESS as string;
+
+// x402 payment middleware — handles 402, verify, and settle automatically
+const paywall = createHonoMiddleware({
+  accepts: [{
+    network: 'skale-base',
+    asset: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
+    amount: '1000000', // $1.00 USDC.e (6 decimals)
+    payTo: receiver,
+    extra: {
+      name: 'Bridged USDC (SKALE Bridge)',
+      version: '2',
+    },
+  }],
+});
+
+app.get('/api/free', (c) => c.json({ message: 'This endpoint is free!' }));
+
+app.get('/api/premium', paywall, (c) => {
+  return c.json({ message: 'Payment verified and settled!', timestamp: new Date().toISOString() });
+});
+
+serve({ fetch: app.fetch, port: 3000 });
+console.log('Server running on http://localhost:3000');
+```
+
+**Client (Private Key)**
+
+```bash
+npm install uvd-x402-sdk ethers dotenv
+```
+
+```typescript
+import { X402Client } from 'uvd-x402-sdk';
+import 'dotenv/config';
+
+const client = new X402Client({ defaultChain: 'skale-base' });
+await client.connectWithPrivateKey(process.env.PRIVATE_KEY as string);
+
+const result = await client.createPayment({
+  recipient: process.env.RECEIVING_ADDRESS as string,
+  amount: '1.00',
+});
+
+const response = await fetch('http://localhost:3000/api/premium', {
+  headers: { 'X-PAYMENT': result.paymentHeader },
+});
+
+const data = await response.json();
+console.log('Response:', data);
+```
+
+This example uses SKALE Base (zero gas costs). Replace `network`, `asset`, and `extra` to use any supported chain — see [Supported Networks](#supported-networks).
+
+### EVM Chains (Browser Wallet)
 
 ```typescript
 import { X402Client } from 'uvd-x402-sdk';
