@@ -1,6 +1,6 @@
 {
   "name": "uvd-x402-sdk",
-  "version": "2.31.1",
+  "version": "2.32.0",
   "description": "x402 Payment SDK - Gasless crypto payments across 21 blockchains via Ultravioleta facilitator. Supports EVM (including Scroll, SKALE Base), Solana, Fogo, Stellar, NEAR, Algorand, and Sui. Features: ERC-8004 Trustless Agents, Escrow/Refunds, multi-stablecoin (USDC, EURC, AUSD, PYUSD, USDT).",
   "author": "Ultravioleta DAO <ultravioletadao@gmail.com>",
   "license": "MIT",
@@ -180,6 +180,7 @@
     }
   },
   "devDependencies": {
+    "@hono/node-server": "^1.19.11",
     "@mysten/sui": "^1.45.2",
     "@near-wallet-selector/core": "^10.1.4",
     "@near-wallet-selector/my-near-wallet": "^10.1.4",
@@ -191,7 +192,9 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.7",
     "algosdk": "^3.2.0",
+    "dotenv": "^17.3.1",
     "eslint": "^9.0.0",
+    "hono": "^4.12.9",
     "lute-connect": "^1.4.2",
     "rimraf": "^6.0.0",
     "tsup": "^8.3.0",
