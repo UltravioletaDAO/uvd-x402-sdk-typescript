@@ -4037,9 +4037,9 @@ export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
     refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
     usdc: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
   },
-  // SKALE Base (chain 1187947933) - CREATE3 deployment (Ali's 3rd redeploy)
+  // SKALE Base (chain 1187947933) - CREATE3 deployment, operator via factory
   1187947933: {
-    operator: '0x3Cd5c76Fefe46CB07788Ee8f80B93B20D81941D4',
+    operator: '0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33',
     escrow: '0xBC151792f80C0EB1973d56b0235e6bee2A60e245',
     tokenCollector: '0x9A12A116a44636F55c9e135189A1321Abcfe2f30',
     protocolFeeConfig: '0xf62788834C99B2E85a6891C0b46D1EB996f8f596',
