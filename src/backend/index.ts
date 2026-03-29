@@ -3193,6 +3193,22 @@ export interface RegisterAgentResponse {
 }
 
 /**
+ * Response from GET /identity/{network}/owner/{address}
+ */
+export interface IdentityByOwnerResponse {
+  /** First (lowest) token ID owned by this address */
+  agentId: AgentId;
+  /** The queried address (checksummed) */
+  owner: string;
+  /** Agent's registration URI (may be empty) */
+  agentUri: string;
+  /** Network name */
+  network: string;
+  /** Total number of agent NFTs owned (as string) */
+  balance: string;
+}
+
+/**
  * Response from GET /identity/{network}/{agent_id}/metadata/{key}
  */
 export interface IdentityMetadataResponse {
@@ -3283,6 +3299,48 @@ export class Erc8004Client {
    */
   async getIdentity(network: Erc8004Network, agentId: AgentId): Promise<AgentIdentity> {
     const url = `${this.baseUrl}/identity/${network}/${agentId}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Get agent identity by owner address
+   *
+   * Resolves the first ERC-8004 agent ID owned by a wallet address on a given network.
+   *
+   * @param network - Network to query
+   * @param address - Owner wallet address
+   * @returns Agent identity information including balance
+   *
+   * @example
+   * ```ts
+   * const identity = await client.getIdentityByOwner('base-mainnet', '0x52E0...');
+   * console.log(`Agent #${identity.agentId}, balance: ${identity.balance}`);
+   * ```
+   */
+  async getIdentityByOwner(network: Erc8004Network, address: string): Promise<IdentityByOwnerResponse> {
+    const url = `${this.baseUrl}/identity/${network}/owner/${address}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -3670,10 +3728,11 @@ export class Erc8004Client {
   }
 
   /**
-   * Register a new agent on the Identity Registry
+   * Register an agent on the Identity Registry (idempotent)
    *
-   * The facilitator pays gas fees. Optionally transfer the NFT to a
-   * recipient address (gasless delegation).
+   * If the recipient already owns an agent on the target network, returns the
+   * existing one instead of minting a duplicate. The facilitator pays gas fees.
+   * Optionally transfer the NFT to a recipient address (gasless delegation).
    *
    * @param request - Registration request
    * @returns Registration response with agent ID and transaction hash
