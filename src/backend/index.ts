@@ -2846,7 +2846,7 @@ const SOLANA_AGENT_REGISTRY = '8oo4dC4JvBLwy5tGgiH3WwK4B9PWxL9Z4XjA2jzkQMbQ';
 const SOLANA_ATOM_ENGINE = 'AToMw53aiPQ8j7iHVb4fGt6nzUNxUhcPc3tbPBZuzVVb';
 
 /**
- * ERC-8004 contract addresses per network (18 networks: 16 EVM + 2 Solana)
+ * ERC-8004 contract addresses per network (20 networks: 18 EVM + 2 Solana)
  */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
@@ -2855,7 +2855,7 @@ export const ERC8004_CONTRACTS: Record<string, {
   agentRegistryProgram?: string;
   atomEngineProgram?: string;
 }> = {
-  // Mainnets (9)
+  // Mainnets (10)
   ethereum: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
@@ -2892,7 +2892,11 @@ export const ERC8004_CONTRACTS: Record<string, {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
   },
-  // Testnets (7)
+  'skale-base': {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+  },
+  // Testnets (8)
   'ethereum-sepolia': {
     identityRegistry: TESTNET_IDENTITY,
     reputationRegistry: TESTNET_REPUTATION,
@@ -2928,6 +2932,11 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
   },
+  'skale-base-sepolia': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
   // Solana (2) - uses QuantuLabs 8004-solana Anchor program + ATOM Engine
   solana: {
     agentRegistryProgram: SOLANA_AGENT_REGISTRY,
@@ -2940,13 +2949,13 @@ export const ERC8004_CONTRACTS: Record<string, {
 };
 
 /**
- * Network type for ERC-8004 operations (18 networks: 16 EVM + 2 Solana)
+ * Network type for ERC-8004 operations (20 networks: 18 EVM + 2 Solana)
  */
 export type Erc8004Network =
   // EVM Mainnets
-  | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche'
+  | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'skale-base'
   // EVM Testnets
-  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji'
+  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia'
   // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)
   | 'solana' | 'solana-devnet';
 
