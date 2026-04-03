@@ -222,6 +222,12 @@ export type {
 
 export { X402Error, DEFAULT_CONFIG, CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from './types';
 
+// Signing wallet adapters
+export type { SigningWalletAdapter, EIP3009Params, EIP3009Authorization } from './wallet';
+export { EnvKeyAdapter } from './adapters/env-key';
+export { OWSWalletAdapter } from './adapters/ows';
+export type { OWSWallet } from './adapters/ows';
+
 // Facilitator configuration
 export { FACILITATOR_ADDRESSES, getFacilitatorAddress } from './facilitator';
 export type { FacilitatorAddresses } from './facilitator';
