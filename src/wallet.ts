@@ -133,4 +133,17 @@ export interface SigningWalletAdapter {
    * @returns Signed authorization with v/r/s components
    */
   signEIP3009(params: EIP3009Params): Promise<EIP3009Authorization>;
+
+  /**
+   * Sign a serialized EVM transaction.
+   *
+   * Used by AdvancedEscrowClient for on-chain operations (release, refund,
+   * charge) where the transaction must be signed by the wallet before
+   * broadcast. The unsigned transaction is built by ethers and serialized
+   * to hex; the adapter signs it and returns the signed raw transaction.
+   *
+   * @param unsignedTx - Hex-encoded unsigned transaction (ethers serialized)
+   * @returns Hex-encoded signed raw transaction, ready for broadcast
+   */
+  signTransaction(unsignedTx: string): Promise<string>;
 }

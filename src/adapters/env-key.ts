@@ -119,6 +119,21 @@ export class EnvKeyAdapter implements SigningWalletAdapter {
   }
 
   /**
+   * Sign a serialized EVM transaction.
+   *
+   * Uses the raw private key via ethers.Wallet.signTransaction().
+   * Used by AdvancedEscrowClient for on-chain operations (release,
+   * refund, charge) when constructed with a SigningWalletAdapter.
+   *
+   * @param unsignedTx - Hex-encoded unsigned transaction (ethers serialized)
+   * @returns Hex-encoded signed raw transaction, ready for broadcast
+   */
+  async signTransaction(unsignedTx: string): Promise<string> {
+    const tx = ethers.Transaction.from(unsignedTx);
+    return this.wallet.signTransaction(tx);
+  }
+
+  /**
    * Sign an EIP-3009 ReceiveWithAuthorization for USDC.
    *
    * @param params - EIP-3009 parameters
