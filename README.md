@@ -12,6 +12,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Gasless**: Facilitator pays all network fees
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
+- **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
 - **ERC-8004 Trustless Agents**: On-chain reputation and identity (EVM + Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
@@ -473,6 +474,80 @@ function PayButton() {
   };
 
   return <button onClick={handlePay}>Pay $10</button>;
+}
+```
+
+## Signing Wallet Adapters
+
+Low-level signing primitives for server-side agents, CLI tools, and Open Wallet Standard wallets. These adapters implement EIP-191, EIP-712, and EIP-3009 (gasless USDC transfers).
+
+### EnvKeyAdapter (Server / CLI / Agents)
+
+Signs with a raw private key from the environment or constructor. **Never use in browser contexts.**
+
+```typescript
+import { EnvKeyAdapter } from 'uvd-x402-sdk';
+
+// Option 1: Reads process.env.WALLET_PRIVATE_KEY
+const wallet = new EnvKeyAdapter();
+
+// Option 2: Explicit key
+const wallet = new EnvKeyAdapter(process.env.MY_AGENT_KEY!);
+
+console.log(wallet.getAddress()); // 0x...
+
+// Sign EIP-3009 gasless USDC transfer
+const auth = await wallet.signEIP3009({
+  to: '0xRecipient...',
+  amountUsdc: 1.00,
+  network: 'base',
+});
+// auth contains: from, to, value, nonce, v, r, s, signature
+
+// Sign arbitrary message (EIP-191)
+const sig = await wallet.signMessage('Hello x402');
+
+// Sign EIP-712 typed data
+const result = await wallet.signTypedData(JSON.stringify({
+  domain: { name: 'MyApp', version: '1', chainId: 8453 },
+  types: { Order: [{ name: 'id', type: 'uint256' }] },
+  primaryType: 'Order',
+  message: { id: 42 },
+}));
+```
+
+### OWSWalletAdapter (Open Wallet Standard)
+
+Delegates signing to any wallet that implements the [Open Wallet Standard](https://github.com/open-wallet-standard/open-wallet-standard). Works with browser wallets, agent vaults, and hardware-backed signers.
+
+```bash
+npm install @open-wallet-standard/core  # optional peer dependency
+```
+
+```typescript
+import { OWSWalletAdapter } from 'uvd-x402-sdk';
+
+const wallet = new OWSWalletAdapter(owsWalletInstance);
+
+const auth = await wallet.signEIP3009({
+  to: '0xRecipient...',
+  amountUsdc: 0.50,
+  network: 'base',
+});
+```
+
+### Custom Adapter
+
+Implement the `SigningWalletAdapter` interface for your own signer:
+
+```typescript
+import type { SigningWalletAdapter, EIP3009Params, EIP3009Authorization } from 'uvd-x402-sdk';
+
+class MyAdapter implements SigningWalletAdapter {
+  getAddress(): string { /* ... */ }
+  async signMessage(message: string): Promise<string> { /* ... */ }
+  async signTypedData(typedData: string): Promise<{ signature: string; v: number; r: string; s: string }> { /* ... */ }
+  async signEIP3009(params: EIP3009Params): Promise<EIP3009Authorization> { /* ... */ }
 }
 ```
 
