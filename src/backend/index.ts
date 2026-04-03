@@ -4253,7 +4253,7 @@ export interface AdvancedEscrowContracts {
 export interface AdvancedEscrowClientOptions {
   /** Facilitator URL for AUTHORIZE operations */
   facilitatorUrl?: string;
-  /** JSON-RPC URL for on-chain operations */
+  /** JSON-RPC URL for on-chain operations (required when using SigningWalletAdapter) */
   rpcUrl?: string;
   /**
    * Chain ID (default: 8453 for Base Mainnet).
@@ -4272,6 +4272,28 @@ export interface AdvancedEscrowClientOptions {
    * Ethereum L1 confirmations can take several minutes under congestion.
    */
   timeout?: number;
+  /**
+   * SigningWalletAdapter for OWS wallet signing (v2.36.0+).
+   *
+   * When provided, the client uses the adapter for all signing operations
+   * instead of requiring a raw ethers.Signer. The first constructor argument
+   * is ignored when `wallet` is set.
+   *
+   * Requires `rpcUrl` to be set for on-chain transaction building.
+   *
+   * @example
+   * ```typescript
+   * import { OWSWalletAdapter, AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
+   *
+   * const wallet = new OWSWalletAdapter(owsWallet);
+   * const client = new AdvancedEscrowClient(null, {
+   *   wallet,
+   *   rpcUrl: 'https://mainnet.base.org',
+   *   chainId: 8453,
+   * });
+   * ```
+   */
+  wallet?: import('../wallet').SigningWalletAdapter;
 }
 
 /**
@@ -4310,32 +4332,38 @@ const CREATE3_CHAIN_IDS = new Set([1187947933]);
  * Contract addresses are auto-resolved from the chain ID.
  * Pass custom contracts to override.
  *
- * @example
+ * Two signer modes (v2.36.0+):
+ * - **Legacy**: Pass an ethers.Signer as the first argument.
+ * - **OWS Wallet**: Pass a SigningWalletAdapter via `options.wallet`.
+ *   The adapter signs transactions offline (no raw private key needed).
+ *   Requires `rpcUrl` for transaction building and broadcast.
+ *
+ * @example Legacy mode (ethers.Signer)
  * ```typescript
  * import { ethers } from 'ethers';
  * import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
  *
- * // Base Mainnet (default)
- * const client = new AdvancedEscrowClient(signer, {
- *   facilitatorUrl: 'https://facilitator.ultravioletadao.xyz',
+ * const provider = new ethers.JsonRpcProvider('https://mainnet.base.org');
+ * const signer = new ethers.Wallet(process.env.KEY!, provider);
+ * const client = new AdvancedEscrowClient(signer, { chainId: 8453 });
+ * ```
+ *
+ * @example OWS Wallet mode (SigningWalletAdapter)
+ * ```typescript
+ * import { OWSWalletAdapter } from 'uvd-x402-sdk';
+ * import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
+ *
+ * const wallet = new OWSWalletAdapter(owsWallet);
+ * const client = new AdvancedEscrowClient(null, {
+ *   wallet,
  *   rpcUrl: 'https://mainnet.base.org',
+ *   chainId: 8453,
  * });
+ * await client.init();
  *
- * // Polygon
- * const polyClient = new AdvancedEscrowClient(signer, {
- *   chainId: 137,
- *   rpcUrl: 'https://polygon-rpc.com',
- * });
- *
- * // Lock funds in escrow
  * const pi = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
  * const auth = await client.authorize(pi);
- *
- * // After work is done, release to worker
- * const tx = await client.release(pi);
- *
- * // Or cancel and refund
- * const refund = await client.refundInEscrow(pi);
+ * const release = await client.release(pi);
  * ```
  */
 export class AdvancedEscrowClient {
@@ -4344,15 +4372,48 @@ export class AdvancedEscrowClient {
   private gasLimit: number;
   private readonly timeout: number;
   private contracts: AdvancedEscrowContracts;
-  private signer: any; // ethers.Signer
+  private signer: any; // ethers.Signer (legacy mode)
+  private walletAdapter: import('../wallet').SigningWalletAdapter | null; // OWS mode (v2.36.0+)
+  private rpcUrl: string | undefined;
   private payerAddress: string = '';
 
+  /**
+   * Create an AdvancedEscrowClient.
+   *
+   * Two modes of operation:
+   *
+   * 1. **Legacy (ethers.Signer)**: Pass an ethers Signer as the first argument.
+   *    ```ts
+   *    const client = new AdvancedEscrowClient(signer, { rpcUrl, chainId });
+   *    ```
+   *
+   * 2. **OWS Wallet (SigningWalletAdapter)**: Pass `wallet` in options. The
+   *    first argument is ignored (pass `null`). Requires `rpcUrl` for on-chain
+   *    transaction building and broadcast.
+   *    ```ts
+   *    const wallet = new OWSWalletAdapter(owsWallet);
+   *    const client = new AdvancedEscrowClient(null, { wallet, rpcUrl, chainId });
+   *    ```
+   *
+   * @param signer - ethers.Signer instance (ignored when options.wallet is set)
+   * @param options - Configuration options
+   */
   constructor(signer: any, options: AdvancedEscrowClientOptions = {}) {
-    this.signer = signer;
+    this.walletAdapter = options.wallet || null;
+    this.signer = this.walletAdapter ? null : signer;
+    this.rpcUrl = options.rpcUrl;
     this.facilitatorUrl = (options.facilitatorUrl || 'https://facilitator.ultravioletadao.xyz').replace(/\/$/, '');
     this.chainId = options.chainId || 8453;
     this.gasLimit = options.gasLimit || 300000;
     this.timeout = options.timeout || ESCROW_TIMEOUT_MS[this.chainId] || DEFAULT_ESCROW_TIMEOUT_MS;
+
+    if (this.walletAdapter && !this.rpcUrl) {
+      throw new Error(
+        'AdvancedEscrowClient: rpcUrl is required when using a SigningWalletAdapter. ' +
+        'The adapter signs transactions offline; an RPC provider is needed to build ' +
+        'and broadcast them.'
+      );
+    }
 
     if (options.contracts) {
       this.contracts = options.contracts;
@@ -4370,11 +4431,15 @@ export class AdvancedEscrowClient {
   }
 
   /**
-   * Initialize the client (resolves signer address).
+   * Initialize the client (resolves payer address).
    * Call this before using any methods.
    */
   async init(): Promise<void> {
-    this.payerAddress = await this.signer.getAddress();
+    if (this.walletAdapter) {
+      this.payerAddress = this.walletAdapter.getAddress();
+    } else {
+      this.payerAddress = await this.signer.getAddress();
+    }
   }
 
   /**
@@ -4462,6 +4527,9 @@ export class AdvancedEscrowClient {
 
   /**
    * Sign ReceiveWithAuthorization for ERC-3009.
+   *
+   * Uses SigningWalletAdapter.signTypedData() when in OWS mode,
+   * or ethers Signer.signTypedData() in legacy mode.
    */
   private async signErc3009(auth: Record<string, string>): Promise<string> {
     const domain = {
@@ -4491,6 +4559,19 @@ export class AdvancedEscrowClient {
       nonce: auth.nonce,
     };
 
+    // OWS wallet adapter mode: serialize to JSON and use adapter.signTypedData()
+    if (this.walletAdapter) {
+      const typedData = JSON.stringify({
+        domain,
+        types,
+        primaryType: 'ReceiveWithAuthorization',
+        message,
+      });
+      const result = await this.walletAdapter.signTypedData(typedData);
+      return result.signature;
+    }
+
+    // Legacy ethers.Signer mode
     return this.signer.signTypedData(domain, types, message);
   }
 
@@ -4619,10 +4700,20 @@ export class AdvancedEscrowClient {
       const { ethers } = await import('ethers');
       const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
       const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
-      const contract = new ethers.Contract(this.contracts.operator, abi, this.signer);
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
 
+      // OWS wallet adapter mode: build unsigned TX, sign via adapter, broadcast
+      if (this.walletAdapter) {
+        return this.sendViaAdapter(ethers, abi, (iface) => {
+          return isCreate3
+            ? iface.encodeFunctionData('release', [tuple, amt, '0x'])
+            : iface.encodeFunctionData('release', [tuple, amt]);
+        });
+      }
+
+      // Legacy ethers.Signer mode: contract sends directly
+      const contract = new ethers.Contract(this.contracts.operator, abi, this.signer);
       const tx = isCreate3
         ? await contract.release(tuple, amt, '0x', { gasLimit: this.gasLimit })
         : await contract.release(tuple, amt, { gasLimit: this.gasLimit });
@@ -4654,10 +4745,20 @@ export class AdvancedEscrowClient {
       const { ethers } = await import('ethers');
       const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
       const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
-      const contract = new ethers.Contract(this.contracts.operator, abi, this.signer);
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
 
+      // OWS wallet adapter mode: build unsigned TX, sign via adapter, broadcast
+      if (this.walletAdapter) {
+        return this.sendViaAdapter(ethers, abi, (iface) => {
+          return isCreate3
+            ? iface.encodeFunctionData('refundInEscrow', [tuple, amt, '0x'])
+            : iface.encodeFunctionData('refundInEscrow', [tuple, amt]);
+        });
+      }
+
+      // Legacy ethers.Signer mode
+      const contract = new ethers.Contract(this.contracts.operator, abi, this.signer);
       const tx = isCreate3
         ? await contract.refundInEscrow(tuple, amt, '0x', { gasLimit: this.gasLimit })
         : await contract.refundInEscrow(tuple, amt, { gasLimit: this.gasLimit });
@@ -4965,9 +5066,19 @@ export class AdvancedEscrowClient {
       // Pass raw signature bytes as collectorData (ethers handles hex -> bytes)
       const collectorData = ethers.getBytes(signature);
 
-      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
       const tuple = this.buildTuple(paymentInfo);
 
+      // OWS wallet adapter mode
+      if (this.walletAdapter) {
+        return this.sendViaAdapter(ethers, OPERATOR_ABI, (iface) => {
+          return iface.encodeFunctionData('charge', [
+            tuple, amt, this.contracts.tokenCollector, collectorData,
+          ]);
+        });
+      }
+
+      // Legacy ethers.Signer mode
+      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
       const tx = await contract.charge(
         tuple,
         amt,
@@ -5018,10 +5129,20 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
 
+      // OWS wallet adapter mode
+      if (this.walletAdapter) {
+        return this.sendViaAdapter(ethers, OPERATOR_ABI, (iface) => {
+          return iface.encodeFunctionData('refundPostEscrow', [
+            tuple, amt, tokenCollector || ZERO_ADDRESS, collectorData || '0x',
+          ]);
+        });
+      }
+
+      // Legacy ethers.Signer mode
+      const contract = new ethers.Contract(this.contracts.operator, OPERATOR_ABI, this.signer);
       const tx = await contract.refundPostEscrow(
         tuple,
         amt,
@@ -5040,5 +5161,60 @@ export class AdvancedEscrowClient {
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
+  }
+
+  // ==========================================================================
+  // INTERNAL: Adapter-based transaction signing and broadcast
+  // ==========================================================================
+
+  /**
+   * Build an unsigned transaction, sign via SigningWalletAdapter, and broadcast.
+   *
+   * Used by release(), refundInEscrow(), charge(), refundPostEscrow() when
+   * operating in OWS wallet adapter mode. The adapter signs the serialized
+   * transaction offline; the RPC provider broadcasts the signed raw TX.
+   *
+   * @param ethersModule - ethers namespace (from `const { ethers } = await import('ethers')`)
+   * @param abi - Contract ABI (OPERATOR_ABI or OPERATOR_ABI_CREATE3)
+   * @param encodeCalldata - Function that encodes the calldata using the interface
+   * @returns Transaction result
+   */
+  private async sendViaAdapter(
+    ethersModule: any,
+    abi: string[],
+    encodeCalldata: (iface: any) => string,
+  ): Promise<AdvancedTransactionResult> {
+    const provider = new ethersModule.JsonRpcProvider(this.rpcUrl);
+    const iface = new ethersModule.Interface(abi);
+    const data = encodeCalldata(iface);
+
+    // Build unsigned transaction
+    const nonce = await provider.getTransactionCount(this.payerAddress);
+    const feeData = await provider.getFeeData();
+
+    const unsignedTx = ethersModule.Transaction.from({
+      to: this.contracts.operator,
+      data,
+      gasLimit: this.gasLimit,
+      nonce,
+      chainId: this.chainId,
+      maxFeePerGas: feeData.maxFeePerGas,
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas,
+      type: 2, // EIP-1559
+    });
+
+    // Sign via adapter
+    const signedTxHex = await this.walletAdapter!.signTransaction(unsignedTx.unsignedSerialized);
+
+    // Broadcast
+    const txResponse = await provider.broadcastTransaction(signedTxHex);
+    const receipt = await txResponse.wait();
+
+    return {
+      success: receipt !== null && receipt.status === 1,
+      transactionHash: txResponse.hash,
+      gasUsed: receipt ? Number(receipt.gasUsed) : undefined,
+      error: receipt && receipt.status !== 1 ? 'Transaction reverted' : undefined,
+    };
   }
 }

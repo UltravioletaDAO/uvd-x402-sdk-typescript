@@ -66,6 +66,13 @@ export interface OWSWallet {
     primaryType: string;
     message: Record<string, unknown>;
   }): Promise<{ signature: string }>;
+
+  /** Sign a serialized EVM transaction (hex-encoded) */
+  signTransaction(params: {
+    account: { address: string };
+    transaction: string;
+    chainId: string;
+  }): Promise<{ signedTransaction: string }>;
 }
 
 // ============================================================================
@@ -175,6 +182,33 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
     } catch (error: unknown) {
       throw new X402Error(
         `OWS signTypedData failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'PAYMENT_FAILED',
+        error,
+      );
+    }
+  }
+
+  /**
+   * Sign a serialized EVM transaction.
+   *
+   * Delegates to the OWS wallet's signTransaction method.
+   * Used by AdvancedEscrowClient for on-chain operations (release,
+   * refund, charge) where the wallet signs instead of a raw private key.
+   *
+   * @param unsignedTx - Hex-encoded unsigned transaction
+   * @returns Hex-encoded signed raw transaction
+   */
+  async signTransaction(unsignedTx: string): Promise<string> {
+    try {
+      const result = await this.owsWallet.signTransaction({
+        account: { address: this.address },
+        transaction: unsignedTx,
+        chainId: '1', // chainId is embedded in the serialized TX; this is a hint
+      });
+      return result.signedTransaction;
+    } catch (error: unknown) {
+      throw new X402Error(
+        `OWS signTransaction failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         'PAYMENT_FAILED',
         error,
       );
