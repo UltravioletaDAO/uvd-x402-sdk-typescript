@@ -13,8 +13,10 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
 - **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
-- **ERC-8004 Trustless Agents**: On-chain reputation and identity (EVM + Solana)
+- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 20 networks (18 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
+- **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
+- **Commerce Scheme**: `'commerce'` scheme alias for marketplace integrations (identical to `'escrow'` on-chain)
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
 - **Bazaar Discovery**: Register and discover paid resources across the x402 network
 - **Facilitator Info**: Query version, supported networks, blacklist, and health
@@ -756,9 +758,19 @@ try {
 
 ## ERC-8004 Trustless Agents
 
-Build verifiable on-chain reputation for AI agents and services. Supports **18 networks** (16 EVM + Solana + Solana devnet).
+Build verifiable on-chain reputation for AI agents and services. Supports **20 networks** (18 EVM + 2 Solana).
 
 On EVM networks, agent IDs are sequential numbers. On Solana, agent IDs are base58 pubkey strings. The `AgentId` type (`number | string`) handles both.
+
+### EVM Networks (18)
+
+ethereum, base-mainnet, polygon, arbitrum, optimism, celo, bsc, monad, avalanche, skale-base, ethereum-sepolia, base-sepolia, polygon-amoy, arbitrum-sepolia, optimism-sepolia, celo-sepolia, avalanche-fuji, skale-base-sepolia
+
+### Solana Networks (2)
+
+solana, solana-devnet
+
+### Usage
 
 ```typescript
 import { Erc8004Client, AgentId } from 'uvd-x402-sdk/backend';
@@ -772,6 +784,10 @@ console.log(identity.agentUri);
 // Solana: agent ID is a base58 pubkey string
 const solIdentity = await erc8004.getIdentity('solana', '8oo4dC4JvBLwy5...');
 console.log(solIdentity.agentUri);
+
+// Look up agent by wallet owner address
+const byOwner = await erc8004.getIdentityByOwner('base-mainnet', '0xOwnerAddress...');
+console.log(byOwner.agentId, byOwner.identity.agentUri);
 
 // Get agent reputation
 const reputation = await erc8004.getReputation('ethereum', 42);
@@ -850,6 +866,102 @@ const state = await escrow.getEscrowState({
   nonce: '0x1234...',
 });
 ```
+
+## Advanced Escrow (AdvancedEscrowClient)
+
+Full escrow lifecycle management for EVM chains. Supports both `ethers.Signer` and `SigningWalletAdapter` (EnvKey, OWS) for signing.
+
+Supported on 10 EVM networks: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche.
+
+### With Private Key (ethers.Signer)
+
+```typescript
+import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
+
+const client = new AdvancedEscrowClient(process.env.PRIVATE_KEY!, {
+  chainId: 8453, // Base
+});
+await client.init();
+
+// Build payment info
+const paymentInfo = client.buildPaymentInfo(
+  '0xWorkerAddress...', // receiver
+  '5000000',           // amount in atomic units ($5.00 USDC)
+  'standard',          // tier: 'standard' | 'express' | 'premium'
+);
+
+// Authorize: lock funds in escrow
+const auth = await client.authorize(paymentInfo);
+
+// Release: capture escrowed funds to receiver
+await client.release(paymentInfo);
+
+// Or refund: return escrowed funds to payer
+await client.refundInEscrow(paymentInfo);
+
+// Query escrow state on-chain
+const state = await client.queryEscrowState(paymentInfo);
+```
+
+### With SigningWalletAdapter (OWS)
+
+```typescript
+import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
+import { OWSWalletAdapter } from 'uvd-x402-sdk';
+
+const wallet = new OWSWalletAdapter(owsWalletInstance);
+const client = new AdvancedEscrowClient(null, {
+  wallet,
+  rpcUrl: 'https://mainnet.base.org',
+  chainId: 8453,
+});
+await client.init();
+
+const paymentInfo = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
+const auth = await client.authorize(paymentInfo);
+```
+
+### Gasless Operations via Facilitator
+
+Release and refund can be executed through the facilitator (no gas required):
+
+```typescript
+// Gasless release
+await client.releaseViaFacilitator(paymentInfo);
+
+// Gasless refund
+await client.refundViaFacilitator(paymentInfo);
+```
+
+### Direct Charge (No Escrow)
+
+```typescript
+// Instant payment without escrow hold
+await client.charge(paymentInfo);
+```
+
+## Commerce Scheme
+
+The `'commerce'` scheme is a semantic alias for `'escrow'`, introduced for marketplace integrations (Execution Market, arbiter workflows). It uses the same contracts, ABI, and ERC-3009 flow as `'escrow'`.
+
+```typescript
+import type { X402Scheme } from 'uvd-x402-sdk';
+
+// All three schemes are valid
+const scheme: X402Scheme = 'commerce'; // or 'exact' or 'escrow'
+
+// PaymentRequirements and X402 headers accept all schemes
+const header = {
+  x402Version: 2,
+  scheme: 'commerce',
+  network: 'eip155:8453',
+  payload: { /* ... */ },
+};
+
+// Default behavior unchanged: buildPaymentRequirements() defaults to 'exact'
+```
+
+The facilitator's `/supported` endpoint advertises both `'escrow'` and `'commerce'` entries for all 11 escrow-capable networks (14 entries each).
 
 ## Bazaar Discovery
 
