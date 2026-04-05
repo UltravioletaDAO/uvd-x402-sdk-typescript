@@ -23,6 +23,14 @@
 export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui';
 
 /**
+ * Supported x402 payment schemes
+ * - 'exact': Standard one-shot payment (default)
+ * - 'escrow': Escrow-based payment with verify/settle/refund
+ * - 'commerce': Commerce alias for escrow (marketplace integrations)
+ */
+export type X402Scheme = 'exact' | 'escrow' | 'commerce';
+
+/**
  * Supported stablecoin token types
  * - usdc: USD Coin (Circle) - 6 decimals
  * - eurc: Euro Coin (Circle) - 6 decimals
@@ -473,7 +481,7 @@ export const CAIP2_TO_CHAIN: Record<string, string> = Object.fromEntries(
  */
 export interface X402HeaderV1 {
   x402Version: 1;
-  scheme: 'exact';
+  scheme: X402Scheme;
   network: string;
   payload: X402PayloadData;
 }
@@ -493,7 +501,7 @@ export interface X402PaymentOption {
  */
 export interface X402HeaderV2 {
   x402Version: 2;
-  scheme: 'exact';
+  scheme: X402Scheme;
   network: string; // CAIP-2 format
   payload: X402PayloadData;
   accepts?: X402PaymentOption[];

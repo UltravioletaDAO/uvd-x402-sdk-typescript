@@ -80,8 +80,8 @@ import { getChainByName } from '../chains';
  * Payment requirements sent to the facilitator
  */
 export interface PaymentRequirements {
-  /** Payment scheme (always "exact") */
-  scheme: 'exact';
+  /** Payment scheme */
+  scheme: 'exact' | 'escrow' | 'commerce';
   /** Network name (v1) or CAIP-2 identifier (v2) */
   network: string;
   /** Maximum amount required in atomic units (e.g., "1000000" for 1 USDC) */
