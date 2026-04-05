@@ -192,6 +192,7 @@ export type {
   X402HeaderName,
 
   // x402 header types (v1 and v2)
+  X402Scheme,
   X402Version,
   X402Header,
   X402HeaderV1,

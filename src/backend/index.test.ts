@@ -335,6 +335,61 @@ describe('createHonoMiddleware', () => {
   });
 });
 
+describe('commerce scheme support', () => {
+  it('should accept commerce scheme in payment header', () => {
+    const header = encodePaymentHeader({
+      x402Version: 2,
+      scheme: 'commerce',
+      network: 'eip155:84532',
+      payload: {
+        signature: '0xdead',
+        authorization: {
+          from: '0x0000000000000000000000000000000000000001',
+          to: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          value: '1000000',
+          validAfter: '0',
+          validBefore: '9999999999',
+          nonce: `0x${'11'.repeat(32)}`,
+        },
+      },
+    });
+    const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+    expect(decoded.scheme).toBe('commerce');
+  });
+
+  it('should accept escrow scheme in payment header', () => {
+    const header = encodePaymentHeader({
+      x402Version: 2,
+      scheme: 'escrow',
+      network: 'eip155:84532',
+      payload: {
+        signature: '0xdead',
+        authorization: {
+          from: '0x0000000000000000000000000000000000000001',
+          to: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          value: '1000000',
+          validAfter: '0',
+          validBefore: '9999999999',
+          nonce: `0x${'11'.repeat(32)}`,
+        },
+      },
+    });
+    const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+    expect(decoded.scheme).toBe('escrow');
+  });
+
+  it('should default to exact scheme in buildPaymentRequirements', () => {
+    const response = create402Response({
+      amount: '1.00',
+      recipient: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      resource: 'https://example.com/premium',
+      chainName: 'base',
+    });
+    const body = response.body as Record<string, unknown>;
+    expect(body.scheme).toBe('exact');
+  });
+});
+
 describe('X402Client private-key chain switching', () => {
   it('recreates the signer on the new chain and keeps payment creation working', async () => {
     const client = new X402Client({ defaultChain: 'base' });
