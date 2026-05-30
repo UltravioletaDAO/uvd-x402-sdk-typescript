@@ -9,6 +9,7 @@ export default defineConfig({
     'providers/near/index': 'src/providers/near/index.ts',
     'providers/algorand/index': 'src/providers/algorand/index.ts',
     'providers/sui/index': 'src/providers/sui/index.ts',
+    'providers/xrpl/index': 'src/providers/xrpl/index.ts',
     'utils/index': 'src/utils/index.ts',
     'react/index': 'src/react/index.tsx',
     'adapters/index': 'src/adapters/index.ts',
@@ -35,5 +36,6 @@ export default defineConfig({
     '@perawallet/connect',
     'algosdk',
     '@mysten/sui',
+    'xrpl',
   ],
 });

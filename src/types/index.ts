@@ -420,22 +420,23 @@ export interface SuiPaymentPayload {
 /**
  * XRPL payment payload (pre-signed Payment transaction blob)
  *
- * Uses XRP Ledger pre-signed transactions where:
- * - User constructs and signs a Payment transaction (native XRP)
- * - The signed transaction blob is submitted by the facilitator
- * - The facilitator pays the network transaction fee
+ * Uses the t54 "pre-signed Payment blob" scheme on the XRP Ledger:
+ * - The client builds and FULLY signs a Payment transaction off-chain,
+ *   paying its own XRP network fee.
+ * - The single `signedTxBlob` field (hex-encoded fully-signed XRPL tx blob)
+ *   is sent to the facilitator, which decodes it to re-derive payer/amount/
+ *   destination and submits it.
+ *
+ * All payment-level fields (destination, amount, InvoiceID, SourceTag, etc.)
+ * come from PaymentRequirements/extra, NOT from this payload.
  *
  * XRP is the native asset (6 decimals / drops). There is no token contract.
+ *
+ * The JSON field name is EXACTLY `signedTxBlob` (camelCase).
  */
 export interface XRPLPaymentPayload {
-  /** Hex-encoded signed transaction blob (tx_blob) ready for submission */
-  txBlob: string;
-  /** Sender classic r-address */
-  from: string;
-  /** Recipient classic r-address */
-  to: string;
-  /** Amount in drops (string; 1 XRP = 1,000,000 drops) */
-  amount: string;
+  /** Hex-encoded fully-signed XRPL Payment transaction blob (tx_blob) */
+  signedTxBlob: string;
 }
 
 /**
@@ -629,17 +630,15 @@ export interface X402SuiPayload {
 }
 
 /**
- * XRPL-specific payload in x402 header (pre-signed Payment blob)
+ * XRPL-specific payload in x402 header (t54 pre-signed Payment blob)
+ *
+ * The JSON field name is EXACTLY `signedTxBlob` (camelCase). The facilitator
+ * decodes the blob to re-derive payer/amount/destination; no other fields are
+ * carried in the payload.
  */
 export interface X402XRPLPayload {
-  /** Hex-encoded signed transaction blob (tx_blob) ready for submission */
-  txBlob: string;
-  /** Sender classic r-address */
-  from: string;
-  /** Recipient classic r-address */
-  to: string;
-  /** Amount in drops (string; 1 XRP = 1,000,000 drops) */
-  amount: string;
+  /** Hex-encoded fully-signed XRPL Payment transaction blob (tx_blob) */
+  signedTxBlob: string;
 }
 
 /**
