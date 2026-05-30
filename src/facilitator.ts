@@ -12,6 +12,7 @@
  * - Stellar: Signing authorization entries
  * - NEAR: Acting as relayer for meta-transactions
  * - Sui: Sponsoring transactions (paying gas via sponsored txs)
+ * - XRPL: Submitting pre-signed Payment blobs (paying the network fee)
  */
 
 /**
@@ -124,6 +125,20 @@ export const FACILITATOR_ADDRESSES = {
    * Sui facilitator address (testnet)
    */
   'sui-testnet': '0xabbd16a2fab2a502c9cfe835195a6fc7d70bfc27cffb40b8b286b52a97006e67',
+
+  // ============================================
+  // XRPL (XRP Ledger)
+  // ============================================
+  /**
+   * XRPL facilitator address (mainnet)
+   * Used for: Submitting pre-signed Payment blobs and paying the network fee
+   */
+  'xrpl-mainnet': 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp',
+
+  /**
+   * XRPL facilitator address (testnet)
+   */
+  'xrpl-testnet': 'rGhTioKAFHe75KgVnQtacRiKFuPv28Wbwk',
 } as const;
 
 /**
@@ -161,6 +176,9 @@ export function getFacilitatorAddress(
   }
   if (networkType === 'sui') {
     return FACILITATOR_ADDRESSES.sui;
+  }
+  if (networkType === 'xrpl') {
+    return FACILITATOR_ADDRESSES['xrpl-mainnet'];
   }
 
   return undefined;

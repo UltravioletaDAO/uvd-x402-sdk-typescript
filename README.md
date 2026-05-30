@@ -1,12 +1,12 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 21 blockchain networks using the x402 protocol.
+Gasless crypto payments across 23 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
 ## Features
 
-- **21 Networks**: EVM (13 including Scroll, SKALE Base), Solana, Fogo, Stellar, NEAR, Algorand, Sui
+- **23 Networks**: EVM (13 including Scroll, SKALE Base), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger (mainnet + testnet)
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT
 - **x402 v1 & v2**: Both protocol versions with auto-detection
 - **Gasless**: Facilitator pays all network fees
@@ -629,6 +629,15 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 |---------|--------|--------|
 | Sui | USDC, AUSD | Sui Wallet |
 
+### XRPL
+
+XRP Ledger settles in **native XRP** (6 decimals / drops) via pre-signed Payment transaction blobs. There is no stablecoin/token contract on XRPL. Use network ids `xrpl-mainnet` and `xrpl-testnet`.
+
+| Network | Asset | Network ID |
+|---------|-------|------------|
+| XRP Ledger | XRP (native) | xrpl-mainnet |
+| XRP Ledger Testnet | XRP (native) | xrpl-testnet |
+
 ### Other
 
 | Network | Wallet |
@@ -650,11 +659,13 @@ FACILITATOR_ADDRESSES.algorand; // KIMS5H6QLCUDL65L5UBTOXDPWLMTS7N3AAC3I6B2NCONE
 FACILITATOR_ADDRESSES.stellar;  // GCHPGXJT2WFFRFCA5TV4G4E3PMMXLNIDUH27PKDYA4QJ2XGYZWGFZNHB
 FACILITATOR_ADDRESSES.near;     // uvd-facilitator.near
 FACILITATOR_ADDRESSES.sui;      // 0xe7bbf2b13f7d72714760aa16e024fa1b35a978793f9893d0568a4fbf356a764a
+FACILITATOR_ADDRESSES['xrpl-mainnet']; // rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp
 
 // Or get by chain name
 getFacilitatorAddress('algorand'); // KIMS5H6...
 getFacilitatorAddress('base', 'evm'); // 0x1030...
 getFacilitatorAddress('sui'); // 0xe7bbf...
+getFacilitatorAddress('xrpl-mainnet'); // rfADKk...
 ```
 
 ## Backend

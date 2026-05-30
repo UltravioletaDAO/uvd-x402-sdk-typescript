@@ -3,13 +3,14 @@
  *
  * x402 Payment SDK - Gasless crypto payments using the Ultravioleta facilitator.
  *
- * Supports 18 blockchain networks:
- * - EVM (10): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad
+ * Supports 23 blockchain networks:
+ * - EVM (13): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad, Scroll, SKALE Base (mainnet + testnet)
  * - SVM (2): Solana, Fogo
  * - Stellar (1): Stellar
  * - NEAR (1): NEAR Protocol
  * - Algorand (2): Algorand mainnet and testnet
  * - Sui (2): Sui mainnet and testnet
+ * - XRPL (2): XRP Ledger mainnet and testnet
  *
  * Supports both x402 v1 and v2 protocols.
  *
@@ -133,6 +134,9 @@ export {
   // Sui helper functions
   getSuiChains,
   isSuiChain,
+  // XRPL helper functions
+  getXRPLChains,
+  isXRPLChain,
 } from './chains';
 
 // x402 utilities
@@ -189,6 +193,7 @@ export type {
   NEARPaymentPayload,
   AlgorandPaymentPayload,
   SuiPaymentPayload,
+  XRPLPaymentPayload,
   X402HeaderName,
 
   // x402 header types (v1 and v2)
@@ -206,6 +211,7 @@ export type {
   X402NEARPayload,
   X402AlgorandPayload,
   X402SuiPayload,
+  X402XRPLPayload,
 
   // Config types
   X402ClientConfig,

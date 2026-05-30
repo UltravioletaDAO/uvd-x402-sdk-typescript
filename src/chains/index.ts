@@ -1,13 +1,14 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 21 supported blockchain networks.
+ * Complete configuration for all 23 supported blockchain networks.
  * EVM chains (13): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base mainnet + testnet)
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
  * NEAR (1): Uses NEP-366 meta-transactions
  * Algorand (2): Uses ASA transfers with atomic transaction groups
  * Sui (2): Uses sponsored transactions (facilitator pays gas)
+ * XRPL (2): Native XRP via pre-signed Payment transaction blobs (facilitator pays fee)
  */
 
 import type { ChainConfig, NetworkType, TokenType, TokenConfig } from '../types';
@@ -811,6 +812,63 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       enabled: true,
     },
   },
+
+  // ============================================================================
+  // XRPL (2 networks) - XRP Ledger, native XRP via pre-signed Payment blobs
+  // ============================================================================
+
+  'xrpl-mainnet': {
+    chainId: 0, // Non-EVM (XRPL uses network id strings, no numeric chain ID)
+    chainIdHex: '0x0',
+    name: 'xrpl-mainnet',
+    displayName: 'XRP Ledger',
+    networkType: 'xrpl',
+    rpcUrl: 'https://xrplcluster.com',
+    explorerUrl: 'https://livenet.xrpl.org',
+    nativeCurrency: {
+      name: 'XRP',
+      symbol: 'XRP',
+      decimals: 6, // XRPL uses 6 decimals (drops); 1 XRP = 1,000,000 drops
+    },
+    // XRPL settles in native XRP - there is no USDC/token contract.
+    // The `usdc` field describes the native asset for interface compatibility.
+    usdc: {
+      address: 'XRP', // Native asset - no token contract
+      decimals: 6,
+      name: 'XRP',
+      version: '1',
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  'xrpl-testnet': {
+    chainId: 0, // Non-EVM
+    chainIdHex: '0x0',
+    name: 'xrpl-testnet',
+    displayName: 'XRP Ledger Testnet',
+    networkType: 'xrpl',
+    rpcUrl: 'https://s.altnet.rippletest.net:51234',
+    explorerUrl: 'https://testnet.xrpl.org',
+    nativeCurrency: {
+      name: 'XRP',
+      symbol: 'XRP',
+      decimals: 6,
+    },
+    // XRPL settles in native XRP - there is no USDC/token contract.
+    usdc: {
+      address: 'XRP', // Native asset - no token contract
+      decimals: 6,
+      name: 'XRP',
+      version: '1',
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
 };
 
 /**
@@ -928,6 +986,8 @@ export function getExplorerTxUrl(chainName: string, txHash: string): string | nu
       return `${chain.explorerUrl}/tx/${txHash}`;
     case 'sui':
       return `${chain.explorerUrl}/tx/${txHash}`;
+    case 'xrpl':
+      return `${chain.explorerUrl}/transactions/${txHash}`;
     default:
       return null;
   }
@@ -952,6 +1012,10 @@ export function getExplorerAddressUrl(chainName: string, address: string): strin
       return `${chain.explorerUrl}/address/${address}`;
     case 'algorand':
       return `${chain.explorerUrl}/account/${address}`;
+    case 'sui':
+      return `${chain.explorerUrl}/account/${address}`;
+    case 'xrpl':
+      return `${chain.explorerUrl}/accounts/${address}`;
     default:
       return null;
   }
@@ -972,6 +1036,23 @@ export function getAlgorandChains(): ChainConfig[] {
 export function isAlgorandChain(chainName: string): boolean {
   const chain = getChainByName(chainName);
   return chain?.networkType === 'algorand';
+}
+
+/**
+ * Get list of XRPL chains (XRP Ledger mainnet/testnet)
+ */
+export function getXRPLChains(): ChainConfig[] {
+  return Object.values(SUPPORTED_CHAINS).filter(
+    chain => chain.networkType === 'xrpl' && chain.x402.enabled
+  );
+}
+
+/**
+ * Check if a chain is XRPL-based (XRP Ledger)
+ */
+export function isXRPLChain(chainName: string): boolean {
+  const chain = getChainByName(chainName);
+  return chain?.networkType === 'xrpl';
 }
 
 // ============================================================================

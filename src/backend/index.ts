@@ -1382,7 +1382,9 @@ export type BazaarNetwork =
   | 'stellar'
   | 'near'
   | 'algorand'
-  | 'sui';
+  | 'sui'
+  | 'xrpl-mainnet'
+  | 'xrpl-testnet';
 
 /**
  * Token/asset filter for discovery

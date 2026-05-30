@@ -6,6 +6,16 @@ import {
   createPaymentMiddleware,
 } from './index';
 import { X402Client } from '../client/X402Client';
+import {
+  getChainByName,
+  getXRPLChains,
+  isXRPLChain,
+  getNetworkType,
+  getExplorerTxUrl,
+  getExplorerAddressUrl,
+} from '../chains';
+import { chainToCAIP2, caip2ToChain } from '../utils';
+import { getFacilitatorAddress, FACILITATOR_ADDRESSES } from '../facilitator';
 
 function encodePaymentHeader(payment: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(payment), 'utf8').toString('base64');
@@ -387,6 +397,56 @@ describe('commerce scheme support', () => {
     });
     const body = response.body as Record<string, unknown>;
     expect(body.scheme).toBe('exact');
+  });
+});
+
+describe('XRPL network support', () => {
+  it('registers xrpl-mainnet and xrpl-testnet with native XRP (6 decimals, no token contract)', () => {
+    const mainnet = getChainByName('xrpl-mainnet');
+    const testnet = getChainByName('xrpl-testnet');
+
+    expect(mainnet).toBeDefined();
+    expect(testnet).toBeDefined();
+    expect(mainnet?.networkType).toBe('xrpl');
+    expect(testnet?.networkType).toBe('xrpl');
+    expect(mainnet?.nativeCurrency.symbol).toBe('XRP');
+    expect(mainnet?.nativeCurrency.decimals).toBe(6);
+    // XRP is the native asset - no USDC/token contract on XRPL
+    expect(mainnet?.usdc.address).toBe('XRP');
+    expect(mainnet?.tokens).toBeUndefined();
+  });
+
+  it('exposes XRPL via helper functions', () => {
+    const xrplChains = getXRPLChains();
+    expect(xrplChains.map(c => c.name).sort()).toEqual(['xrpl-mainnet', 'xrpl-testnet']);
+    expect(isXRPLChain('xrpl-mainnet')).toBe(true);
+    expect(isXRPLChain('base')).toBe(false);
+    expect(getNetworkType('xrpl-mainnet')).toBe('xrpl');
+  });
+
+  it('uses the v1 network id for CAIP-2 (XRPL has no CAIP-2 form)', () => {
+    expect(chainToCAIP2('xrpl-mainnet')).toBe('xrpl-mainnet');
+    expect(chainToCAIP2('xrpl-testnet')).toBe('xrpl-testnet');
+    expect(caip2ToChain('xrpl-mainnet')).toBe('xrpl-mainnet');
+  });
+
+  it('builds XRPL explorer URLs', () => {
+    expect(getExplorerTxUrl('xrpl-mainnet', 'ABC123')).toBe(
+      'https://livenet.xrpl.org/transactions/ABC123'
+    );
+    expect(getExplorerAddressUrl('xrpl-mainnet', 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp')).toBe(
+      'https://livenet.xrpl.org/accounts/rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp'
+    );
+    expect(getExplorerTxUrl('xrpl-testnet', 'DEF456')).toBe(
+      'https://testnet.xrpl.org/transactions/DEF456'
+    );
+  });
+
+  it('returns the correct facilitator wallet addresses for XRPL', () => {
+    expect(FACILITATOR_ADDRESSES['xrpl-mainnet']).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
+    expect(FACILITATOR_ADDRESSES['xrpl-testnet']).toBe('rGhTioKAFHe75KgVnQtacRiKFuPv28Wbwk');
+    expect(getFacilitatorAddress('xrpl-mainnet')).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
+    expect(getFacilitatorAddress('unknown', 'xrpl')).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
   });
 });
 
