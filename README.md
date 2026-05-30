@@ -47,6 +47,9 @@ npm install algosdk lute-connect
 
 # Sui
 npm install @mysten/sui
+
+# XRPL (XRP Ledger)
+npm install xrpl
 ```
 
 ## Quick Start
@@ -209,6 +212,35 @@ Sui uses sponsored transactions:
 - User creates and signs a programmable transaction block
 - Facilitator sponsors gas (pays in SUI)
 - User pays zero gas fees
+
+### XRPL (XRP Ledger)
+
+```typescript
+import { XRPLProvider } from 'uvd-x402-sdk/xrpl';
+import { getChainByName } from 'uvd-x402-sdk';
+
+// Seed-based signer (Node.js / server-side)
+const xrpl = new XRPLProvider({ seed: process.env.XRPL_SEED });
+const address = await xrpl.connect(); // classic r-address
+const chainConfig = getChainByName('xrpl-mainnet')!;
+
+// Build + FULLY sign the Payment off-chain. Returns JSON: { signedTxBlob }
+const payload = await xrpl.signPayment({
+  recipient: 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp', // classic r-address
+  amount: '10.00',
+}, chainConfig);
+
+const header = xrpl.encodePaymentHeader(payload);
+```
+
+XRPL uses the **t54 "pre-signed Payment blob"** scheme:
+- The client builds and FULLY signs a native XRP `Payment` off-chain (paying its own XRP fee)
+- Only one field is sent to the facilitator: `{ "signedTxBlob": "<hex tx blob>" }`
+- The facilitator decodes the blob to re-derive payer/amount/destination and submits it
+- The Payment sets `LastLedgerSequence`, must NOT set `tfPartialPayment`, and must NOT use `SendMax`
+- All payment-level fields (destination, amount, InvoiceID, SourceTag, Memo) come from the requirements
+
+> Requires the optional peer dependency `xrpl` (`npm install xrpl`).
 
 ### Stellar
 
@@ -631,12 +663,12 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 
 ### XRPL
 
-XRP Ledger settles in **native XRP** (6 decimals / drops) via pre-signed Payment transaction blobs. There is no stablecoin/token contract on XRPL. Use network ids `xrpl-mainnet` and `xrpl-testnet`.
+XRP Ledger settles in **native XRP** (6 decimals / drops) using the **t54 pre-signed Payment blob** scheme. The client builds and fully signs the Payment off-chain and sends `{ signedTxBlob }` to the facilitator. There is no stablecoin/token contract on XRPL. Use network ids `xrpl-mainnet` and `xrpl-testnet`. See [XRPL (XRP Ledger)](#xrpl-xrp-ledger) above for the `uvd-x402-sdk/xrpl` provider usage.
 
-| Network | Asset | Network ID |
-|---------|-------|------------|
-| XRP Ledger | XRP (native) | xrpl-mainnet |
-| XRP Ledger Testnet | XRP (native) | xrpl-testnet |
+| Network | Asset | Network ID | Provider |
+|---------|-------|------------|----------|
+| XRP Ledger | XRP (native) | xrpl-mainnet | `uvd-x402-sdk/xrpl` |
+| XRP Ledger Testnet | XRP (native) | xrpl-testnet | `uvd-x402-sdk/xrpl` |
 
 ### Other
 

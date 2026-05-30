@@ -126,7 +126,15 @@ export class X402Client {
           'CHAIN_NOT_SUPPORTED'
         );
       case 'near':
-        throw new X402Error('NEAR is not yet supported by the facilitator', 'CHAIN_NOT_SUPPORTED');
+        throw new X402Error(
+          'NEAR support requires importing from "uvd-x402-sdk/near"',
+          'CHAIN_NOT_SUPPORTED'
+        );
+      case 'xrpl':
+        throw new X402Error(
+          'XRPL support requires importing from "uvd-x402-sdk/xrpl"',
+          'CHAIN_NOT_SUPPORTED'
+        );
       default:
         throw new X402Error(`Unknown network type for chain ${targetChain}`, 'CHAIN_NOT_SUPPORTED');
     }

@@ -88,6 +88,18 @@
  * // User pays ZERO gas - facilitator sponsors the transaction
  * ```
  *
+ * @example With XRPL (t54 pre-signed Payment blob)
+ * ```ts
+ * import { XRPLProvider } from 'uvd-x402-sdk/xrpl';
+ * import { getChainByName } from 'uvd-x402-sdk';
+ *
+ * const xrpl = new XRPLProvider({ seed: process.env.XRPL_SEED });
+ * const address = await xrpl.connect();
+ * const xrplConfig = getChainByName('xrpl-mainnet')!;
+ * const payload = await xrpl.signPayment(paymentInfo, xrplConfig); // { signedTxBlob }
+ * const header = xrpl.encodePaymentHeader(payload);
+ * ```
+ *
  * @example With React
  * ```tsx
  * import { X402Provider, useX402, usePayment } from 'uvd-x402-sdk/react';
