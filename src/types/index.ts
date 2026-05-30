@@ -17,10 +17,11 @@
  * - 'near': NEAR Protocol (use NEP-366)
  * - 'algorand': Algorand network (use ASA transfers with atomic transactions)
  * - 'sui': Sui blockchain (use sponsored transactions)
+ * - 'xrpl': XRP Ledger (use pre-signed Payment transaction blobs)
  *
  * @deprecated 'solana' type is deprecated, use 'svm' instead
  */
-export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui';
+export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui' | 'xrpl';
 
 /**
  * Supported x402 payment schemes
@@ -212,6 +213,7 @@ export interface PaymentInfo {
     stellar?: string;
     algorand?: string;
     sui?: string;
+    xrpl?: string;
   };
   /** Facilitator address (for Solana fee payer) */
   facilitator?: string;
@@ -416,6 +418,27 @@ export interface SuiPaymentPayload {
 }
 
 /**
+ * XRPL payment payload (pre-signed Payment transaction blob)
+ *
+ * Uses XRP Ledger pre-signed transactions where:
+ * - User constructs and signs a Payment transaction (native XRP)
+ * - The signed transaction blob is submitted by the facilitator
+ * - The facilitator pays the network transaction fee
+ *
+ * XRP is the native asset (6 decimals / drops). There is no token contract.
+ */
+export interface XRPLPaymentPayload {
+  /** Hex-encoded signed transaction blob (tx_blob) ready for submission */
+  txBlob: string;
+  /** Sender classic r-address */
+  from: string;
+  /** Recipient classic r-address */
+  to: string;
+  /** Amount in drops (string; 1 XRP = 1,000,000 drops) */
+  amount: string;
+}
+
+/**
  * Union type for all payment payloads
  */
 export type PaymentPayload =
@@ -424,7 +447,8 @@ export type PaymentPayload =
   | StellarPaymentPayload
   | NEARPaymentPayload
   | AlgorandPaymentPayload
-  | SuiPaymentPayload;
+  | SuiPaymentPayload
+  | XRPLPaymentPayload;
 
 // ============================================================================
 // X402 HEADER TYPES (v1 and v2)
@@ -467,6 +491,9 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   // Sui
   sui: 'sui:mainnet',
   'sui-testnet': 'sui:testnet',
+  // XRPL (XRP Ledger has no CAIP-2 form - the v1 string IS the network id)
+  'xrpl-mainnet': 'xrpl-mainnet',
+  'xrpl-testnet': 'xrpl-testnet',
 };
 
 /**
@@ -602,6 +629,20 @@ export interface X402SuiPayload {
 }
 
 /**
+ * XRPL-specific payload in x402 header (pre-signed Payment blob)
+ */
+export interface X402XRPLPayload {
+  /** Hex-encoded signed transaction blob (tx_blob) ready for submission */
+  txBlob: string;
+  /** Sender classic r-address */
+  from: string;
+  /** Recipient classic r-address */
+  to: string;
+  /** Amount in drops (string; 1 XRP = 1,000,000 drops) */
+  amount: string;
+}
+
+/**
  * Union of all x402 payload types
  */
 export type X402PayloadData =
@@ -611,7 +652,8 @@ export type X402PayloadData =
   | X402StellarPayload
   | X402NEARPayload
   | X402AlgorandPayload
-  | X402SuiPayload;
+  | X402SuiPayload
+  | X402XRPLPayload;
 
 // ============================================================================
 // CLIENT CONFIGURATION

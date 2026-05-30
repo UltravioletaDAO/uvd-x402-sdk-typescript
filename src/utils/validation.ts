@@ -29,6 +29,11 @@ const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 const NEAR_ADDRESS_REGEX = /^[a-z0-9._-]+$/;
 
 /**
+ * Regular expression for validating XRPL classic addresses (r... base58, Ripple alphabet)
+ */
+const XRPL_ADDRESS_REGEX = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
+
+/**
  * Validate that a recipient address is present and valid
  *
  * This function ensures that:
@@ -42,7 +47,7 @@ const NEAR_ADDRESS_REGEX = /^[a-z0-9._-]+$/;
  */
 export function validateRecipient(
   recipient: string | undefined | null,
-  networkType?: 'evm' | 'svm' | 'solana' | 'stellar' | 'near'
+  networkType?: 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'xrpl'
 ): asserts recipient is string {
   // Check for null, undefined, or empty
   if (!recipient) {
@@ -102,6 +107,16 @@ export function validateRecipient(
           throw new X402Error(
             `Invalid NEAR recipient address: "${trimmed}". ` +
             'Expected a valid NEAR account ID.',
+            'INVALID_RECIPIENT'
+          );
+        }
+        break;
+
+      case 'xrpl':
+        if (!XRPL_ADDRESS_REGEX.test(trimmed)) {
+          throw new X402Error(
+            `Invalid XRPL recipient address: "${trimmed}". ` +
+            'Expected a classic r-address (base58, Ripple alphabet).',
             'INVALID_RECIPIENT'
           );
         }
