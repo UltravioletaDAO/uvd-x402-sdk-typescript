@@ -38,8 +38,9 @@ export type X402Scheme = 'exact' | 'escrow' | 'commerce';
  * - ausd: Agora USD (Agora Finance) - 6 decimals
  * - pyusd: PayPal USD (PayPal/Paxos) - 6 decimals
  * - usdt: Tether USD (USDT0 omnichain via LayerZero) - 6 decimals
+ * - usdg: Global Dollar (Paxos) - 6 decimals; settlement stablecoin on Robinhood Chain
  */
-export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'usdt';
+export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'usdt' | 'usdg';
 
 /**
  * Token configuration for EIP-712 signing and transfers
@@ -479,6 +480,8 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   scroll: 'eip155:534352',
   'skale-base': 'eip155:1187947933',
   'skale-base-sepolia': 'eip155:324705682',
+  robinhood: 'eip155:4663',
+  'robinhood-testnet': 'eip155:46630',
   // SVM chains
   solana: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
   fogo: 'svm:fogo',

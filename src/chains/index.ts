@@ -1,8 +1,8 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 23 supported blockchain networks.
- * EVM chains (13): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base mainnet + testnet)
+ * Complete configuration for all 25 supported blockchain networks.
+ * EVM chains (15): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet)
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
  * NEAR (1): Uses NEP-366 meta-transactions
@@ -28,7 +28,7 @@ export const DEFAULT_FACILITATOR_URL = 'https://facilitator.ultravioletadao.xyz'
  */
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // ============================================================================
-  // EVM CHAINS (10 networks)
+  // EVM CHAINS (15 networks)
   // ============================================================================
 
   base: {
@@ -530,6 +530,79 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'Bridged USDC (SKALE Bridge)',  // Must match on-chain EIP-712 domain exactly
         version: '2',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  // Robinhood Chain (Arbitrum Orbit L2). NOTE: there is NO USDC on this chain -
+  // the settlement stablecoin is Paxos USDG (Global Dollar). The `usdc` field
+  // below carries USDG for interface compatibility (same pattern as XRPL's native
+  // asset), and `tokens.usdg` is the canonical entry.
+  // CRITICAL: USDG's on-chain version() getter REVERTS, so the EIP-712 domain
+  // { name: 'Global Dollar', version: '1' } can NEVER be resolved on-chain and
+  // MUST come from this config (mirrored into PaymentRequirements.extra by callers).
+  robinhood: {
+    chainId: 4663,
+    chainIdHex: '0x1237',
+    name: 'robinhood',
+    displayName: 'Robinhood Chain',
+    networkType: 'evm',
+    rpcUrl: 'https://rpc.mainnet.chain.robinhood.com',
+    explorerUrl: 'https://robinhoodchain.blockscout.com',
+    nativeCurrency: {
+      name: 'Ethereum',
+      symbol: 'ETH',
+      decimals: 18,
+    },
+    usdc: {
+      address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168', // Paxos USDG (no USDC on this chain)
+      decimals: 6,
+      name: 'Global Dollar',  // on-chain version() reverts; domain must be supplied off-chain
+      version: '1',
+    },
+    tokens: {
+      usdg: {
+        address: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+        decimals: 6,
+        name: 'Global Dollar',  // on-chain version() reverts; domain must be supplied off-chain
+        version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  'robinhood-testnet': {
+    chainId: 46630,
+    chainIdHex: '0xb626',
+    name: 'robinhood-testnet',
+    displayName: 'Robinhood Chain Testnet',
+    networkType: 'evm',
+    rpcUrl: 'https://rpc.testnet.chain.robinhood.com',
+    explorerUrl: 'https://explorer.testnet.chain.robinhood.com',
+    nativeCurrency: {
+      name: 'Ethereum',
+      symbol: 'ETH',
+      decimals: 18,
+    },
+    usdc: {
+      address: '0x7E955252E15c84f5768B83c41a71F9eba181802F', // Paxos USDG testnet (no USDC on this chain)
+      decimals: 6,
+      name: 'Global Dollar',  // on-chain version() reverts; domain must be supplied off-chain
+      version: '1',
+    },
+    tokens: {
+      usdg: {
+        address: '0x7E955252E15c84f5768B83c41a71F9eba181802F',
+        decimals: 6,
+        name: 'Global Dollar',  // on-chain version() reverts; domain must be supplied off-chain
+        version: '1',
       },
     },
     x402: {
