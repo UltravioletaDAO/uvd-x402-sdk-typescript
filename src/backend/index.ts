@@ -1377,6 +1377,8 @@ export type BazaarNetwork =
   | 'monad'
   | 'scroll'
   | 'skale-base'
+  | 'robinhood'
+  | 'robinhood-testnet'
   | 'solana'
   | 'fogo'
   | 'stellar'
@@ -1389,7 +1391,7 @@ export type BazaarNetwork =
 /**
  * Token/asset filter for discovery
  */
-export type BazaarToken = 'USDC' | 'EURC' | 'AUSD' | 'PYUSD' | 'USDT';
+export type BazaarToken = 'USDC' | 'EURC' | 'AUSD' | 'PYUSD' | 'USDT' | 'USDG';
 
 /**
  * Resource registered in the Bazaar

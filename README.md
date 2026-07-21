@@ -1,13 +1,13 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 23 blockchain networks using the x402 protocol.
+Gasless crypto payments across 25 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
 ## Features
 
-- **23 Networks**: EVM (13 including Scroll, SKALE Base), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger (mainnet + testnet)
-- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT
+- **25 Networks**: EVM (15 including Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger (mainnet + testnet)
+- **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT, USDG (Robinhood Chain)
 - **x402 v1 & v2**: Both protocol versions with auto-detection
 - **Gasless**: Facilitator pays all network fees
 - **Type-Safe**: Full TypeScript support
@@ -624,7 +624,7 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 
 ## Supported Networks
 
-### EVM (13)
+### EVM (15)
 
 | Network | Chain ID | Tokens |
 |---------|----------|--------|
@@ -641,6 +641,10 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Scroll | 534352 | USDC |
 | SKALE Base | 1187947933 | USDC.e |
 | SKALE Base Sepolia | 324705682 | USDC.e |
+| Robinhood Chain | 4663 | USDG |
+| Robinhood Chain Testnet | 46630 | USDG |
+
+> **Robinhood Chain / USDG:** Robinhood Chain has no USDC — the settlement stablecoin is Paxos **USDG** (Global Dollar, 6 decimals, EIP-3009). Its on-chain `version()` getter reverts, so the EIP-712 domain `{ name: "Global Dollar", version: "1" }` can never be resolved on-chain. The SDK carries this domain in the chain config; when constructing `PaymentRequirements` yourself, send it in `extra`: `{ "name": "Global Dollar", "version": "1" }`. Use `tokenType: 'usdg'` (or the default, which resolves to USDG on these networks).
 
 ### SVM (2)
 
