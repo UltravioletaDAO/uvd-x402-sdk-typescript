@@ -1014,33 +1014,57 @@ The facilitator's `/supported` endpoint advertises both `'escrow'` and `'commerc
 
 Register and discover paid x402 resources across the network.
 
+The Bazaar is served by the facilitator itself under `/discovery/*`. No API key, no separate host.
+
 ```typescript
-import { BazaarClient } from 'uvd-x402-sdk/backend';
+import { BazaarClient, isAlive } from 'uvd-x402-sdk/backend';
 
-const bazaar = new BazaarClient({ apiKey: 'your-api-key' });
+const bazaar = new BazaarClient();
 
-// Discover resources
-const results = await bazaar.discover({
-  category: 'ai',
-  network: 'base',
-  maxPrice: '0.10',
+// List resources. Every filter is applied server-side over the whole catalog,
+// so `pagination.total` is the real number of matches -- filtering one page
+// locally is not the same thing and will under-report.
+const page = await bazaar.listResources({
+  network: 'eip155:8453',
+  health: 'alive',   // only endpoints a probe actually reached
+  tier: 'vip',       // first_party | vip | verified | listed
+  limit: 20,
 });
 
-for (const resource of results.resources) {
-  console.log(`${resource.name}: ${resource.url}`);
+for (const r of page.items) {
+  console.log(r.url, r.health?.status, `${r.health?.latencyMs}ms`, r.curation?.label);
+}
+console.log(`${page.items.length} of ${page.pagination.total}`);
+
+// Free-text search. The parameter is `q`; anything else is rejected with a 400.
+const hits = await bazaar.listResources({ q: 'logs' });
+
+// Walk the whole filtered catalog, one page at a time
+for await (const r of bazaar.iterateResources({ health: 'alive' })) {
+  if (isAlive(r)) console.log(r.url);
 }
 
-// Register a resource
-const resource = await bazaar.register({
+// Register a resource. Registration is open and rate limited.
+await bazaar.registerResource({
   url: 'https://api.example.com/v1/generate',
-  name: 'Image Generator API',
   description: 'Generate images with AI',
-  category: 'ai',
-  networks: ['base', 'ethereum'],
-  price: '0.05',
-  payTo: '0x1234...',
+  accepts: [{
+    scheme: 'exact',
+    network: 'eip155:8453',
+    asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    amount: '50000',
+    payTo: '0x1234...',
+    maxTimeoutSeconds: 60,
+  }],
+  metadata: { category: 'ai', tags: ['image'] },
 });
+
+// Aggregate catalog metrics
+const stats = await bazaar.getStats();
+console.log(stats.total, stats.visible, stats.byHealth.alive);
 ```
+
+Timestamps (`firstSeen`, `lastSeen`, `lastUpdated`, `health.lastChecked`) are Unix epoch **seconds**. Use `epochToDate()` to get a `Date`.
 
 ## Facilitator Info
 
