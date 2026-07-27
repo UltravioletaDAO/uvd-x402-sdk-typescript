@@ -1348,693 +1348,492 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
 // ============================================================================
 // BAZAAR DISCOVERY API
 // ============================================================================
+//
+// The Bazaar is the discovery registry served by the facilitator itself, under
+// `/discovery/*`. There is no separate Bazaar host.
 
 /**
- * Resource category for discovery
+ * Maximum length of the free-text `q` filter.
+ *
+ * Mirrors the facilitator's `MAX_SEARCH_LEN`; a longer needle is rejected
+ * server-side with a 400.
  */
-export type BazaarCategory =
-  | 'api'
-  | 'data'
-  | 'ai'
-  | 'media'
-  | 'compute'
-  | 'storage'
-  | 'other';
+export const MAX_SEARCH_LEN = 128;
 
 /**
- * Network/chain filter for discovery
+ * Liveness of a registered resource, as measured by the facilitator's prober.
+ *
+ * Resources that stop answering are quarantined rather than deleted, so filter
+ * on this before paying anyone.
  */
-export type BazaarNetwork =
-  | 'base'
-  | 'ethereum'
-  | 'polygon'
-  | 'arbitrum'
-  | 'optimism'
-  | 'avalanche'
-  | 'celo'
-  | 'hyperevm'
-  | 'unichain'
-  | 'monad'
-  | 'scroll'
-  | 'skale-base'
-  | 'robinhood'
-  | 'robinhood-testnet'
-  | 'solana'
-  | 'fogo'
-  | 'stellar'
-  | 'near'
-  | 'algorand'
-  | 'sui'
-  | 'xrpl-mainnet'
-  | 'xrpl-testnet';
+export type DiscoveryHealthStatus =
+  | 'alive'
+  | 'degraded'
+  | 'auth_gated'
+  | 'quarantined'
+  | 'unknown'
+  | 'unprobeable';
+
+/** Values accepted by the `health` filter, including the `any` escape hatch. */
+export const HEALTH_FILTERS = [
+  'alive',
+  'degraded',
+  'auth_gated',
+  'quarantined',
+  'unknown',
+  'unprobeable',
+  'any',
+] as const;
+
+/** Curated tier, in descending order of trust. */
+export type DiscoveryTier = 'first_party' | 'vip' | 'verified' | 'listed';
+
+/** Values accepted by the `tier` filter. */
+export const TIER_FILTERS = [
+  'first_party',
+  'vip',
+  'verified',
+  'listed',
+] as const;
+
+/** How a resource got into the registry. */
+export type DiscoverySource =
+  | 'self_registered'
+  | 'settlement'
+  | 'crawled'
+  | 'aggregated';
+
+/** Health of a single resource, as reported by the registry's prober. */
+export interface DiscoveryHealth {
+  /** Last observed liveness */
+  status?: DiscoveryHealthStatus;
+  /** Unix epoch seconds of the last probe */
+  lastChecked?: number;
+  /** HTTP status the probe got back (402 is the healthy answer for x402) */
+  httpStatus?: number;
+  /** Round-trip time of the last probe, in milliseconds */
+  latencyMs?: number;
+}
+
+/** Curation metadata attached to a resource. */
+export interface DiscoveryCuration {
+  /** Curated tier */
+  tier?: DiscoveryTier;
+  /** Human-readable name of the curated set */
+  label?: string;
+}
+
+/** One payment method a resource declares. */
+export interface DiscoveryAccepts {
+  /** Payment scheme ("exact", "escrow", "commerce") */
+  scheme: string;
+  /** CAIP-2 network id, e.g. "eip155:8453" */
+  network: string;
+  /** Token contract address */
+  asset?: string;
+  /** Price in atomic units of `asset` */
+  amount?: string;
+  /** Recipient address */
+  payTo?: string;
+  /** Settlement deadline in seconds */
+  maxTimeoutSeconds?: number;
+  /** Scheme-specific extras (EIP-712 domain, etc.) */
+  extra?: Record<string, unknown>;
+  /** Anything the registry adds later */
+  [key: string]: unknown;
+}
 
 /**
- * Token/asset filter for discovery
+ * A discoverable paid resource, exactly as `GET /discovery/resources` serves it.
+ *
+ * Timestamps are Unix epoch **seconds**, not ISO strings and not milliseconds.
  */
-export type BazaarToken = 'USDC' | 'EURC' | 'AUSD' | 'PYUSD' | 'USDT' | 'USDG';
-
-/**
- * Resource registered in the Bazaar
- */
-export interface BazaarResource {
-  /** Unique resource ID */
-  id: string;
-  /** Resource URL */
+export interface DiscoveryResource {
+  /** Resource URL. This is the registry's primary key -- there is no `id` */
   url: string;
-  /** Human-readable name */
-  name: string;
-  /** Description of the resource */
-  description: string;
-  /** Category of the resource */
-  category: BazaarCategory;
-  /** Supported networks for payment */
-  networks: BazaarNetwork[];
-  /** Supported tokens for payment */
-  tokens: BazaarToken[];
-  /** Price per request in atomic units */
-  pricePerRequest: string;
-  /** Price currency (e.g., "USDC") */
-  priceCurrency: BazaarToken;
-  /** Recipient address for payments */
-  payTo: string;
-  /** MIME type of the resource */
-  mimeType: string;
-  /** Optional output schema */
-  outputSchema?: unknown;
-  /** Resource owner/provider */
-  provider?: string;
-  /** Resource tags for search */
-  tags?: string[];
-  /** Whether the resource is active */
-  isActive: boolean;
-  /** ISO timestamp of creation */
-  createdAt: string;
-  /** ISO timestamp of last update */
-  updatedAt: string;
+  /** Resource type ("http", "mcp", "a2a") */
+  type: string;
+  /** x402 protocol version the resource speaks */
+  x402Version: number;
+  /** Human-readable description */
+  description?: string;
+  /** Payment methods the resource accepts */
+  accepts: DiscoveryAccepts[];
+  /** Free-form metadata (category, provider, tags) */
+  metadata?: Record<string, unknown>;
+  /** How this resource entered the registry */
+  source?: DiscoverySource;
+  /** Facilitator this resource was aggregated from */
+  sourceFacilitator?: string;
+  /** Unix epoch seconds when the registry first saw this resource */
+  firstSeen?: number;
+  /** Unix epoch seconds when the registry last saw this resource */
+  lastSeen?: number;
+  /** Unix epoch seconds of the last change to this record */
+  lastUpdated?: number;
+  /** Liveness, when the resource has been probed */
+  health?: DiscoveryHealth;
+  /** Curation tier, when the resource has been curated */
+  curation?: DiscoveryCuration;
+  /** Anything the registry adds later */
+  [key: string]: unknown;
 }
 
-/**
- * Options for registering a resource
- */
-export interface BazaarRegisterOptions {
-  /** Resource URL (must be unique) */
-  url: string;
-  /** Human-readable name */
-  name: string;
-  /** Description of the resource */
-  description: string;
-  /** Category of the resource */
-  category: BazaarCategory;
-  /** Supported networks for payment */
-  networks: BazaarNetwork[];
-  /** Supported tokens for payment */
-  tokens?: BazaarToken[];
-  /** Price per request (e.g., "0.01") */
-  price: string;
-  /** Price currency (default: USDC) */
-  priceCurrency?: BazaarToken;
-  /** Recipient address for payments */
-  payTo: string;
-  /** MIME type of the resource (default: application/json) */
-  mimeType?: string;
-  /** Optional output schema */
-  outputSchema?: unknown;
-  /** Resource tags for search */
-  tags?: string[];
-}
-
-/**
- * Options for discovering resources
- */
-export interface BazaarDiscoverOptions {
-  /** Filter by category */
-  category?: BazaarCategory;
-  /** Filter by network */
-  network?: BazaarNetwork;
-  /** Filter by token */
-  token?: BazaarToken;
-  /** Filter by provider address */
-  provider?: string;
-  /** Filter by tags (match any) */
-  tags?: string[];
-  /** Search query (name, description) */
-  query?: string;
-  /** Maximum price filter (e.g., "0.10") */
-  maxPrice?: string;
-  /** Page number (1-indexed) */
-  page?: number;
-  /** Results per page (default: 20, max: 100) */
-  limit?: number;
-  /** Sort order */
-  sortBy?: 'price' | 'createdAt' | 'name';
-  /** Sort direction */
-  sortOrder?: 'asc' | 'desc';
-}
-
-/**
- * Paginated discovery response
- */
-export interface BazaarDiscoverResponse {
-  /** List of resources matching the query */
-  resources: BazaarResource[];
-  /** Total number of matching resources */
-  total: number;
-  /** Current page number */
-  page: number;
-  /** Results per page */
+/** Pagination envelope of `GET /discovery/resources`. */
+export interface DiscoveryPagination {
+  /** Page size that was applied */
   limit: number;
-  /** Total number of pages */
-  totalPages: number;
-  /** Whether there are more pages */
-  hasMore: boolean;
+  /** Offset that was applied */
+  offset: number;
+  /** Total number of resources matching the filters, across all pages */
+  total: number;
+}
+
+/** Paginated response from `GET /discovery/resources`. */
+export interface DiscoveryResponse {
+  /** x402 protocol version of the response envelope */
+  x402Version: number;
+  /** Resources on this page */
+  items: DiscoveryResource[];
+  /** Pagination state */
+  pagination: DiscoveryPagination;
 }
 
 /**
- * Options for the BazaarClient
+ * Filters for `listResources()`.
+ *
+ * Every one of these is applied server-side over the whole catalog, so
+ * `pagination.total` reflects the filtered set. Filtering a page after the
+ * fact is not the same thing and will under-report.
  */
+export interface DiscoveryListOptions {
+  /** Page size (default: 10, max: 100) */
+  limit?: number;
+  /** Number of resources to skip */
+  offset?: number;
+  /** Filter by category */
+  category?: string;
+  /** Filter by network, CAIP-2 or v1 name */
+  network?: string;
+  /** Filter by provider name */
+  provider?: string;
+  /** Filter by tag */
+  tag?: string;
+  /** Filter by how the resource was discovered */
+  source?: DiscoverySource;
+  /** Filter by originating facilitator */
+  sourceFacilitator?: string;
+  /** Filter by liveness, or 'any' to opt out of the default visibility rules */
+  health?: DiscoveryHealthStatus | 'any';
+  /** Filter by curated tier */
+  tier?: DiscoveryTier;
+  /** Free-text search over url / description / provider / category / tags */
+  q?: string;
+}
+
+/** Options for `registerResource()`. */
+export interface DiscoveryRegisterOptions {
+  /** URL of the paid resource. Doubles as its identity in the registry */
+  url: string;
+  /** Resource type (default: "http") */
+  type?: string;
+  /** Human-readable description */
+  description?: string;
+  /** Payment methods the resource accepts */
+  accepts?: DiscoveryAccepts[];
+  /** Free-form metadata (category, provider, tags) */
+  metadata?: Record<string, unknown>;
+}
+
+/** Aggregate catalog metrics from `GET /discovery/stats`. */
+export interface DiscoveryStats {
+  /** Every record the registry holds, including quarantined ones */
+  total: number;
+  /** Records served by default listings */
+  visible: number;
+  /** Counts by discovery source */
+  bySource: Record<string, number>;
+  /** Counts by originating facilitator */
+  bySourceFacilitator: Record<string, number>;
+  /** Counts by CAIP-2 network */
+  byNetwork: Record<string, number>;
+  /** Counts by curated tier */
+  byTier: Record<string, number>;
+  /** Counts by liveness */
+  byHealth: Record<string, number>;
+  /** Unix epoch seconds this snapshot was computed (60s cache) */
+  generatedAt?: number;
+}
+
+/** Options for the {@link BazaarClient}. */
 export interface BazaarClientOptions {
-  /** Base URL of the Bazaar API (default: https://bazaar.ultravioletadao.xyz) */
+  /** Facilitator base URL (default: https://facilitator.ultravioletadao.xyz) */
   baseUrl?: string;
-  /** API key for authenticated operations (required for register/update/delete) */
-  apiKey?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
 }
 
+/** Render an epoch-seconds field as a `Date`. */
+export function epochToDate(seconds?: number): Date | undefined {
+  return seconds === undefined ? undefined : new Date(seconds * 1000);
+}
+
+/** True when the last probe reached this resource. */
+export function isAlive(resource: DiscoveryResource): boolean {
+  return resource.health?.status === 'alive';
+}
+
 /**
- * Client for interacting with the x402 Bazaar Discovery API
+ * Client for the x402 Bazaar Discovery API.
  *
- * The Bazaar is a discovery service for x402-enabled resources.
- * Providers can register their APIs and consumers can discover them.
+ * The Bazaar is the facilitator's own registry of x402-enabled resources.
+ * Providers register their endpoints and consumers discover them, with a
+ * liveness probe and a curation tier attached to every record.
  *
  * @example
  * ```ts
- * // Discover resources (no auth required)
  * const bazaar = new BazaarClient();
- * const results = await bazaar.discover({
- *   category: 'ai',
- *   network: 'base',
- *   maxPrice: '0.10',
- * });
  *
- * // Register a resource (requires API key)
- * const authBazaar = new BazaarClient({ apiKey: 'your-api-key' });
- * const resource = await authBazaar.register({
- *   url: 'https://api.example.com/v1/chat',
- *   name: 'AI Chat API',
- *   description: 'Pay-per-message AI chat',
- *   category: 'ai',
- *   networks: ['base', 'ethereum'],
- *   price: '0.01',
- *   payTo: '0x...',
+ * // Only endpoints a probe actually reached, best-curated first
+ * const page = await bazaar.listResources({ limit: 20, health: 'alive', tier: 'vip' });
+ * for (const r of page.items) {
+ *   console.log(r.url, r.health?.status, r.health?.latencyMs, r.curation?.label);
+ * }
+ *
+ * // Free-text search runs server-side over the whole catalog
+ * const hits = await bazaar.listResources({ q: 'logs' });
+ * console.log(hits.pagination.total);
+ *
+ * // Register your own
+ * await bazaar.registerResource({
+ *   url: 'https://api.example.com/v1/generate',
+ *   description: 'Generate images with AI',
+ *   accepts: [{
+ *     scheme: 'exact',
+ *     network: 'eip155:8453',
+ *     asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+ *     amount: '10000',
+ *     payTo: '0xYourWallet...',
+ *     maxTimeoutSeconds: 60,
+ *   }],
+ *   metadata: { category: 'ai', tags: ['image'] },
  * });
  * ```
  */
 export class BazaarClient {
   private readonly baseUrl: string;
-  private readonly apiKey?: string;
   private readonly timeout: number;
 
   constructor(options: BazaarClientOptions = {}) {
-    this.baseUrl = options.baseUrl || 'https://bazaar.ultravioletadao.xyz';
-    this.apiKey = options.apiKey;
+    this.baseUrl = (
+      options.baseUrl || 'https://facilitator.ultravioletadao.xyz'
+    ).replace(/\/+$/, '');
     this.timeout = options.timeout || 30000;
   }
 
   /**
-   * Discover x402-enabled resources
+   * Issue a request against the facilitator with the configured timeout.
+   */
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: { Accept: 'application/json', ...(init?.headers || {}) },
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Bazaar API error: ${response.status} - ${errorText}`
+        );
+      }
+
+      return (await response.json()) as T;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * List resources from the discovery registry.
    *
-   * @param options - Discovery filters
-   * @returns Paginated list of matching resources
+   * @param options - Server-side filters and pagination
+   * @returns One page of resources plus the total across all pages
    *
    * @example
    * ```ts
-   * // Find AI APIs on Base with USDC under $0.10
-   * const results = await bazaar.discover({
-   *   category: 'ai',
-   *   network: 'base',
-   *   token: 'USDC',
-   *   maxPrice: '0.10',
-   * });
+   * const page = await bazaar.listResources({ network: 'eip155:8453', health: 'alive' });
+   * ```
+   */
+  async listResources(
+    options: DiscoveryListOptions = {}
+  ): Promise<DiscoveryResponse> {
+    if (options.q !== undefined && options.q.length > MAX_SEARCH_LEN) {
+      throw new Error(`q must be at most ${MAX_SEARCH_LEN} characters`);
+    }
+
+    const params = new URLSearchParams();
+    params.set('limit', String(options.limit ?? 10));
+    params.set('offset', String(options.offset ?? 0));
+    if (options.category) params.set('category', options.category);
+    if (options.network) params.set('network', options.network);
+    if (options.provider) params.set('provider', options.provider);
+    if (options.tag) params.set('tag', options.tag);
+    if (options.source) params.set('source', options.source);
+    if (options.sourceFacilitator)
+      params.set('sourceFacilitator', options.sourceFacilitator);
+    if (options.health) params.set('health', options.health);
+    if (options.tier) params.set('tier', options.tier);
+    if (options.q) params.set('q', options.q);
+
+    return this.request<DiscoveryResponse>(
+      `/discovery/resources?${params.toString()}`
+    );
+  }
+
+  /**
+   * Walk the whole filtered catalog, one page at a time.
    *
-   * for (const resource of results.resources) {
-   *   console.log(`${resource.name}: ${resource.url}`);
+   * Pages are fetched in sequence rather than in parallel: the read routes are
+   * rate limited, and a burst of parallel pages is how a legitimate catalog
+   * walk turns into a wall of 429s.
+   *
+   * @param options - Same filters as {@link listResources}; `limit` is the page size
+   *
+   * @example
+   * ```ts
+   * for await (const r of bazaar.iterateResources({ health: 'alive' })) {
+   *   console.log(r.url);
    * }
    * ```
    */
-  async discover(
-    options: BazaarDiscoverOptions = {}
-  ): Promise<BazaarDiscoverResponse> {
-    const params = new URLSearchParams();
+  async *iterateResources(
+    options: DiscoveryListOptions = {}
+  ): AsyncGenerator<DiscoveryResource, void, undefined> {
+    const pageSize = options.limit ?? 100;
+    let offset = options.offset ?? 0;
 
-    if (options.category) params.set('category', options.category);
-    if (options.network) params.set('network', options.network);
-    if (options.token) params.set('token', options.token);
-    if (options.provider) params.set('provider', options.provider);
-    if (options.tags?.length) params.set('tags', options.tags.join(','));
-    if (options.query) params.set('query', options.query);
-    if (options.maxPrice) params.set('maxPrice', options.maxPrice);
-    if (options.page) params.set('page', options.page.toString());
-    if (options.limit) params.set('limit', options.limit.toString());
-    if (options.sortBy) params.set('sortBy', options.sortBy);
-    if (options.sortOrder) params.set('sortOrder', options.sortOrder);
-
-    const url = `${this.baseUrl}/resources${params.toString() ? `?${params}` : ''}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
+    for (;;) {
+      const page = await this.listResources({
+        ...options,
+        limit: pageSize,
+        offset,
       });
+      if (page.items.length === 0) return;
 
-      clearTimeout(timeoutId);
+      for (const item of page.items) yield item;
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
+      offset += page.items.length;
+      if (offset >= page.pagination.total) return;
     }
   }
 
   /**
-   * Get a specific resource by ID
+   * Look up a single resource by its URL.
    *
-   * @param resourceId - Resource ID
-   * @returns Resource details
+   * The registry keys on URL and has no by-id lookup, so this searches and
+   * then matches exactly.
+   *
+   * @param resourceUrl - Exact URL of the resource
+   * @returns The resource, or null when it is not registered
    */
-  async getResource(resourceId: string): Promise<BazaarResource> {
-    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
+  async getResourceByUrl(
+    resourceUrl: string
+  ): Promise<DiscoveryResource | null> {
+    const page = await this.listResources({
+      q: resourceUrl.slice(0, MAX_SEARCH_LEN),
+      limit: 100,
+      health: 'any',
+    });
+    return page.items.find((item) => item.url === resourceUrl) ?? null;
   }
 
   /**
-   * Get a resource by its URL
+   * Register a paid resource in the discovery registry.
    *
-   * @param resourceUrl - Resource URL
-   * @returns Resource details
+   * Registration is open and rate limited; re-registering a known URL updates
+   * the existing record rather than creating a duplicate.
+   *
+   * @param options - Resource details
+   * @returns The registry's acknowledgement
    */
-  async getResourceByUrl(resourceUrl: string): Promise<BazaarResource> {
-    const url = `${this.baseUrl}/resources/by-url?url=${encodeURIComponent(resourceUrl)}`;
+  async registerResource(
+    options: DiscoveryRegisterOptions
+  ): Promise<Record<string, unknown>> {
+    const payload: Record<string, unknown> = {
+      url: options.url,
+      type: options.type || 'http',
+      description: options.description || '',
+    };
+    if (options.accepts) payload.accepts = options.accepts;
+    if (options.metadata) payload.metadata = options.metadata;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
+    return this.request<Record<string, unknown>>('/discovery/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
   }
 
   /**
-   * Register a new resource in the Bazaar
+   * Aggregate catalog metrics (60s cached server-side).
    *
-   * Requires API key authentication.
-   *
-   * @param options - Resource registration options
-   * @returns Registered resource
-   *
-   * @example
-   * ```ts
-   * const resource = await bazaar.register({
-   *   url: 'https://api.example.com/v1/generate',
-   *   name: 'Image Generator API',
-   *   description: 'Generate images with AI',
-   *   category: 'ai',
-   *   networks: ['base', 'ethereum', 'polygon'],
-   *   price: '0.05',
-   *   payTo: '0x1234...',
-   *   tags: ['ai', 'image', 'generator'],
-   * });
-   * ```
+   * @returns Counts by source, facilitator, network, tier and liveness
    */
-  async register(options: BazaarRegisterOptions): Promise<BazaarResource> {
-    if (!this.apiKey) {
-      throw new Error('API key required for resource registration');
-    }
-
-    const url = `${this.baseUrl}/resources`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify({
-          url: options.url,
-          name: options.name,
-          description: options.description,
-          category: options.category,
-          networks: options.networks,
-          tokens: options.tokens || ['USDC'],
-          price: options.price,
-          priceCurrency: options.priceCurrency || 'USDC',
-          payTo: options.payTo,
-          mimeType: options.mimeType || 'application/json',
-          outputSchema: options.outputSchema,
-          tags: options.tags,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
+  async getStats(): Promise<DiscoveryStats> {
+    return this.request<DiscoveryStats>('/discovery/stats');
   }
 
   /**
-   * Update an existing resource
+   * Check that the facilitator serving the registry is up.
    *
-   * Requires API key authentication. Only the owner can update.
-   *
-   * @param resourceId - Resource ID to update
-   * @param updates - Partial update options
-   * @returns Updated resource
-   */
-  async update(
-    resourceId: string,
-    updates: Partial<BazaarRegisterOptions>
-  ): Promise<BazaarResource> {
-    if (!this.apiKey) {
-      throw new Error('API key required for resource update');
-    }
-
-    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        body: JSON.stringify(updates),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
-  }
-
-  /**
-   * Delete a resource from the Bazaar
-   *
-   * Requires API key authentication. Only the owner can delete.
-   *
-   * @param resourceId - Resource ID to delete
-   */
-  async delete(resourceId: string): Promise<void> {
-    if (!this.apiKey) {
-      throw new Error('API key required for resource deletion');
-    }
-
-    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
-  }
-
-  /**
-   * Deactivate a resource (soft delete)
-   *
-   * Requires API key authentication. Only the owner can deactivate.
-   *
-   * @param resourceId - Resource ID to deactivate
-   * @returns Updated resource with isActive: false
-   */
-  async deactivate(resourceId: string): Promise<BazaarResource> {
-    if (!this.apiKey) {
-      throw new Error('API key required for resource deactivation');
-    }
-
-    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}/deactivate`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
-  }
-
-  /**
-   * Reactivate a deactivated resource
-   *
-   * Requires API key authentication. Only the owner can reactivate.
-   *
-   * @param resourceId - Resource ID to reactivate
-   * @returns Updated resource with isActive: true
-   */
-  async reactivate(resourceId: string): Promise<BazaarResource> {
-    if (!this.apiKey) {
-      throw new Error('API key required for resource reactivation');
-    }
-
-    const url = `${this.baseUrl}/resources/${encodeURIComponent(resourceId)}/reactivate`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
-  }
-
-  /**
-   * List all resources owned by the authenticated user
-   *
-   * Requires API key authentication.
-   *
-   * @param options - Pagination options
-   * @returns Paginated list of owned resources
-   */
-  async listMyResources(options: {
-    page?: number;
-    limit?: number;
-    includeInactive?: boolean;
-  } = {}): Promise<BazaarDiscoverResponse> {
-    if (!this.apiKey) {
-      throw new Error('API key required to list owned resources');
-    }
-
-    const params = new URLSearchParams();
-    if (options.page) params.set('page', options.page.toString());
-    if (options.limit) params.set('limit', options.limit.toString());
-    if (options.includeInactive) params.set('includeInactive', 'true');
-
-    const url = `${this.baseUrl}/resources/mine${params.toString() ? `?${params}` : ''}`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`,
-        },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
-  }
-
-  /**
-   * Get Bazaar API health status
-   *
-   * @returns True if the Bazaar API is healthy
+   * @returns True when the facilitator answers its health check
    */
   async healthCheck(): Promise<boolean> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
       const response = await fetch(`${this.baseUrl}/health`, {
         method: 'GET',
+        signal: controller.signal,
       });
       return response.ok;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
   /**
-   * Get Bazaar statistics
-   *
-   * @returns Global statistics about the Bazaar
+   * @deprecated Renamed to {@link listResources}, which returns the registry's
+   * real `{ items, pagination }` envelope. The old `discover()` returned a
+   * `{ resources, page, totalPages }` shape that no endpoint ever served.
    */
-  async getStats(): Promise<{
-    totalResources: number;
-    activeResources: number;
-    totalProviders: number;
-    categoryCounts: Record<BazaarCategory, number>;
-    networkCounts: Record<BazaarNetwork, number>;
-  }> {
-    const url = `${this.baseUrl}/stats`;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Bazaar API error: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
-    }
+  async discover(options: DiscoveryListOptions = {}): Promise<DiscoveryResponse> {
+    return this.listResources(options);
   }
 }
+
+/**
+ * @deprecated Use {@link DiscoveryResource}. The old shape (`id`, `name`,
+ * `pricePerRequest`, `isActive`, ISO `createdAt`) described an API that was
+ * never deployed.
+ */
+export type BazaarResource = DiscoveryResource;
+
+/** @deprecated Use {@link DiscoveryResponse}. */
+export type BazaarDiscoverResponse = DiscoveryResponse;
+
+/** @deprecated Use {@link DiscoveryListOptions}. */
+export type BazaarDiscoverOptions = DiscoveryListOptions;
+
+/** @deprecated Use {@link DiscoveryRegisterOptions}. */
+export type BazaarRegisterOptions = DiscoveryRegisterOptions;
 
 // ============================================================================
 // ESCROW & REFUND EXTENSION
