@@ -19,6 +19,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Commerce Scheme**: `'commerce'` scheme alias for marketplace integrations (identical to `'escrow'` on-chain)
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
 - **Bazaar Discovery**: Register and discover paid resources across the x402 network
+- **Live Traffic Stream**: Subscribe to `GET /events` (SSE) for settlements as they happen — lossy live hint, not a ledger
 - **Facilitator Info**: Query version, supported networks, blacklist, and health
 
 ## Installation
@@ -1065,6 +1066,63 @@ console.log(stats.total, stats.visible, stats.byHealth.alive);
 ```
 
 Timestamps (`firstSeen`, `lastSeen`, `lastUpdated`, `health.lastChecked`) are Unix epoch **seconds**. Use `epochToDate()` to get a `Date`.
+
+## Live Traffic Stream (`GET /events`)
+
+The facilitator emits one Server-Sent Event per operation it handles, so you can
+render or react to live traffic without polling. Works in Node 18+ and browsers —
+it uses `fetch` and the response body stream rather than `EventSource`, so custom
+headers work too.
+
+```typescript
+import { streamTrafficEvents } from 'uvd-x402-sdk';
+
+for await (const event of streamTrafficEvents()) {
+  console.log(event.kind, event.network, event.ok, event.tx);
+}
+
+// Only settlements on the chains you care about. The facilitator has NO
+// server-side filter by network, so this runs client-side.
+const controller = new AbortController();
+const stream = streamTrafficEvents({
+  networks: ['base', 'polygon'],
+  kinds: ['settle'],
+  signal: controller.signal,
+});
+for await (const event of stream) console.log(event.tx, new Date(event.ts));
+```
+
+Three properties decide how you should use this:
+
+**It is lossy by design.** The facilitator will never slow down or fail a payment
+to keep an observer in sync, so an event you were not connected for is gone.
+Treat it as a live hint and use the chain as the source of truth — and note that
+*absence of events is not evidence that nothing happened*. On a quiet rail the
+only thing on the wire for minutes is a keepalive.
+
+**Failed operations are not published.** Only operations that resolved emit an
+event, so `ok: false` means "resolved and came back negative", never "blew up". A
+stream that looks healthy is not proof that the rail is.
+
+**Admission is bounded.** `/events` is public and unauthenticated, so it sheds
+with HTTP 503 + `Retry-After` at subscriber capacity, and returns 404 when the
+operator disabled it. Both throw `TrafficStreamError`, which carries `status` and
+`retryAfter`. Iteration does **not** reconnect on its own: reconnect policy
+belongs to you, because only you know whether a gap matters.
+
+> **Match the canonical network slug.** `network` is the name `/supported` uses,
+> which is not always the alias you may *send*. `skale` is accepted inbound, but
+> events always say `skale-base`. Keying on the alias silently drops every event
+> for that chain.
+
+| Field | Notes |
+|-------|-------|
+| `ts` | Unix epoch **milliseconds** (not seconds) |
+| `kind` | `'verify'` or `'settle'` |
+| `network` | Canonical slug, same as `/supported` |
+| `ok` | Resolved successfully? |
+| `payer` / `amount` / `asset` | Omitted in `minimal` detail mode |
+| `tx` | Present on `settle`, absent on `verify` — nothing settled yet |
 
 ## Facilitator Info
 
