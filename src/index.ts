@@ -251,6 +251,23 @@ export type { OWSWallet } from './adapters/ows';
 export { FACILITATOR_ADDRESSES, getFacilitatorAddress } from './facilitator';
 export type { FacilitatorAddresses } from './facilitator';
 
+// Live traffic stream (GET /events, Server-Sent Events)
+export {
+  streamTrafficEvents,
+  parseTrafficEvent,
+  matchesFilters,
+  SSEParser,
+  TrafficStreamError,
+  EVENT_KINDS,
+  KEEPALIVE_INTERVAL_MS,
+} from './events';
+export type {
+  TrafficEvent,
+  TrafficEventKind,
+  StreamTrafficEventsOptions,
+  SSEFrame,
+} from './events';
+
 // Server-side middleware and facilitator client
 export {
   FacilitatorClient,
