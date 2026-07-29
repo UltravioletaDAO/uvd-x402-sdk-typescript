@@ -174,6 +174,15 @@ export interface PaymentAcceptance {
   network: string;
   asset: string;
   amount: string;
+  /**
+   * Payment scheme. REQUIRED by the facilitator's v2 `PaymentRequirementsV2`.
+   *
+   * Optional here only so existing callers keep compiling — when it is absent,
+   * `buildRequirementFromAcceptance` defaults it to `'exact'`. Do not treat its
+   * optionality as "the facilitator does not need it": an accepts[] entry that
+   * reaches a v2 client without a scheme is unpayable.
+   */
+  scheme?: string;
   payTo?: string;
   facilitator?: string;
   resource?: string;
@@ -911,7 +920,9 @@ function buildRequirementFromAcceptance(
   }
 
   return normalizeRequirementForVersion({
-    scheme: 'exact',
+    // Honour a caller-supplied scheme; 'exact' is the default, not an override.
+    // Hardcoding it silently discarded 'escrow' / 'commerce' accepts.
+    scheme: (accept.scheme as PaymentRequirements['scheme']) ?? 'exact',
     network: accept.network,
     maxAmountRequired: accept.amount,
     resource: accept.resource ?? defaults?.resource ?? resource,
@@ -941,6 +952,11 @@ function toPaymentAcceptance(
     network: requirements.network,
     asset: requirements.asset,
     amount: requirements.maxAmountRequired,
+    // scheme is REQUIRED by the facilitator's v2 PaymentRequirementsV2. Dropping it
+    // here produced an accepts[] entry that no v2 client could pay: the spec makes
+    // the client echo the accept verbatim, so the omission travelled downstream and
+    // died in deserialization with an error naming no field.
+    scheme: requirements.scheme,
     payTo: requirements.payTo,
     resource: requirements.resource,
     description: requirements.description,
