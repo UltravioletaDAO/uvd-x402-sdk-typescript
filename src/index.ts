@@ -278,11 +278,18 @@ export {
   buildPaymentRequirements,
   buildVerifyRequest,
   buildSettleRequest,
+  buildVerifyRequestV2,
+  buildSettleRequestV2,
   getCorsHeaders,
   X402_CORS_HEADERS,
   X402_HEADER_NAMES,
 } from './backend';
 export type {
+  ResourceInfoV2,
+  PaymentRequirementsV2,
+  PaymentPayloadV2,
+  VerifyRequestV2,
+  SettleRequestV2,
   FacilitatorClientOptions,
   HonoMiddlewareOptions,
   PaymentAcceptance,

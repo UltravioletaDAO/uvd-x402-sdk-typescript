@@ -1067,6 +1067,37 @@ console.log(stats.total, stats.visible, stats.byHealth.alive);
 
 Timestamps (`firstSeen`, `lastSeen`, `lastUpdated`, `health.lastChecked`) are Unix epoch **seconds**. Use `epochToDate()` to get a `Date`.
 
+## x402 v2 requests (`buildVerifyRequestV2` / `buildSettleRequestV2`)
+
+If your 402 advertises CAIP-2 networks (`eip155:8453`), you are speaking v2 and
+must send the **v2 envelope**. `buildVerifyRequest` emits the v1 one and cannot
+express v2:
+
+```typescript
+import { buildVerifyRequestV2 } from 'uvd-x402-sdk';
+
+const body = buildVerifyRequestV2(
+  payment.payload,
+  { url: 'https://api.example.com/thing', description: 'Thing', mimeType: 'application/json' },
+  { scheme: 'exact', network: 'eip155:8453', asset: '0x8335...', amount: '100000',
+    payTo: '0xabc...', maxTimeoutSeconds: 300 }
+);
+```
+
+| | v1 envelope | v2 envelope |
+|---|---|---|
+| top level | `{x402Version, paymentPayload, paymentRequirements}` | `{x402Version, paymentPayload, resource, accepted}` |
+| network | plain name — `base` | CAIP-2 — `eip155:8453` |
+| amount field | `maxAmountRequired` | `amount` |
+| `resource` | URL **string** | **object** `{url, description, mimeType}` |
+
+> **Do not mix levels.** Each version demands its own network format and its own
+> envelope. A v2 payload inside a v1 envelope — or a plain network name inside a
+> v2 request — matches no variant at the facilitator and fails with
+> `data did not match any variant of untagged enum VerifyRequestEnvelope`, an
+> error that names no field. If you see it, check the envelope shape first, not
+> the fields inside it.
+
 ## Live Traffic Stream (`GET /events`)
 
 The facilitator emits one Server-Sent Event per operation it handles, so you can
