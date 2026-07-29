@@ -67,6 +67,7 @@
 
 import type {
   X402Header,
+  X402PayloadData,
   X402Version,
 } from '../types';
 import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
@@ -390,6 +391,118 @@ export function buildVerifyRequest(
  * @param requirements - Payment requirements
  * @returns SettleRequest body ready for fetch/axios
  */
+/**
+ * Describes the protected resource, as x402 v2 expects it.
+ *
+ * Note this is an OBJECT in v2. Sending a bare URL string here is the single
+ * most common v2 mistake and it fails as an unhelpful "no variant matched"
+ * deserialization error at the facilitator, naming no field.
+ */
+export interface ResourceInfoV2 {
+  url: string;
+  description: string;
+  mimeType: string;
+}
+
+/**
+ * Payment requirements in x402 v2 form.
+ *
+ * Differences from v1 that actually bite:
+ * - `network` is CAIP-2 (`eip155:8453`), NOT a plain name (`base`). Mixing a v1
+ *   name into a v2 request fails deserialization, and vice versa.
+ * - `maxAmountRequired` is renamed to `amount`.
+ * - `resource` / `description` / `mimeType` moved out to {@link ResourceInfoV2}.
+ */
+export interface PaymentRequirementsV2 {
+  scheme: string;
+  /** CAIP-2 chain id, e.g. `eip155:8453`. */
+  network: string;
+  asset: string;
+  amount: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra?: unknown;
+}
+
+/** The v2 payment payload — note it carries no top-level scheme/network. */
+export interface PaymentPayloadV2 {
+  x402Version: 2;
+  resource: ResourceInfoV2;
+  accepted: PaymentRequirementsV2;
+  payload: X402PayloadData;
+  extensions?: Record<string, unknown>;
+}
+
+/**
+ * Verify request body in x402 v2 form.
+ *
+ * There is deliberately NO `paymentRequirements` key: that is the v1 envelope.
+ * v2 carries `resource` and `accepted` at the top level instead.
+ */
+export interface VerifyRequestV2 {
+  x402Version: 2;
+  paymentPayload: PaymentPayloadV2;
+  resource: ResourceInfoV2;
+  accepted: PaymentRequirementsV2;
+}
+
+/** Settle request body in x402 v2 form. Same shape as {@link VerifyRequestV2}. */
+export type SettleRequestV2 = VerifyRequestV2;
+
+function buildV2Envelope(
+  payload: X402PayloadData,
+  resource: ResourceInfoV2,
+  accepted: PaymentRequirementsV2
+): VerifyRequestV2 {
+  return {
+    x402Version: 2,
+    // The facilitator reads the payload from here; `resource` and `accepted` are
+    // repeated at the top level because the v2 envelope declares both.
+    paymentPayload: { x402Version: 2, resource, accepted, payload },
+    resource,
+    accepted,
+  };
+}
+
+/**
+ * Build a verify request for the facilitator `/verify` endpoint, in **v2** form.
+ *
+ * Use this whenever your 402 advertises CAIP-2 networks. {@link buildVerifyRequest}
+ * emits the v1 envelope `{x402Version, paymentPayload, paymentRequirements}` and
+ * cannot express v2 — putting a v2 payload inside it matches no variant at the
+ * facilitator and fails with an error that names no field.
+ *
+ * @example
+ * ```ts
+ * const body = buildVerifyRequestV2(
+ *   payment.payload,
+ *   { url: 'https://api.example.com/thing', description: 'Thing', mimeType: 'application/json' },
+ *   { scheme: 'exact', network: 'eip155:8453', asset: '0x8335...', amount: '100000',
+ *     payTo: '0xabc...', maxTimeoutSeconds: 300 }
+ * );
+ * ```
+ */
+export function buildVerifyRequestV2(
+  payload: X402PayloadData,
+  resource: ResourceInfoV2,
+  accepted: PaymentRequirementsV2
+): VerifyRequestV2 {
+  return buildV2Envelope(payload, resource, accepted);
+}
+
+/**
+ * Build a settle request for the facilitator `/settle` endpoint, in **v2** form.
+ *
+ * See {@link buildVerifyRequestV2} — the envelope is identical.
+ */
+export function buildSettleRequestV2(
+  payload: X402PayloadData,
+  resource: ResourceInfoV2,
+  accepted: PaymentRequirementsV2
+): SettleRequestV2 {
+  return buildV2Envelope(payload, resource, accepted);
+}
+
 export function buildSettleRequest(
   paymentHeader: X402Header,
   requirements: PaymentRequirements
