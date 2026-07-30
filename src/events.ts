@@ -81,6 +81,19 @@ export interface TrafficEvent {
   tx?: string;
   amount?: string;
   asset?: string;
+  /**
+   * The protected endpoint being bought.
+   *
+   * Answers "what was paid for", which the amount alone never does — two
+   * 1-USDC settles are indistinguishable without it.
+   */
+  resource?: string;
+  /** The seller receiving the payment. */
+  payTo?: string;
+  /** Human-readable description the seller advertised. */
+  description?: string;
+  /** Payment scheme: `exact`, `escrow`, `commerce`, `upto`. */
+  scheme?: string;
 }
 
 /** Raised when the stream cannot be opened. Carries the HTTP status. */
@@ -212,6 +225,10 @@ export function parseTrafficEvent(frame: SSEFrame): TrafficEvent | null {
   if (typeof raw.tx === 'string') event.tx = raw.tx;
   if (typeof raw.amount === 'string') event.amount = raw.amount;
   if (typeof raw.asset === 'string') event.asset = raw.asset;
+  if (typeof raw.resource === 'string') event.resource = raw.resource;
+  if (typeof raw.payTo === 'string') event.payTo = raw.payTo;
+  if (typeof raw.description === 'string') event.description = raw.description;
+  if (typeof raw.scheme === 'string') event.scheme = raw.scheme;
   return event;
 }
 

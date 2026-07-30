@@ -255,3 +255,33 @@ describe('EVENT_KINDS', () => {
     expect(EVENT_KINDS).toEqual(['verify', 'settle']);
   });
 });
+
+/**
+ * Fields added 2026-07-30 so an event says WHAT was bought, not just how much.
+ */
+describe('richer settle metadata', () => {
+  const WIRE =
+    'event: settle\n' +
+    'data: {"ts":1785432522148,"kind":"settle","network":"base","ok":true,' +
+    '"payer":"0xe4dc","tx":"0xd8c1","amount":"1000000","asset":"0x8335",' +
+    '"resource":"https://api.example.com/premium","payTo":"0xseller",' +
+    '"description":"Premium feed","scheme":"exact"}\n\n';
+
+  it('parses the endpoint, the seller and the scheme', () => {
+    const event = parseTrafficEvent(new SSEParser().push(WIRE)[0]);
+    expect(event!.resource).toBe('https://api.example.com/premium');
+    expect(event!.payTo).toBe('0xseller');
+    expect(event!.scheme).toBe('exact');
+  });
+
+  it('still parses events that predate these fields', () => {
+    // minimal detail mode, and any consumer pointed at an older facilitator.
+    const event = parseTrafficEvent({
+      event: 'settle',
+      data: '{"ts":1,"kind":"settle","network":"base","ok":true}',
+    });
+    expect(event).not.toBeNull();
+    expect(event!.resource).toBeUndefined();
+    expect(event!.payTo).toBeUndefined();
+  });
+});
