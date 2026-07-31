@@ -285,3 +285,24 @@ describe('richer settle metadata', () => {
     expect(event!.payTo).toBeUndefined();
   });
 });
+
+/** Facilitator v1.63.0+: errored operations, when the operator enables them. */
+describe('failure category', () => {
+  it('parses the bounded category', () => {
+    const event = parseTrafficEvent({
+      event: 'settle',
+      data: '{"ts":1,"kind":"settle","network":"base","ok":false,"error":"contract_revert"}',
+    });
+    expect(event!.error).toBe('contract_revert');
+    expect(event!.ok).toBe(false);
+  });
+
+  it('distinguishes resolved-negative from blew-up', () => {
+    // ok:false alone means the operation resolved and came back negative.
+    const resolved = parseTrafficEvent({
+      event: 'settle',
+      data: '{"ts":1,"kind":"settle","network":"base","ok":false}',
+    });
+    expect(resolved!.error).toBeUndefined();
+  });
+});
