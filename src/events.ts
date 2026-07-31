@@ -94,6 +94,20 @@ export interface TrafficEvent {
   description?: string;
   /** Payment scheme: `exact`, `escrow`, `commerce`, `upto`. */
   scheme?: string;
+  /**
+   * Why the operation failed, as a BOUNDED CATEGORY — never the error text.
+   *
+   * Present only on operations that errored, and only where the operator set
+   * `X402_EVENTS_PUBLISH_FAILURES=true`. A closed set (`contract_revert`,
+   * `invalid_signature`, `insufficient_funds`, `invalid_timing`,
+   * `blocked_address`, …, `other`) precisely so it can never carry an address
+   * or an RPC URL.
+   *
+   * Note the distinction it makes visible: `ok: false` with no `error` means the
+   * operation RESOLVED and came back negative; `error` set means it blew up.
+   * Before this existed the second case produced no event at all.
+   */
+  error?: string;
 }
 
 /** Raised when the stream cannot be opened. Carries the HTTP status. */
@@ -229,6 +243,7 @@ export function parseTrafficEvent(frame: SSEFrame): TrafficEvent | null {
   if (typeof raw.payTo === 'string') event.payTo = raw.payTo;
   if (typeof raw.description === 'string') event.description = raw.description;
   if (typeof raw.scheme === 'string') event.scheme = raw.scheme;
+  if (typeof raw.error === 'string') event.error = raw.error;
   return event;
 }
 

@@ -1098,6 +1098,29 @@ const body = buildVerifyRequestV2(
 > error that names no field. If you see it, check the envelope shape first, not
 > the fields inside it.
 
+## Metrics and history (`getStats` / `getTransactions`)
+
+```typescript
+const stats = await client.getStats();
+for (const row of stats.byNetworkAndAsset) {
+  // Use the row's OWN decimals. USDC is 6 nearly everywhere and 18 on BSC —
+  // scaling by a constant 6 overstates BSC volume by 10^12.
+  console.log(row.network, row.settlesOk, row.volumeAtomic, row.decimals);
+}
+
+const recent = await client.getTransactions({ limit: 20, network: 'base' });
+```
+
+> **An index, not a ledger.** Records are written best-effort *after*
+> settlement, so an outage loses rows while payments proceed — verify anything
+> that matters against the transaction hash. Counting starts when the operator
+> enabled the store, so earlier operations are **unknown, not zero**. And unless
+> failure publishing is on, operations that error are not recorded at all, so a
+> 100% success rate means "no failures were recorded".
+>
+> `getTransactions` has **no pagination**: it returns the newest N (capped at
+> 200), walking back at most 30 days.
+
 ## Live Traffic Stream (`GET /events`)
 
 The facilitator emits one Server-Sent Event per operation it handles, so you can

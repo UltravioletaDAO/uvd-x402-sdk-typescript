@@ -834,6 +834,76 @@ export class FacilitatorClient {
   }
 
   /**
+   * Aggregated totals per network and asset (`GET /api/stats`).
+   *
+   * **An index, not a ledger.** Records are written best-effort AFTER
+   * settlement, so an outage loses rows while payments proceed — verify
+   * anything that matters against the transaction hash. Counting starts when
+   * the operator enabled the store, so earlier operations are UNKNOWN, not
+   * zero. And unless `X402_EVENTS_PUBLISH_FAILURES=true`, operations that ERROR
+   * are not recorded at all: a 100% success rate means "no failures were
+   * recorded".
+   *
+   * `volumeAtomic` is a STRING (u256-shaped; a JS number loses precision above
+   * 2^53) and each row carries its own `decimals`. **Use that, never a
+   * constant** — USDC is 6 decimals nearly everywhere and 18 on BSC, so scaling
+   * by 6 there overstates volume by 10^12. `decimals` is null when the asset is
+   * unrecognised; render the atomic value rather than guessing a scale.
+   */
+  async getStats(): Promise<{
+    totals: { settlesOk: number; settlesFailed: number; verifies: number; networks: number };
+    byNetworkAndAsset: Array<{
+      network: string;
+      asset: string;
+      settlesOk: number;
+      settlesFailed: number;
+      verifies: number;
+      volumeAtomic: string;
+      decimals: number | null;
+      lastTs: number;
+    }>;
+    [key: string]: unknown;
+  }> {
+    const response = await fetch(`${this.baseUrl}/api/stats`, { method: 'GET' });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GET /api/stats failed: ${response.status} - ${errorText}`);
+    }
+    return await response.json();
+  }
+
+  /**
+   * Recent recorded operations, newest first (`GET /transactions`).
+   *
+   * There is **no pagination and no cursor**: this returns the newest N,
+   * walking back at most 30 days. With 10,000 rows you get the newest 200, not
+   * page one of fifty. `limit` is clamped to 200 by the facilitator.
+   *
+   * `network` matches the canonical slug `/supported` uses, which is not always
+   * the alias you may send — `skale` is accepted inbound but records say
+   * `skale-base`.
+   */
+  async getTransactions(options: { limit?: number; network?: string } = {}): Promise<{
+    transactions: Array<Record<string, unknown>>;
+    count: number;
+    [key: string]: unknown;
+  }> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.network) params.set('network', options.network);
+    const query = params.toString();
+    const response = await fetch(
+      `${this.baseUrl}/transactions${query ? `?${query}` : ''}`,
+      { method: 'GET' }
+    );
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GET /transactions failed: ${response.status} - ${errorText}`);
+    }
+    return await response.json();
+  }
+
+  /**
    * Get the facilitator's blocked/sanctioned addresses
    *
    * @returns Blacklist info (totalBlocked, loadedAtStartup, addresses)
