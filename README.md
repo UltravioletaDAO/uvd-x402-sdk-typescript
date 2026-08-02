@@ -17,6 +17,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **ERC-8004 Trustless Agents**: On-chain reputation and identity across 20 networks (18 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
+- **Escrow Pre-Auth**: Sign-on-assignment `X-Payment-Auth` builder (`buildEscrowPreAuth`) — vector-pinned parity with the Python SDK and Execution Market
 - **Commerce Scheme**: `'commerce'` scheme alias for marketplace integrations (identical to `'escrow'` on-chain)
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
 - **Bazaar Discovery**: Register and discover paid resources across the x402 network
@@ -626,6 +627,29 @@ const headers = await signRequestWithWallet(wallet, {
 ```
 
 Also available: `signRequest` (raw private key) and `signRequestWithSigner` (callback-based, for browser wallets / out-of-process signers where the key never leaves the signer), plus `buildSignatureBase` / `buildSignatureParams` to reproduce the exact signed bytes externally.
+
+## Escrow Pre-Auth (sign-on-assignment)
+
+Build and sign the EIP-3009 `ReceiveWithAuthorization` that locks a bounty in the x402r AuthCaptureEscrow, packed as the raw-JSON `X-Payment-Auth` wrapper the facilitator's `/settle` expects. Used by marketplaces on the escrow rail (e.g. [Execution Market](https://execution.market)'s universal escrow).
+
+The EIP-3009 nonce is `AuthCaptureEscrow.getHash(paymentInfo)`, which **includes the receiver** — the signature cryptographically commits to the chosen worker, so it can only be created AT ASSIGNMENT. The wire format is pinned by golden vectors (`src/escrow-preauth.vectors.json`) shared with the Python SDK and Execution Market's dashboard/mobile suites.
+
+```typescript
+import { buildEscrowPreAuth, EnvKeyAdapter } from 'uvd-x402-sdk';
+
+// Escrow config as published by the marketplace server
+// (e.g. Execution Market's GET /api/v1/h2a/payment-config).
+const paymentAuth = await buildEscrowPreAuth(new EnvKeyAdapter(), {
+  networkConfig: config.escrow.networks.base,
+  payerWallet: '0xPublisher...',
+  workerWallet: '0xWorker...',        // escrow receiver — committed by the nonce
+  bountyAtomic: '100000',             // $0.10 in 6-decimal USDC
+  reviewDeadlineSec: taskDeadline,    // release window outlasts it
+});
+// Send as the X-Payment-Auth header (raw JSON, NOT base64).
+```
+
+Any `SigningWalletAdapter` works as the signer (only `signTypedData` is used); browser wallets can pass a minimal `{ signTypedData }` wrapper. Validation fails loud instead of falling back: incomplete network config, unknown tier, bounty outside the on-chain deposit limit ($100), or a `maxFeeBps` below the operator's 1300 bps all throw before anything is signed. `computeEscrowNonce` is exported to reproduce `AuthCaptureEscrow.getHash` externally.
 
 ## Multi-Stablecoin (EVM)
 
