@@ -721,9 +721,30 @@ export class FacilitatorClient {
       }
 
       const result = await response.json();
+      // Read all three spellings. The facilitator's canonical name for this
+      // field is `transaction`, and this client used to read only the two
+      // camel/snake variants — so it silently returned `undefined` for the
+      // most important field a settle produces. A consumer failed closed on
+      // that and revoked access to a payment that had already settled
+      // on-chain: the money moved, the receipt was unreadable.
+      //
+      // The server now emits all three, but this fallback stays: it makes the
+      // client work against facilitators that have not deployed that yet, and
+      // against any that only ever emitted the canonical name.
+      const transactionHash =
+        result.transaction ?? result.transactionHash ?? result.transaction_hash;
+      if (result.success && !transactionHash) {
+        // Never let a missing hash pass as a normal success. A caller that
+        // gates access on the receipt needs to know the receipt is absent,
+        // not infer it from an undefined field.
+        console.warn(
+          '[x402] settle reported success but carried no transaction hash under ' +
+            'transaction/transactionHash/transaction_hash — treat delivery as unconfirmed'
+        );
+      }
       return {
         success: true,
-        transactionHash: result.transactionHash || result.transaction_hash,
+        transactionHash,
         network: result.network,
       };
     } catch (error) {

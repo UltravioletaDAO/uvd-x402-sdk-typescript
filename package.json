@@ -1,6 +1,6 @@
 {
   "name": "uvd-x402-sdk",
-  "version": "2.46.0",
+  "version": "2.47.0",
   "description": "x402 Payment SDK - Gasless crypto payments across 25 blockchains via Ultravioleta facilitator. Supports EVM (including Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, and XRP Ledger. Features: ERC-8004 Trustless Agents, Escrow/Refunds, multi-stablecoin (USDC, EURC, AUSD, PYUSD, USDT, USDG).",
   "author": "Ultravioleta DAO <ultravioletadao@gmail.com>",
   "license": "MIT",
@@ -116,18 +116,42 @@
   },
   "typesVersions": {
     "*": {
-      "evm": ["./dist/providers/evm/index.d.ts"],
-      "solana": ["./dist/providers/solana/index.d.ts"],
-      "svm": ["./dist/providers/solana/index.d.ts"],
-      "stellar": ["./dist/providers/stellar/index.d.ts"],
-      "near": ["./dist/providers/near/index.d.ts"],
-      "algorand": ["./dist/providers/algorand/index.d.ts"],
-      "sui": ["./dist/providers/sui/index.d.ts"],
-      "xrpl": ["./dist/providers/xrpl/index.d.ts"],
-      "react": ["./dist/react/index.d.ts"],
-      "utils": ["./dist/utils/index.d.ts"],
-      "wagmi": ["./dist/adapters/index.d.ts"],
-      "backend": ["./dist/backend/index.d.ts"]
+      "evm": [
+        "./dist/providers/evm/index.d.ts"
+      ],
+      "solana": [
+        "./dist/providers/solana/index.d.ts"
+      ],
+      "svm": [
+        "./dist/providers/solana/index.d.ts"
+      ],
+      "stellar": [
+        "./dist/providers/stellar/index.d.ts"
+      ],
+      "near": [
+        "./dist/providers/near/index.d.ts"
+      ],
+      "algorand": [
+        "./dist/providers/algorand/index.d.ts"
+      ],
+      "sui": [
+        "./dist/providers/sui/index.d.ts"
+      ],
+      "xrpl": [
+        "./dist/providers/xrpl/index.d.ts"
+      ],
+      "react": [
+        "./dist/react/index.d.ts"
+      ],
+      "utils": [
+        "./dist/utils/index.d.ts"
+      ],
+      "wagmi": [
+        "./dist/adapters/index.d.ts"
+      ],
+      "backend": [
+        "./dist/backend/index.d.ts"
+      ]
     }
   },
   "files": [
