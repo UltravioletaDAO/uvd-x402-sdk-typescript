@@ -288,6 +288,22 @@ export type {
   SignatureParamsInput,
 } from './erc8128';
 
+// Escrow pre-auth (sign-on-assignment X-Payment-Auth for the x402r escrow)
+export {
+  buildEscrowPreAuth,
+  computeEscrowNonce,
+  ESCROW_TIER_WINDOWS,
+  ESCROW_DEPOSIT_LIMIT_USD,
+  OPERATOR_FEE_BPS,
+} from './escrow-preauth';
+export type {
+  EscrowNetworkConfig,
+  EscrowPaymentInfo,
+  EscrowPreAuthParams,
+  EscrowPreAuthSigner,
+  EscrowTierWindows,
+} from './escrow-preauth';
+
 // Server-side middleware and facilitator client
 export {
   FacilitatorClient,
