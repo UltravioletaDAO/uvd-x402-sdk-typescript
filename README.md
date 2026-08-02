@@ -13,6 +13,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
 - **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
+- **ERC-8128 Signed Requests**: Authenticate HTTP requests with a wallet (RFC 9421 + EIP-191) — no API keys
 - **ERC-8004 Trustless Agents**: On-chain reputation and identity across 20 networks (18 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
@@ -585,6 +586,46 @@ class MyAdapter implements SigningWalletAdapter {
   async signEIP3009(params: EIP3009Params): Promise<EIP3009Authorization> { /* ... */ }
 }
 ```
+
+## ERC-8128 Signed Requests
+
+Authenticate HTTP requests with a wallet instead of an API key. The SDK builds the RFC 9421 signature base, signs it with EIP-191 personal_sign, and produces the `Signature`, `Signature-Input`, and (for bodies) `Content-Digest` headers. Used by APIs that only accept wallet signing, like [Execution Market](https://execution.market).
+
+Wire format is pinned by golden vectors (`src/erc8128.vectors.json`): `alg="eip191"`, keyid always lowercase (`erc8128:{chainId}:{address}`), params in the order `created;expires;nonce;keyid;alg`.
+
+```typescript
+import { createSignedFetch, EnvKeyAdapter } from 'uvd-x402-sdk';
+
+// Auto-signing fetch: fetches a fresh nonce and signs every request
+const signedFetch = createSignedFetch({
+  wallet: new EnvKeyAdapter(),           // or privateKey: process.env.KEY!
+  apiBase: 'https://api.execution.market',
+  chainId: 8453,                          // Base (default)
+});
+
+const resp = await signedFetch('/api/v1/tasks', {
+  method: 'POST',
+  body: JSON.stringify({ title: 'test' }),
+});
+```
+
+For manual control, sign a single request (the nonce is single-use — fetch one per request):
+
+```typescript
+import { fetchNonce, signRequestWithWallet, EnvKeyAdapter } from 'uvd-x402-sdk';
+
+const wallet = new EnvKeyAdapter();
+const nonce = await fetchNonce('https://api.execution.market');
+const headers = await signRequestWithWallet(wallet, {
+  method: 'POST',
+  url: 'https://api.execution.market/api/v1/tasks',
+  body: '{"title":"test"}',
+  nonce,
+});
+// headers = { Signature, 'Signature-Input', 'Content-Digest' } — merge into your request
+```
+
+Also available: `signRequest` (raw private key) and `signRequestWithSigner` (callback-based, for browser wallets / out-of-process signers where the key never leaves the signer), plus `buildSignatureBase` / `buildSignatureParams` to reproduce the exact signed bytes externally.
 
 ## Multi-Stablecoin (EVM)
 

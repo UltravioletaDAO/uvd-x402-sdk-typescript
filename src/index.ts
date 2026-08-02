@@ -268,6 +268,26 @@ export type {
   SSEFrame,
 } from './events';
 
+// ERC-8128 signed HTTP requests (RFC 9421 signature base + EIP-191)
+export {
+  signRequest,
+  signRequestWithWallet,
+  signRequestWithSigner,
+  fetchNonce,
+  createSignedFetch,
+  buildSignatureBase,
+  buildSignatureParams,
+} from './erc8128';
+export type {
+  ERC8128RequestOptions,
+  SignRequestOptions,
+  SignRequestWithSignerOptions,
+  SignatureHeaders,
+  CreateSignedFetchConfig,
+  SignatureBaseParams,
+  SignatureParamsInput,
+} from './erc8128';
+
 // Server-side middleware and facilitator client
 export {
   FacilitatorClient,
