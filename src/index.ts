@@ -137,6 +137,7 @@ export {
   getExplorerAddressUrl,
   // Multi-token support functions
   getTokenConfig,
+  getTokenByAddress,
   getSupportedTokens,
   isTokenSupported,
   getChainsByToken,
@@ -173,6 +174,12 @@ export {
   getPaymentHeader,
   DEFAULT_PAYMENT_HEADER,
   PAYMENT_HEADER_NAMES,
+  // UTF-8 safe base64 (token domain names like `USD₮0` are not ASCII)
+  encodeBase64Utf8,
+  decodeBase64Utf8,
+  encodeBase64Json,
+  // Multi-token payloads
+  buildTokenMetadata,
 } from './utils';
 
 // Types
@@ -186,6 +193,7 @@ export type {
   // Token types (multi-token support)
   TokenType,
   TokenConfig,
+  PaymentTokenMetadata,
 
   // Wallet types
   WalletState,

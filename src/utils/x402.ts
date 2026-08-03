@@ -16,6 +16,7 @@ import type {
 } from '../types';
 import { CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from '../types';
 import { getChainByName } from '../chains';
+import { decodeBase64Utf8, encodeBase64Json } from './base64';
 
 /**
  * Detect x402 version from a response header or body
@@ -133,7 +134,7 @@ export function parseNetworkIdentifier(network: string): string {
  * @returns Base64-encoded string
  */
 export function encodeX402Header(header: X402Header): string {
-  return btoa(JSON.stringify(header));
+  return encodeBase64Json(header);
 }
 
 /**
@@ -143,7 +144,7 @@ export function encodeX402Header(header: X402Header): string {
  * @returns Parsed x402 header
  */
 export function decodeX402Header(encoded: string): X402Header {
-  const json = atob(encoded);
+  const json = decodeBase64Utf8(encoded);
   return JSON.parse(json) as X402Header;
 }
 

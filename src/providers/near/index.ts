@@ -46,7 +46,7 @@ import type {
   X402Version,
 } from '../../types';
 import { X402Error } from '../../types';
-import { chainToCAIP2 } from '../../utils';
+import { chainToCAIP2, encodeBase64Json } from '../../utils';
 
 // NEAR configuration
 const NEAR_CONFIG = {
@@ -603,7 +603,7 @@ export class NEARProvider implements WalletAdapter {
           payload: payloadData,
         };
 
-    return btoa(JSON.stringify(x402Payload));
+    return encodeBase64Json(x402Payload);
   }
 
   // Private helpers

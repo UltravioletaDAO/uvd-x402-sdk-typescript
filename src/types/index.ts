@@ -477,6 +477,7 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   hyperevm: 'eip155:999',
   unichain: 'eip155:130',
   monad: 'eip155:143',
+  bsc: 'eip155:56',
   scroll: 'eip155:534352',
   'skale-base': 'eip155:1187947933',
   'skale-base-sepolia': 'eip155:324705682',
@@ -555,6 +556,37 @@ export interface X402EVMPayload {
     validAfter: string;
     validBefore: string;
     nonce: string;
+  };
+  /**
+   * Which token was actually paid.
+   *
+   * Only present when the payment is created with `includeTokenMetadata`. The
+   * signature alone does not say which stablecoin it authorizes — a server that
+   * accepts several tokens on the same chain cannot rebuild the payment
+   * requirements without this. Omitted by default so existing v1 wire formats
+   * stay byte-identical.
+   */
+  token?: PaymentTokenMetadata;
+}
+
+/**
+ * Token identification carried inside an x402 payload.
+ *
+ * Mirrors what a resource server needs to build `paymentRequirements`: the
+ * `asset` it must charge and the `extra` EIP-712 domain the facilitator needs
+ * to recover the signature.
+ */
+export interface PaymentTokenMetadata {
+  /** Token contract address (the `asset` of the payment requirements) */
+  address: string;
+  /** Uppercase token symbol, e.g. `USDC`, `EURC`, `USDT` */
+  symbol: string;
+  /** Token decimals — the amount in the authorization is in these units */
+  decimals: number;
+  /** EIP-712 domain of the token contract (the `extra` of the requirements) */
+  eip712: {
+    name: string;
+    version: string;
   };
 }
 
@@ -700,6 +732,16 @@ export interface X402ClientConfig {
   x402Version?: X402Version | 'auto';
   /** Multi-payment configuration for supporting multiple networks */
   multiPayment?: MultiPaymentConfig;
+  /**
+   * Include a `token` block in the payload naming the asset, its decimals and
+   * its EIP-712 domain.
+   *
+   * Needed when the resource accepts more than one stablecoin on the same
+   * chain: the signature alone does not say which one was paid, so the server
+   * cannot rebuild `paymentRequirements`. Off by default — the emitted header
+   * stays byte-identical to previous versions.
+   */
+  includeTokenMetadata?: boolean;
 }
 
 /**

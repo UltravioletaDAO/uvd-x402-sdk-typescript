@@ -19,6 +19,14 @@ export {
   convertX402Header,
 } from './x402';
 
+export { buildTokenMetadata } from './token-metadata';
+
+export {
+  encodeBase64Utf8,
+  decodeBase64Utf8,
+  encodeBase64Json,
+} from './base64';
+
 export {
   validateRecipient,
   validateAmount,

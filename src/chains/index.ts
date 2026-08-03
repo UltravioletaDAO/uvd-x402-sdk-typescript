@@ -439,6 +439,50 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     },
   },
 
+  bsc: {
+    chainId: 56,
+    chainIdHex: '0x38',
+    name: 'bsc',
+    displayName: 'BNB Smart Chain',
+    networkType: 'evm',
+    rpcUrl: 'https://binance.llamarpc.com',
+    explorerUrl: 'https://bscscan.com',
+    nativeCurrency: {
+      name: 'Binance Coin',
+      symbol: 'BNB',
+      decimals: 18,
+    },
+    usdc: {
+      // Binance-Peg USDC — 18 decimals, NOT the 6 every other chain uses.
+      address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+      decimals: 18,
+      name: 'USD Coin',
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+        decimals: 18,
+        name: 'USD Coin',
+        version: '2',
+      },
+      ausd: {
+        address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
+        decimals: 6,
+        name: 'Agora Dollar',
+        version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      // Disabled on purpose: Binance-Peg USDC does not implement ERC-3009
+      // `transferWithAuthorization`, so the exact scheme cannot settle it. The
+      // entry exists so the 18-decimal figure is on record — assuming the usual
+      // 6 here mis-prices a payment by 12 orders of magnitude.
+      enabled: false,
+    },
+  },
+
   scroll: {
     chainId: 534352,
     chainIdHex: '0x82750',
@@ -1155,6 +1199,44 @@ export function getTokenConfig(
   // Fall back to usdc config for backward compatibility
   if (tokenType === 'usdc') {
     return chain.usdc;
+  }
+
+  return undefined;
+}
+
+/**
+ * Find which token of a chain a contract address belongs to.
+ *
+ * The signed payload carries the token *address*, but a server that accepts
+ * several stablecoins on the same chain needs the symbol, the decimals and the
+ * EIP-712 domain to rebuild the payment requirements. This resolves the address
+ * back to the registry entry so that metadata can travel with the payment.
+ *
+ * @param chainName - Chain name (e.g., 'optimism')
+ * @param address - Token contract address (case-insensitive on EVM)
+ * @returns The token type and its config, or undefined if the address is not in the registry
+ */
+export function getTokenByAddress(
+  chainName: string,
+  address: string
+): { tokenType: TokenType; config: TokenConfig } | undefined {
+  const chain = getChainByName(chainName);
+  if (!chain || !address) return undefined;
+
+  const wanted = address.startsWith('0x') ? address.toLowerCase() : address;
+  const matches = (candidate: string): boolean =>
+    (candidate.startsWith('0x') ? candidate.toLowerCase() : candidate) === wanted;
+
+  if (chain.tokens) {
+    for (const [tokenType, config] of Object.entries(chain.tokens)) {
+      if (config && matches(config.address)) {
+        return { tokenType: tokenType as TokenType, config };
+      }
+    }
+  }
+
+  if (chain.usdc && matches(chain.usdc.address)) {
+    return { tokenType: 'usdc', config: chain.usdc };
   }
 
   return undefined;
