@@ -17,6 +17,8 @@ import type {
   X402EventData,
   X402EventHandler,
   EVMPaymentPayload,
+  TokenType,
+  X402EVMPayload,
 } from '../types';
 import { X402Error, DEFAULT_CONFIG } from '../types';
 import {
@@ -24,8 +26,14 @@ import {
   getChainByName,
   getChainById,
   getEnabledChains,
+  getTokenConfig,
 } from '../chains';
-import { validateRecipient, chainToCAIP2 } from '../utils';
+import {
+  validateRecipient,
+  chainToCAIP2,
+  encodeBase64Json,
+  buildTokenMetadata,
+} from '../utils';
 
 /**
  * X402Client - Main SDK client for x402 payments
@@ -533,6 +541,17 @@ export class X402Client {
     // Validate recipient address - prevents empty/invalid addresses
     validateRecipient(recipient, 'evm');
 
+    // Which stablecoin to charge. Defaults to USDC so existing callers are
+    // unaffected; anything else is resolved from the chain's token registry.
+    const tokenType: TokenType = paymentInfo.tokenType || 'usdc';
+    const token = getTokenConfig(chain.name, tokenType);
+    if (!token) {
+      throw new X402Error(
+        `Token ${tokenType} not supported on ${chain.name}`,
+        'CHAIN_NOT_SUPPORTED'
+      );
+    }
+
     // Generate random nonce
     const nonceBytes = new Uint8Array(32);
     if (typeof window !== 'undefined' && window.crypto) {
@@ -549,12 +568,12 @@ export class X402Client {
     const validityWindowSeconds = chain.name === 'base' ? 300 : 60;
     const validBefore = Math.floor(Date.now() / 1000) + validityWindowSeconds;
 
-    // EIP-712 domain
+    // EIP-712 domain of the token being charged
     const domain = {
-      name: chain.usdc.name,
-      version: chain.usdc.version,
+      name: token.name,
+      version: token.version,
       chainId: chain.chainId,
-      verifyingContract: chain.usdc.address,
+      verifyingContract: token.address,
     };
 
     // EIP-712 types for TransferWithAuthorization (ERC-3009)
@@ -569,8 +588,8 @@ export class X402Client {
       ],
     };
 
-    // Parse amount
-    const value = ethers.parseUnits(paymentInfo.amount, chain.usdc.decimals);
+    // Parse amount in the token's own decimals
+    const value = ethers.parseUnits(paymentInfo.amount, token.decimals);
     const from = await this.signer.getAddress();
     const to = ethers.getAddress(recipient);
 
@@ -615,7 +634,7 @@ export class X402Client {
       r: sig.r,
       s: sig.s,
       chainId: chain.chainId,
-      token: chain.usdc.address,
+      token: token.address,
     };
 
     // Encode as X-PAYMENT header
@@ -648,7 +667,7 @@ export class X402Client {
     const version = this.config.x402Version === 2 ? 2 : 1;
 
     // Build the payload data
-    const payloadData = {
+    const payloadData: X402EVMPayload = {
       signature: fullSignature,
       authorization: {
         from: payload.from,
@@ -659,6 +678,17 @@ export class X402Client {
         nonce: payload.nonce,
       },
     };
+
+    if (this.config.includeTokenMetadata) {
+      const token = buildTokenMetadata(chain.name, payload.token);
+      if (!token) {
+        throw new X402Error(
+          `Token ${payload.token} is not in the registry for ${chain.name}; cannot build token metadata`,
+          'CHAIN_NOT_SUPPORTED'
+        );
+      }
+      payloadData.token = token;
+    }
 
     // Format in x402 standard format (v1 or v2)
     const x402Payload = version === 2
@@ -675,9 +705,8 @@ export class X402Client {
           payload: payloadData,
         };
 
-    // Base64 encode
-    const jsonString = JSON.stringify(x402Payload);
-    return btoa(jsonString);
+    // Base64 encode (UTF-8 safe: token domain names like `USD₮0` are not ASCII)
+    return encodeBase64Json(x402Payload);
   }
 
   // ============================================================================

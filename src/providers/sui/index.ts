@@ -46,7 +46,7 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
-import { chainToCAIP2 } from '../../utils';
+import { chainToCAIP2, encodeBase64Json } from '../../utils';
 
 // Lazy import Sui dependencies to avoid bundling when not used
 let SuiClient: typeof import('@mysten/sui/client').SuiClient;
@@ -376,7 +376,7 @@ export class SuiProvider implements WalletAdapter {
           payload: payload,
         };
 
-    return btoa(JSON.stringify(x402Payload));
+    return encodeBase64Json(x402Payload);
   }
 
   // Private helpers

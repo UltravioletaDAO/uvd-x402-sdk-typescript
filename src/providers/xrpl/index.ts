@@ -46,7 +46,7 @@ import type {
   XRPLPaymentPayload,
 } from '../../types';
 import { X402Error } from '../../types';
-import { chainToCAIP2 } from '../../utils';
+import { chainToCAIP2, encodeBase64Json } from '../../utils';
 
 /**
  * XRP Ledger network configuration.
@@ -358,7 +358,7 @@ export class XRPLProvider implements WalletAdapter {
             payload: payloadData,
           };
 
-    return btoa(JSON.stringify(x402Payload));
+    return encodeBase64Json(x402Payload);
   }
 
   // Private helpers

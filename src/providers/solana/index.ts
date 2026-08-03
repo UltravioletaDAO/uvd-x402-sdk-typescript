@@ -48,7 +48,7 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
-import { chainToCAIP2 } from '../../utils';
+import { chainToCAIP2, encodeBase64Json } from '../../utils';
 
 /**
  * Browser-compatible base64 encoding for Uint8Array
@@ -439,7 +439,7 @@ export class SVMProvider implements WalletAdapter {
           payload: payloadData,
         };
 
-    return btoa(JSON.stringify(x402Payload));
+    return encodeBase64Json(x402Payload);
   }
 
   // Private helpers

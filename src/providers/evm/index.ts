@@ -29,10 +29,16 @@ import type {
   WalletAdapter,
   TokenType,
   TokenConfig,
+  X402EVMPayload,
 } from '../../types';
 import { X402Error } from '../../types';
 import { getChainByName, getChainById, getTokenConfig } from '../../chains';
-import { validateRecipient, chainToCAIP2 } from '../../utils';
+import {
+  validateRecipient,
+  chainToCAIP2,
+  encodeBase64Json,
+  buildTokenMetadata,
+} from '../../utils';
 import type { X402Version } from '../../types';
 
 /**
@@ -375,12 +381,19 @@ export class EVMProvider implements WalletAdapter {
    * @param paymentPayload - JSON-encoded payment payload from signPayment()
    * @param chainConfig - Chain configuration
    * @param version - x402 protocol version (1 or 2, defaults to 1)
+   * @param options - Encoding options
+   * @param options.includeTokenMetadata - Add a `token` block naming the asset,
+   *   its decimals and its EIP-712 domain. Required when the resource accepts
+   *   more than one stablecoin on the same chain, since the signature alone
+   *   does not say which one was paid. Off by default: the emitted header stays
+   *   byte-identical to previous versions.
    * @returns Base64-encoded X-PAYMENT header value
    */
   encodePaymentHeader(
     paymentPayload: string,
     chainConfig: ChainConfig,
-    version: X402Version = 1
+    version: X402Version = 1,
+    options: { includeTokenMetadata?: boolean } = {}
   ): string {
     const payload = JSON.parse(paymentPayload) as EVMPaymentPayload;
 
@@ -388,7 +401,7 @@ export class EVMProvider implements WalletAdapter {
     const fullSignature = payload.r + payload.s.slice(2) + payload.v.toString(16).padStart(2, '0');
 
     // Build the payload data
-    const payloadData = {
+    const payloadData: X402EVMPayload = {
       signature: fullSignature,
       authorization: {
         from: payload.from,
@@ -399,6 +412,17 @@ export class EVMProvider implements WalletAdapter {
         nonce: payload.nonce,
       },
     };
+
+    if (options.includeTokenMetadata) {
+      const token = buildTokenMetadata(chainConfig.name, payload.token);
+      if (!token) {
+        throw new X402Error(
+          `Token ${payload.token} is not in the registry for ${chainConfig.name}; cannot build token metadata`,
+          'CHAIN_NOT_SUPPORTED'
+        );
+      }
+      payloadData.token = token;
+    }
 
     // Format in x402 standard format (v1 or v2)
     const x402Payload = version === 2
@@ -415,7 +439,7 @@ export class EVMProvider implements WalletAdapter {
           payload: payloadData,
         };
 
-    return btoa(JSON.stringify(x402Payload));
+    return encodeBase64Json(x402Payload);
   }
 
   /**
