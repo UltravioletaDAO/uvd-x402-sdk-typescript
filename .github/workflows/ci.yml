@@ -33,3 +33,53 @@ jobs:
 
       - name: Package smoke test
         run: npm pack --dry-run
+
+  # The one check neither language's own suite can make. Both SDK suites were
+  # green while the implementations diverged, because each validated itself
+  # against vectors it had generated. This job spawns BOTH runtimes and makes
+  # each verify what the other just signed. It has NO `continue-on-error` and
+  # the script has no skip path: if Python is unavailable, the job fails.
+  cross-language:
+    name: Cross-language conformance (TS ↔ PY)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the Python SDK beside this repo
+        uses: actions/checkout@v4
+        with:
+          repository: UltravioletaDAO/uvd-x402-sdk-python
+          path: .sibling/uvd-x402-sdk-python
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the TypeScript SDK
+        run: npm ci
+
+      - name: Install the Python SDK from the sibling checkout
+        run: pip install -e '.[signer]'
+        working-directory: .sibling/uvd-x402-sdk-python
+
+      # The agent imports dist/, not src/: a divergence that only appears after
+      # bundling is still a divergence.
+      - name: Build
+        run: npm run build
+
+      # The one artefact, byte for byte, in both packages.
+      - name: Vectors are the same file in both repos
+        env:
+          UVD_X402_PY_ROOT: ${{ github.workspace }}/.sibling/uvd-x402-sdk-python
+        run: node scripts/derive-erc8128-f3-3.mjs --check
+
+      - name: Sign in each runtime, verify in the other
+        env:
+          UVD_X402_PY_ROOT: ${{ github.workspace }}/.sibling/uvd-x402-sdk-python
+          UVD_PYTHON: python
+        run: node scripts/xlang/cross-language-conformance.mjs

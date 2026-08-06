@@ -4,7 +4,48 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
-## [2.48.0] - Unreleased
+## [2.49.0] - 2026-08-06
+
+### Added
+
+- **`uvd-x402-sdk/erc8128` — one signer and one verifier for the whole fleet.**
+  ERC-8128 signing was copy-pasted across four projects and verification
+  existed only as two independent server implementations that had never been
+  compared. They had diverged: one rejected the canonical `alg="eip191"`
+  parameter every current signer emits, and the two disagreed on how
+  `@authority` is derived. This module is the single implementation both
+  languages now share, published to npm and PyPI from the same conformance
+  vectors.
+
+  - `signRequest` / `verifyRequest`, plus the pure primitives underneath
+    (`parseSignatureInput`, `buildSignatureBase`, `canonicalAuthority`).
+  - `NonceStore` is pluggable, so a server-issued single-use store and the
+    client-chosen first-use model are both expressible.
+  - `POLICY_PRESETS` (`meshrelay-strict`, `em-lenient`, `canonical-strict`)
+    carry the nonce ordering with them, so adopting a posture cannot silently
+    flip it. `canonical-strict` pins the chain — a preset named "strict" that
+    accepts any chain is not strict.
+  - The verifier never re-serialises `@signature-params`: it takes the
+    parameter substring verbatim from the header, so a parameter added to the
+    wire tomorrow verifies through the same byte path instead of 401-ing.
+  - `@authority` normalisation (lowercase, scheme's default port dropped)
+    applies only where the scheme is known. The **configured** policy authority
+    is validated but never re-normalised — guessing a scheme for it silently
+    breaks `https` on `:80` and `http` on `:443`.
+  - Conformance vectors ship **inside** the package and are byte-identical to
+    the Python ones; a cross-language test signs in each runtime and verifies in
+    the other, and fails loudly rather than skipping when one is absent.
+
+### Fixed
+
+- **A rejected verification no longer reports a `wallet`.** The Python verifier
+  returned the address the client wrote into its keyid on the failure path,
+  where nothing had checked it against the recovered signer — attacker-supplied
+  input in a field named `wallet`, one forgotten `if (!result.ok)` away from
+  being treated as an authenticated principal. Both languages now return no
+  wallet on any rejection.
+
+## [2.48.0] - 2026-08-03
 
 ### Added
 
