@@ -1,6 +1,6 @@
 {
   "name": "uvd-x402-sdk",
-  "version": "2.48.0",
+  "version": "2.49.0",
   "description": "x402 Payment SDK - Gasless crypto payments across 25 blockchains via Ultravioleta facilitator. Supports EVM (including Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, and XRP Ledger. Features: ERC-8004 Trustless Agents, Escrow/Refunds, multi-stablecoin (USDC, EURC, AUSD, PYUSD, USDT, USDG).",
   "author": "Ultravioleta DAO <ultravioletadao@gmail.com>",
   "license": "MIT",
@@ -113,6 +113,11 @@
       "types": "./dist/backend/index.d.ts",
       "import": "./dist/backend/index.mjs",
       "require": "./dist/backend/index.js"
+    },
+    "./erc8128": {
+      "types": "./dist/erc8128/index.d.ts",
+      "import": "./dist/erc8128/index.mjs",
+      "require": "./dist/erc8128/index.js"
     }
   },
   "typesVersions": {
@@ -152,6 +157,9 @@
       ],
       "backend": [
         "./dist/backend/index.d.ts"
+      ],
+      "erc8128": [
+        "./dist/erc8128/index.d.ts"
       ]
     }
   },
@@ -159,6 +167,7 @@
     "dist",
     "src/**/*.ts",
     "src/**/*.tsx",
+    "src/**/*.json",
     "!src/**/*.test.ts",
     "README.md",
     "LICENSE"
@@ -172,6 +181,9 @@
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
+    "vectors:gen": "node scripts/derive-erc8128-f3-3.mjs --mirror && node scripts/generate-erc8128-vectors.mjs",
+    "vectors:check": "node scripts/derive-erc8128-f3-3.mjs --check && node scripts/generate-erc8128-vectors.mjs --check",
+    "test:xlang": "node scripts/xlang/cross-language-conformance.mjs",
     "prepublishOnly": "npm run clean && npm run typecheck && npm run test:run && npm run lint && npm run build",
     "release": "bash scripts/publish-npm.sh"
   },
