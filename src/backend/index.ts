@@ -3317,6 +3317,38 @@ export interface IdentityByOwnerResponse {
 /**
  * Response from GET /identity/{network}/{agent_id}/metadata/{key}
  */
+/**
+ * Lifecycle of an async registration. `mint_confirmed` and `done` carry an
+ * `agentId`; `failed` carries an `error`.
+ */
+export type RegisterJobStatus = 'pending' | 'mint_confirmed' | 'done' | 'failed';
+
+/**
+ * Status of an asynchronous registration.
+ *
+ * Returned by `POST /register` with `Prefer: respond-async` (HTTP 202) and by
+ * `GET /register/status/{jobId}`.
+ *
+ * Terminal jobs are retained for one hour and then age out, after which the
+ * status endpoint 404s. Read the agent id before then, or it is only
+ * recoverable from the chain.
+ */
+export interface RegisterJobResponse {
+  jobId: string;
+  status: RegisterJobStatus;
+  network?: string;
+  agentId?: AgentId;
+  transaction?: string;
+  transferTransaction?: string;
+  owner?: string;
+  error?: string;
+}
+
+/** Whether polling can stop: the job either finished or failed. */
+export function isRegisterJobTerminal(job: RegisterJobResponse): boolean {
+  return job.status === 'done' || job.status === 'failed';
+}
+
 export interface IdentityMetadataResponse {
   /** Agent ID (EVM: number, Solana: string) */
   agentId: AgentId;
@@ -3925,6 +3957,124 @@ export class Erc8004Client {
         error: error instanceof Error ? error.message : 'Unknown error',
         network: request.network,
       };
+    }
+  }
+
+  /**
+   * Start a registration without waiting for the chain to confirm it.
+   *
+   * Registration waits on a mint receipt, which on a congested chain outlives
+   * client and proxy timeouts. A timed-out synchronous call is genuinely
+   * ambiguous — the mint may well have landed — and retrying it is how five
+   * duplicate agents once got minted. This returns immediately with a job id
+   * instead; poll {@link getRegisterStatus} or use {@link waitForRegistration}.
+   *
+   * On Solana, `recipient` is a base58 address: the facilitator mints,
+   * initializes the ATOM stats and transfers, paying every fee.
+   */
+  async registerAgentAsync(request: RegisterAgentRequest): Promise<RegisterJobResponse> {
+    const url = `${this.baseUrl}/register`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Prefer': 'respond-async',
+        },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Erc8004LookupError(
+          `ERC-8004 API error: ${response.status} - ${errorText}`,
+          response.status,
+          errorText,
+        );
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Read the current state of an asynchronous registration.
+   *
+   * Throws {@link Erc8004LookupError} with `notFound` when the job is unknown or
+   * has aged out — terminal jobs are kept for one hour.
+   */
+  async getRegisterStatus(jobId: string): Promise<RegisterJobResponse> {
+    const url = `${this.baseUrl}/register/status/${encodeURIComponent(jobId)}`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Erc8004LookupError(
+          `ERC-8004 API error: ${response.status} - ${errorText}`,
+          response.status,
+          errorText,
+        );
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      throw error;
+    }
+  }
+
+  /**
+   * Poll an asynchronous registration until it finishes.
+   *
+   * Rejects on timeout rather than resolving with the last non-terminal status,
+   * so "still pending" is never mistaken for "did not happen": the mint may
+   * still land afterwards, and treating a timeout as failure is what leads to
+   * registering the same agent twice. Keep the job id and poll again rather
+   * than re-registering.
+   */
+  async waitForRegistration(
+    jobId: string,
+    options?: { pollIntervalMs?: number; timeoutMs?: number },
+  ): Promise<RegisterJobResponse> {
+    const pollIntervalMs = options?.pollIntervalMs ?? 2000;
+    const timeoutMs = options?.timeoutMs ?? 300_000;
+    const deadline = Date.now() + timeoutMs;
+
+    for (;;) {
+      const job = await this.getRegisterStatus(jobId);
+      if (isRegisterJobTerminal(job)) {
+        return job;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Registration job ${jobId} still '${job.status}' after ${Math.round(
+            timeoutMs / 1000,
+          )}s. It may still complete: poll getRegisterStatus('${jobId}') rather than registering again.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
   }
 
