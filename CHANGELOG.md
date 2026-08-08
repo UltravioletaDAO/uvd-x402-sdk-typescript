@@ -4,6 +4,23 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.51.0] - 2026-08-08
+
+### Added
+
+- **`Erc8004LookupError`, thrown by `getIdentityByOwner` with the status as a
+  field.** The facilitator answers 404 for "this address owns no agent" and 503
+  for "I could not find out". `notFound` and `retryable` separate them.
+
+  This matters on a registration path: a caller that reads a 503 as absence
+  mints a second agent for an owner who already has one, burning gas and leaving
+  an orphan. The method used to throw a bare `Error` with the status
+  interpolated into the message, so telling the two apart meant parsing a string.
+
+- **Solana support in `getIdentityByOwner`.** Facilitator v1.72.0 answers the
+  route for SVM; before that it was EVM-only and returned 400. No SDK shape
+  change was needed — verified against the live mainnet response.
+
 ## [2.50.0] - 2026-08-07
 
 ### Added

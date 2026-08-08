@@ -3173,6 +3173,40 @@ export interface FeedbackResponse {
  * Reputation query response
  */
 /**
+ * Error from an ERC-8004 lookup, carrying the HTTP status as a field.
+ *
+ * `notFound` and `retryable` are mutually exclusive and must stay that way in
+ * calling code: the facilitator answers 404 for "this address owns no agent"
+ * and 503 for "I could not find out", usually an RPC failure behind it.
+ * Treating a 503 as absence is how a transient failure becomes a permanent
+ * wrong answer — on a registration path it mints a second agent for an owner
+ * who already has one, burning gas and leaving an orphan.
+ */
+export class Erc8004LookupError extends Error {
+  /** HTTP status returned by the facilitator */
+  readonly status: number;
+  /** Raw response body, for debugging */
+  readonly body: string;
+
+  constructor(message: string, status: number, body: string) {
+    super(message);
+    this.name = 'Erc8004LookupError';
+    this.status = status;
+    this.body = body;
+  }
+
+  /** The address genuinely owns no agent on this network. */
+  get notFound(): boolean {
+    return this.status === 404;
+  }
+
+  /** The lookup reached no verdict. Retry; never read as "owns nothing". */
+  get retryable(): boolean {
+    return this.status === 503;
+  }
+}
+
+/**
  * ATOM Engine reputation analytics (Solana only).
  *
  * Present only when the agent's `atom_stats` account has been initialized. The
@@ -3441,7 +3475,15 @@ export class Erc8004Client {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`ERC-8004 API error: ${response.status} - ${errorText}`);
+        // 404 and 503 are different answers: "owns nothing" versus "could not
+        // find out". Reading the status out of a message string is how they get
+        // collapsed, and collapsing them mints a duplicate agent for an owner
+        // who already has one. Carry the status as a field.
+        throw new Erc8004LookupError(
+          `ERC-8004 API error: ${response.status} - ${errorText}`,
+          response.status,
+          errorText,
+        );
       }
 
       return await response.json();
