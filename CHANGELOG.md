@@ -4,6 +4,42 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.50.0] - 2026-08-07
+
+### Added
+
+- **`score` on `FeedbackParams`.** On Solana the ATOM Engine ignores an unscored
+  feedback: it is written to the agent, but contributes nothing to reputation and
+  the program reports `had_impact=false`. Not retroactive — reputation stays at
+  zero however much unscored feedback accumulates. The facilitator could not send
+  it either until v1.70.3, so nobody's Solana reputation was ever being scored.
+
+- **`AtomStats`, exposed on `ReputationResponse.atomStats`.** The facilitator has
+  returned this for Solana since v1.70.2; the SDK had no type for it. The engine
+  measures quality through EMA scores, so there are no positive/negative tallies:
+  the fields are `trustTier`, `qualityScore`, `loyaltyScore`, `confidence`,
+  `riskScore`, `diversityRatio`, `min/max/lastScore`, `feedbackCount` and
+  `lastFeedbackSlot`.
+
+- **`originalFeedback` on `revokeFeedback`.** Solana revocations need the SEAL
+  hash of the feedback being revoked. Pass the original content and the
+  facilitator derives it; computing it yourself means reimplementing the
+  program's keccak256 layout exactly. `sealHash` still works and wins.
+
+- **`numMinted` and `collection` on `IdentityTotalSupplyResponse`.** On Solana
+  the counts come from the Metaplex Core collection, not the registry, which
+  keeps no counter: `totalSupply` is the collection's current size (net of
+  burns), `numMinted` its all-time count.
+
+- **`immutable` on `IdentityMetadataResponse`.**
+
+### Fixed
+
+- **`IdentityMetadataResponse.valueHex` never existed on the wire.** The
+  facilitator sends the hex value as `value`. The field was typed as `valueHex`,
+  so it read `undefined` at runtime for every metadata lookup ever made. Renamed
+  to `value`.
+
 ## [2.49.0] - 2026-08-06
 
 ### Added

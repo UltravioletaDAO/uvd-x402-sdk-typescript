@@ -3127,6 +3127,16 @@ export interface FeedbackParams {
   feedbackUri?: string;
   /** Keccak256 hash of feedback content (for integrity) */
   feedbackHash?: string;
+  /**
+   * Quality score 0-100.
+   *
+   * Solana only, and effectively required there: the ATOM Engine ignores an
+   * unscored feedback. It is written to the agent but contributes nothing to
+   * reputation, and the program reports `had_impact=false`. This is not
+   * retroactive — reputation stays at zero however much unscored feedback
+   * accumulates.
+   */
+  score?: number;
   /** Proof of payment (required for authorized feedback) */
   proof?: ProofOfPayment;
 }
@@ -3162,10 +3172,49 @@ export interface FeedbackResponse {
 /**
  * Reputation query response
  */
+/**
+ * ATOM Engine reputation analytics (Solana only).
+ *
+ * Present only when the agent's `atom_stats` account has been initialized. The
+ * facilitator does that during `registerAgent`; agents registered elsewhere may
+ * never have it, in which case their feedback is never scored.
+ *
+ * The engine measures quality through EMA scores, so there are no
+ * positive/negative tallies.
+ */
+export interface AtomStats {
+  /** Trust tier 0-4 */
+  trustTier: number;
+  /** Human-readable trust tier */
+  trustTierName: string;
+  /** Cached quality score */
+  qualityScore: number;
+  /** Cached loyalty score */
+  loyaltyScore: number;
+  /** Statistical confidence */
+  confidence: number;
+  /** Risk assessment (lower is better) */
+  riskScore: number;
+  /** Client diversity from HyperLogLog */
+  diversityRatio: number;
+  /** Lowest score ever recorded */
+  minScore: number;
+  /** Highest score ever recorded */
+  maxScore: number;
+  /** Most recent score recorded */
+  lastScore: number;
+  /** Total feedback counted by the engine */
+  feedbackCount: number;
+  /** Slot of the most recent feedback */
+  lastFeedbackSlot: number;
+}
+
 export interface ReputationResponse {
   agentId: AgentId;
   summary: ReputationSummary;
   feedback?: FeedbackEntry[];
+  /** ATOM Engine analytics; absent when the agent has no initialized stats */
+  atomStats?: AtomStats | null;
   network: Erc8004Network;
 }
 
@@ -3239,20 +3288,33 @@ export interface IdentityMetadataResponse {
   agentId: AgentId;
   /** Metadata key */
   key: string;
-  /** Raw hex-encoded value */
-  valueHex: string;
+  /**
+   * Raw hex-encoded value. The facilitator sends this as `value`; this field
+   * used to be declared as `valueHex`, which no response ever carried, so it
+   * was always undefined at runtime.
+   */
+  value: string;
   /** UTF-8 decoded value (if decodable) */
   valueUtf8?: string;
+  /** Whether the entry can still be changed */
+  immutable?: boolean;
   /** Network */
   network: string;
 }
 
 /**
  * Response from GET /identity/{network}/total-supply
+ *
+ * On Solana the counts come from the Metaplex Core collection, not the registry,
+ * which keeps no counter of its own.
  */
 export interface IdentityTotalSupplyResponse {
-  /** Total number of registered agents */
+  /** Registered agents, net of burns */
   totalSupply: number;
+  /** All-time mint count (Solana) */
+  numMinted?: number;
+  /** Metaplex Core collection backing the count (Solana) */
+  collection?: string;
   /** Network */
   network: string;
 }
@@ -3562,7 +3624,7 @@ export class Erc8004Client {
     network: Erc8004Network,
     agentId: AgentId,
     feedbackIndex: number,
-    options?: { sealHash?: string }
+    options?: { sealHash?: string; originalFeedback?: Omit<FeedbackParams, 'agentId' | 'proof'> }
   ): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback/revoke`;
 
@@ -3575,8 +3637,13 @@ export class Erc8004Client {
       agentId,
       feedbackIndex,
     };
+    // Solana revocations need the SEAL hash of the feedback being revoked. Pass
+    // originalFeedback and the facilitator derives it; computing it yourself
+    // means reimplementing the program's keccak256 layout exactly.
     if (options?.sealHash) {
       payload.sealHash = options.sealHash;
+    } else if (options?.originalFeedback) {
+      payload.originalFeedback = options.originalFeedback;
     }
 
     try {
