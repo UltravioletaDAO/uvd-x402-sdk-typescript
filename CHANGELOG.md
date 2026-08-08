@@ -4,6 +4,26 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.52.0] - 2026-08-08
+
+### Added
+
+- **Async registration: `registerAgentAsync`, `getRegisterStatus`,
+  `waitForRegistration`.** The facilitator has offered this since v1.48.0 and no
+  SDK exposed it.
+
+  A synchronous register waits on a mint receipt, which on a congested chain
+  outlives client and proxy timeouts. The timed-out call is genuinely ambiguous —
+  the mint may well have landed — and retrying it is how five duplicate agents
+  once got minted. The async flow hands back a job id instead of a guess.
+
+  `waitForRegistration` rejects on timeout rather than resolving the last
+  non-terminal status, so "still pending" is never read as "did not happen", and
+  the message says to keep polling rather than re-register.
+
+- **`RegisterJobResponse` / `RegisterJobStatus` / `isRegisterJobTerminal`.**
+  `mint_confirmed` already carries an `agentId` but is not terminal.
+
 ## [2.51.0] - 2026-08-08
 
 ### Added
