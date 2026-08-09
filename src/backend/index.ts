@@ -3942,6 +3942,28 @@ export class Erc8004Client {
 
       if (!response.ok) {
         const errorText = await response.text();
+        // The facilitator answers 4xx with a structured RegisterAgentResponse,
+        // and on 409 - a registration for this agent is ALREADY IN FLIGHT -
+        // that body carries the agent id and tx of the run already underway,
+        // plus an explicit "poll GET /register/status/{jobId}" hint.
+        //
+        // Flattening it into a bare string threw away the only thing that lets
+        // a caller resolve instead of re-POSTing, and re-POSTing a mint is
+        // exactly how duplicate agents get created. Keep the body.
+        try {
+          const parsed = JSON.parse(errorText) as RegisterAgentResponse;
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return {
+              ...parsed,
+              // Never let a 4xx body claim success, whatever it says.
+              success: false,
+              error: parsed.error ?? `Facilitator error: ${response.status}`,
+              network: parsed.network ?? request.network,
+            };
+          }
+        } catch {
+          // Not JSON - fall through to the flattened error.
+        }
         return {
           success: false,
           error: `Facilitator error: ${response.status} - ${errorText}`,

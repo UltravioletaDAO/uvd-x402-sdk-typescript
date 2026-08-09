@@ -4,6 +4,21 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.52.1] - 2026-08-09
+
+### Fixed
+
+- **A 409 from `registerAgent` no longer discards the facilitator body.** The
+  in-flight lock answers a synchronous register with 409 and a structured
+  `RegisterAgentResponse` carrying the agent id and tx of the run ALREADY
+  underway, plus a "poll GET /register/status/{jobId}" hint. That was flattened
+  into `Facilitator error: 409 - <text>`, leaving the caller with a bare failure
+  — precisely the shape that invites a retry, and retrying a mint is how
+  duplicate agents get created. The parsed body is returned instead, with
+  `success` forced to `false` so a 4xx can never claim otherwise. A 400 now
+  surfaces the facilitator's own message; a non-JSON error still degrades to the
+  flattened string.
+
 ## [2.52.0] - 2026-08-08
 
 ### Added
