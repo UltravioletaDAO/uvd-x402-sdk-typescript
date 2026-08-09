@@ -14,7 +14,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { Erc8004Client, isRegisterJobTerminal } from './index';
+import { Erc8004Client, isRegisterJobTerminal, RegistrationPendingError } from './index';
 import type { RegisterJobResponse } from './index';
 
 function queueResponses(responses: Array<{ status: number; body: unknown }>): {
@@ -104,5 +104,74 @@ describe('async registration', () => {
 
     expect(job.agentId).toBe(17);
     expect(isRegisterJobTerminal(job)).toBe(false);
+  });
+});
+
+describe('asyncTransport flag', () => {
+  it('returns the same shape as the synchronous call', async () => {
+    // The migration must not force callers to rewrite anything downstream.
+    queueResponses([
+      { status: 202, body: { jobId: 'reg_42', status: 'pending' } },
+      {
+        status: 200,
+        body: {
+          jobId: 'reg_42',
+          status: 'done',
+          network: 'solana',
+          agentId: '247Y4QLwz9ZbcuHR2nX2EQLZHCsMs1GTqvgd6fpdn85Q',
+          transaction: '4jz6...',
+          transferTransaction: '27Vv...',
+          owner: '6xNPewUdKRbEZDReQdpyfNUdgNg8QRc8Mt263T5GZSRv',
+        },
+      },
+    ]);
+
+    const result = await new Erc8004Client().registerAgent(
+      { x402Version: 1, network: 'solana', agentUri: 'https://example.com/agent.json' },
+      { asyncTransport: true, pollIntervalMs: 1 },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.agentId).toBe('247Y4QLwz9ZbcuHR2nX2EQLZHCsMs1GTqvgd6fpdn85Q');
+    expect(result.transferTransaction).toBe('27Vv...');
+    expect(result.network).toBe('solana');
+  });
+
+  it('maps a failed job to an unsuccessful response', async () => {
+    queueResponses([
+      { status: 202, body: { jobId: 'reg_9', status: 'pending' } },
+      {
+        status: 200,
+        body: { jobId: 'reg_9', status: 'failed', network: 'base', error: 'insufficient gas' },
+      },
+    ]);
+
+    const result = await new Erc8004Client().registerAgent(
+      { x402Version: 1, network: 'base', agentUri: 'ipfs://Qm' },
+      { asyncTransport: true, pollIntervalMs: 1 },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('insufficient gas');
+    expect(result.agentId).toBeUndefined();
+  });
+
+  it('surfaces the job id on timeout instead of reporting a failure', async () => {
+    // Resolving success=false here would tell the caller the registration did
+    // not happen, when the mint may well be about to land.
+    queueResponses([{ status: 200, body: { jobId: 'reg_7', status: 'pending' } }]);
+
+    try {
+      await new Erc8004Client().registerAgent(
+        { x402Version: 1, network: 'solana', agentUri: 'https://example.com/agent.json' },
+        { asyncTransport: true, pollIntervalMs: 1, timeoutMs: 20 },
+      );
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      const err = error as RegistrationPendingError;
+      expect(err).toBeInstanceOf(RegistrationPendingError);
+      expect(err.jobId).toBe('reg_7');
+      expect(err.retryable).toBe(true);
+    }
   });
 });

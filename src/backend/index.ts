@@ -3349,6 +3349,57 @@ export function isRegisterJobTerminal(job: RegisterJobResponse): boolean {
   return job.status === 'done' || job.status === 'failed';
 }
 
+/**
+ * Thrown when a registration is still running after the wait elapsed.
+ *
+ * This is emphatically **not** a failure. The mint may still land. `jobId` is a
+ * field rather than only part of the message, because the correct recovery is to
+ * keep polling `getRegisterStatus(jobId)` — and a caller who cannot reach the id
+ * without parsing a string will re-register instead, minting a duplicate agent.
+ * That is the exact sequence that once produced five duplicate mints.
+ *
+ * Never map this to "registration failed".
+ */
+export class RegistrationPendingError extends Error {
+  readonly jobId: string;
+  readonly lastStatus: RegisterJobStatus;
+  readonly timeoutMs: number;
+  readonly retryable = true;
+
+  constructor(jobId: string, lastStatus: RegisterJobStatus, timeoutMs: number) {
+    super(
+      `Registration job ${jobId} still '${lastStatus}' after ${Math.round(
+        timeoutMs / 1000,
+      )}s. It may still complete: poll getRegisterStatus('${jobId}') rather than registering again.`,
+    );
+    this.name = 'RegistrationPendingError';
+    this.jobId = jobId;
+    this.lastStatus = lastStatus;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * Present a finished async job in the shape the synchronous call returns.
+ *
+ * Keeping the return type identical is the whole point of `asyncTransport`:
+ * switching transports must not force callers to rewrite anything downstream.
+ */
+function jobToRegisterResponse(
+  job: RegisterJobResponse,
+  network: Erc8004Network,
+): RegisterAgentResponse {
+  return {
+    success: job.status !== 'failed',
+    agentId: job.agentId,
+    transaction: job.transaction,
+    transferTransaction: job.transferTransaction,
+    owner: job.owner,
+    error: job.error,
+    network: (job.network as Erc8004Network) ?? network,
+  };
+}
+
 export interface IdentityMetadataResponse {
   /** Agent ID (EVM: number, Solana: string) */
   agentId: AgentId;
@@ -3921,7 +3972,23 @@ export class Erc8004Client {
    * console.log(`Agent #${result.agentId} transferred to user`);
    * ```
    */
-  async registerAgent(request: RegisterAgentRequest): Promise<RegisterAgentResponse> {
+  async registerAgent(
+    request: RegisterAgentRequest,
+    options?: { asyncTransport?: boolean; pollIntervalMs?: number; timeoutMs?: number },
+  ): Promise<RegisterAgentResponse> {
+    // asyncTransport changes how the wait is carried out, not what comes back.
+    // The synchronous call holds one HTTP request open for the whole mint, which
+    // on a congested chain outlives proxy timeouts; each poll here is short, so
+    // nothing in the path can time out ambiguously.
+    if (options?.asyncTransport) {
+      const job = await this.registerAgentAsync(request);
+      const terminal = await this.waitForRegistration(job.jobId, {
+        pollIntervalMs: options.pollIntervalMs,
+        timeoutMs: options.timeoutMs,
+      });
+      return jobToRegisterResponse(terminal, request.network);
+    }
+
     const url = `${this.baseUrl}/register`;
 
     const controller = new AbortController();
@@ -4090,11 +4157,7 @@ export class Erc8004Client {
         return job;
       }
       if (Date.now() >= deadline) {
-        throw new Error(
-          `Registration job ${jobId} still '${job.status}' after ${Math.round(
-            timeoutMs / 1000,
-          )}s. It may still complete: poll getRegisterStatus('${jobId}') rather than registering again.`,
-        );
+        throw new RegistrationPendingError(jobId, job.status, timeoutMs);
       }
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }

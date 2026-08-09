@@ -4,6 +4,28 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.53.0] - 2026-08-09
+
+### Added
+
+- **`asyncTransport` on `registerAgent`.** Execution Market migrated to async
+  registration, and 2.52.0 made that a breaking change at the call site:
+  `registerAgent` returns `RegisterAgentResponse` (with `agentId`),
+  `registerAgentAsync` returns `RegisterJobResponse` (without one yet).
+
+  `registerAgent(request, { asyncTransport: true })` changes the transport, not
+  the contract: it starts with `Prefer: respond-async`, polls, and returns the
+  same `RegisterAgentResponse`. Caller code is unchanged and gains immunity to
+  proxy timeouts, because each request is short instead of one held open for the
+  whole mint.
+
+- **`RegistrationPendingError`, carrying `jobId` as a field.** What makes the
+  above safe rather than merely convenient. A timeout is not a failure — the mint
+  may still land — and a caller who cannot reach the job id without parsing a
+  string will re-register instead. That is the sequence that once produced five
+  duplicate mints. For the same reason the timeout throws rather than resolving
+  `success: false`.
+
 ## [2.52.1] - 2026-08-09
 
 ### Fixed
