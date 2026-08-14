@@ -117,6 +117,24 @@
  */
 
 // Main client
+// DX402 durable-evidence: recover a paid response after the fact.
+export {
+  EVIDENCE_HEADER,
+  DX402Error,
+  EvidenceSkipped,
+  ContentHashMismatch,
+  isEndToEnd,
+  contentHash,
+  paymentId as dx402PaymentId,
+  parseEvidenceHeader,
+  evidenceFromHeaders,
+  dereferencePointer,
+  parseSealed,
+  unseal,
+  recoverEvidence,
+} from './dx402';
+export type { AnchoredEvidence, EvidenceMode } from './dx402';
+
 export { X402Client } from './client';
 
 // Chain configuration
