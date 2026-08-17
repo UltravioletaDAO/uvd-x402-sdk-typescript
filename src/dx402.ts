@@ -350,3 +350,135 @@ export async function recoverEvidence(
 
   return plaintext;
 }
+
+// ============================================================================
+// Seller side -- sealing
+// ============================================================================
+//
+// The half above recovers evidence. This half PRODUCES it, and it belongs to
+// whoever holds the plaintext: the resource server, right after settlement.
+//
+// The facilitator is deliberately not involved. It only ever sees /verify and
+// /settle, never a response body, so sealing cannot happen there.
+
+import { edwardsToMontgomeryPub } from '@noble/curves/ed25519';
+import { randomBytes } from '@noble/hashes/utils';
+
+/**
+ * Map an ed25519 public key to its X25519 form.
+ *
+ * On ed25519 chains (Solana, NEAR, Stellar, Algorand) the address **is** the
+ * public key, so this is all that stands between an address and an encryption
+ * target — no signature, no lookup.
+ */
+export function ed25519ToX25519(pubkey: Uint8Array): Uint8Array {
+  if (pubkey.length !== 32) {
+    throw new DX402Error(`ed25519 public key must be 32 bytes, got ${pubkey.length}`);
+  }
+  return edwardsToMontgomeryPub(pubkey);
+}
+
+/**
+ * Recover an EVM payer's secp256k1 public key from their payment signature.
+ *
+ * `digest` is the EIP-712 digest the payer actually signed. Getting it wrong
+ * does not throw: it recovers a *different, perfectly valid* key, and the body
+ * would be sealed to a stranger while every log line said success. The token's
+ * EIP-712 domain name varies per chain and even flips between a chain's mainnet
+ * and testnet, so derive it from the same table the facilitator uses.
+ *
+ * Returns the SEC1-compressed key (33 bytes).
+ */
+export function payerKeyFromEvmSignature(
+  signature: Uint8Array | string,
+  digest: Uint8Array,
+): Uint8Array {
+  const sig = typeof signature === 'string' ? hexToBytes(signature) : signature;
+  if (sig.length !== 65) {
+    throw new DX402Error(`signature must be 65 bytes, got ${sig.length}`);
+  }
+
+  let v = sig[65 - 1];
+  if (v === 27 || v === 28) v -= 27;
+  else if (v >= 35) v = (v - 35) % 2;
+  if (v !== 0 && v !== 1) throw new DX402Error(`invalid recovery id ${sig[64]}`);
+
+  const parsed = secp256k1.Signature.fromCompact(sig.subarray(0, 64)).addRecoveryBit(v);
+  return parsed.recoverPublicKey(digest).toRawBytes(true);
+}
+
+/**
+ * Seal `body` so that only the holder of the payer's private key can read it.
+ *
+ * `payerKey` is a 33-byte SEC1-compressed secp256k1 key (EVM, XRPL) or a 32-byte
+ * X25519 key from {@link ed25519ToX25519}.
+ *
+ * `paymentIdValue` is bound in as AEAD associated data, which is what stops a
+ * ciphertext from being replayed as the evidence for a different payment.
+ * Derive it with {@link paymentId} on both sides — deriving it differently makes
+ * decryption fail with no obvious cause.
+ *
+ * Returns the bytes to upload. Nothing here touches the network.
+ */
+export function sealEvidence(
+  body: Uint8Array,
+  payerKey: Uint8Array,
+  paymentIdValue: string,
+): Uint8Array {
+  const aad = new TextEncoder().encode(paymentIdValue);
+  const cek = randomBytes(32);
+  const bodyNonce = randomBytes(NONCE_LEN);
+  const cekNonce = randomBytes(NONCE_LEN);
+
+  const ciphertext = gcm(cek, bodyNonce, aad).encrypt(body);
+
+  let algByte: number;
+  let ephemeral: Uint8Array;
+  let shared: Uint8Array;
+
+  if (payerKey.length === 33) {
+    algByte = 1;
+    const ephPriv = secp256k1.utils.randomPrivateKey();
+    ephemeral = secp256k1.getPublicKey(ephPriv, true);
+    // Only the x-coordinate is the ECDH result; the leading tag byte is not
+    // part of it. Including it would derive a different key and fail with no
+    // useful diagnostic.
+    shared = secp256k1.getSharedSecret(ephPriv, payerKey, true).subarray(1);
+  } else if (payerKey.length === 32) {
+    algByte = 2;
+    const ephPriv = randomBytes(32);
+    ephemeral = x25519.getPublicKey(ephPriv);
+    shared = x25519.getSharedSecret(ephPriv, payerKey);
+
+    // RFC 7748 section 6.1: a small-order payer key would drive the shared
+    // secret to a constant that whoever supplied it could reproduce.
+    if (shared.every((b) => b === 0)) {
+      throw new DX402Error('degenerate ECDH result (small-order public key)');
+    }
+  } else {
+    throw new DX402Error(
+      `payer key must be 33 bytes (secp256k1) or 32 (X25519), got ${payerKey.length}`,
+    );
+  }
+
+  const wrapKey = hkdf(sha256, shared, aad, HKDF_INFO, 32);
+  const wrappedCek = gcm(wrapKey, cekNonce, aad).encrypt(cek);
+
+  const out = new Uint8Array(
+    MAGIC.length + 3 + ephemeral.length + NONCE_LEN + 2 + wrappedCek.length +
+      NONCE_LEN + ciphertext.length,
+  );
+  let pos = 0;
+  out.set(MAGIC, pos); pos += MAGIC.length;
+  out[pos++] = FORMAT_VERSION;
+  out[pos++] = algByte;
+  out[pos++] = ephemeral.length;
+  out.set(ephemeral, pos); pos += ephemeral.length;
+  out.set(cekNonce, pos); pos += NONCE_LEN;
+  out[pos++] = (wrappedCek.length >> 8) & 0xff;
+  out[pos++] = wrappedCek.length & 0xff;
+  out.set(wrappedCek, pos); pos += wrappedCek.length;
+  out.set(bodyNonce, pos); pos += NONCE_LEN;
+  out.set(ciphertext, pos);
+  return out;
+}

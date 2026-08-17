@@ -132,6 +132,10 @@ export {
   parseSealed,
   unseal,
   recoverEvidence,
+  // seller side
+  sealEvidence,
+  ed25519ToX25519,
+  payerKeyFromEvmSignature,
 } from './dx402';
 export type { AnchoredEvidence, EvidenceMode } from './dx402';
 
