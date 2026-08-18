@@ -29,6 +29,8 @@ import {
   recoverEvidence,
   unseal,
   sealedRoles,
+  anchorDigest,
+  ZERO_ADDRESS,
   type AnchoredEvidence,
 } from './dx402';
 
@@ -248,5 +250,51 @@ describe('multi-recipient envelopes (v2, sealed by Rust)', () => {
     // Every blob anchored before v2 existed is v1. If this stopped parsing,
     // evidence already in the store would become unreadable.
     expect(sealedRoles(hexToBytes(vectors.secp256k1.blob))).toEqual(['payer']);
+  });
+});
+
+describe('anchor authorization digest', () => {
+  const a = (vectors as unknown as Record<string, Record<string, Record<string, string>>>)
+    .anchorDigest;
+
+  it('matches the digest the facilitator computes (EVM)', () => {
+    // Pinned against Rust, not recomputed here. A digest built slightly
+    // differently throws nothing — it produces a signature that never verifies
+    // and the seller's anchor silently stays provisional.
+    const d = anchorDigest(
+      a.paymentId as unknown as string,
+      a.contentHash as unknown as string,
+      a.evm.pointer,
+      a.evm.payee,
+      Number(a.evm.chainId),
+    );
+    expect('0x' + Array.from(d).map((b) => b.toString(16).padStart(2, '0')).join('')).toBe(
+      a.evm.digest,
+    );
+  });
+
+  it('matches the digest the facilitator computes (ed25519 form)', () => {
+    const d = anchorDigest(
+      a.paymentId as unknown as string,
+      a.contentHash as unknown as string,
+      a.ed25519.pointer,
+      a.ed25519.payee,
+      Number(a.ed25519.chainId),
+    );
+    expect('0x' + Array.from(d).map((b) => b.toString(16).padStart(2, '0')).join('')).toBe(
+      a.ed25519.digest,
+    );
+  });
+
+  it('rejects malformed inputs rather than hashing garbage', () => {
+    expect(() => anchorDigest('0x00', '0x' + '22'.repeat(32), '', ZERO_ADDRESS, 0)).toThrow();
+    expect(() => anchorDigest('0x' + '11'.repeat(32), '0x00', '', ZERO_ADDRESS, 0)).toThrow();
+    expect(() => anchorDigest('0x' + '11'.repeat(32), '0x' + '22'.repeat(32), '', '0x00', 0)).toThrow();
+  });
+
+  it('binds every field', () => {
+    const base = anchorDigest('0x' + '11'.repeat(32), '0x' + '22'.repeat(32), 'p', ZERO_ADDRESS, 0);
+    const other = anchorDigest('0x' + '11'.repeat(32), '0x' + '22'.repeat(32), 'otro', ZERO_ADDRESS, 0);
+    expect(base).not.toEqual(other);
   });
 });

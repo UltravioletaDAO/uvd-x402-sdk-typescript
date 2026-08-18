@@ -22,7 +22,7 @@
  */
 
 import { gcm } from '@noble/ciphers/aes';
-import { x25519 } from '@noble/curves/ed25519';
+import { ed25519, x25519 } from '@noble/curves/ed25519';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { hkdf } from '@noble/hashes/hkdf';
 import { keccak_256 } from '@noble/hashes/sha3';
@@ -538,4 +538,145 @@ export function sealEvidence(
   out.set(bodyNonce, pos); pos += NONCE_LEN;
   out.set(ciphertext, pos);
   return out;
+}
+
+// ============================================================================
+// Anchor authorization -- proving the anchor is yours
+// ============================================================================
+//
+// An anchor carrying a valid payee signature is `verified` and final. One
+// without is provisional: it still blocks a duplicate, but a verified anchor
+// for the same payment supersedes it.
+//
+// That asymmetry exists because the paymentId claim is permanent. Without it,
+// whoever anchored first owned the evidence of a payment forever and the real
+// seller was locked out.
+
+const ANCHOR_DOMAIN_NAME = 'DX402 Anchor';
+const ANCHOR_DOMAIN_VERSION = '1';
+const ANCHOR_TYPE =
+  'Dx402AnchorAuthorization(bytes32 paymentId,bytes32 contentHash,string pointer,address payee)';
+const EIP712_DOMAIN_TYPE = 'EIP712Domain(string name,string version,uint256 chainId)';
+
+/** The zero address, for the ed25519 form of the digest. */
+export const ZERO_ADDRESS = '0x' + '00'.repeat(20);
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const p of parts) {
+    out.set(p, pos);
+    pos += p.length;
+  }
+  return out;
+}
+
+function uint256(n: number | bigint): Uint8Array {
+  const out = new Uint8Array(32);
+  let v = BigInt(n);
+  for (let i = 31; i >= 0 && v > 0n; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
+}
+
+/**
+ * The 32-byte digest a seller signs to prove an anchor is theirs.
+ *
+ * One canonical message across every curve. `payee` is the EVM address for a
+ * secp256k1 payee and the **zero address** for an ed25519 one — an ed25519
+ * address does not fit the `address` field, and the binding is already
+ * established by which key verifies the signature.
+ *
+ * `pointer` is whatever you send in the anchor, or the **empty string** when you
+ * send `sealed` and the facilitator issues the pointer itself: you cannot sign a
+ * value you have not seen.
+ *
+ * Getting this wrong throws nothing — it produces a signature that simply never
+ * verifies, and the anchor stays provisional with no clue why. The tests pin it
+ * against digests emitted by the facilitator's own Rust implementation.
+ */
+export function anchorDigest(
+  paymentId: string,
+  contentHash: string,
+  pointer: string,
+  payee: string,
+  chainId: number,
+): Uint8Array {
+  const b32 = (value: string, field: string): Uint8Array => {
+    const raw = hexToBytes(value);
+    if (raw.length !== 32) throw new DX402Error(`${field} must be 32 bytes, got ${raw.length}`);
+    return raw;
+  };
+
+  const addr = hexToBytes(payee);
+  if (addr.length !== 20) {
+    throw new DX402Error(`payee must be a 20-byte address, got ${addr.length}`);
+  }
+
+  const enc = new TextEncoder();
+  const domainSeparator = keccak_256(
+    concatBytes(
+      keccak_256(enc.encode(EIP712_DOMAIN_TYPE)),
+      keccak_256(enc.encode(ANCHOR_DOMAIN_NAME)),
+      keccak_256(enc.encode(ANCHOR_DOMAIN_VERSION)),
+      uint256(chainId),
+    ),
+  );
+
+  const structHash = keccak_256(
+    concatBytes(
+      keccak_256(enc.encode(ANCHOR_TYPE)),
+      b32(paymentId, 'paymentId'),
+      b32(contentHash, 'contentHash'),
+      keccak_256(enc.encode(pointer)),
+      new Uint8Array(12),
+      addr,
+    ),
+  );
+
+  return keccak_256(concatBytes(new Uint8Array([0x19, 0x01]), domainSeparator, structHash));
+}
+
+/**
+ * Sign an anchor authorization with a Solana / Stellar ed25519 key.
+ *
+ * A Solana payee cannot produce an EIP-712 signature at all — its address is an
+ * ed25519 key — so requiring one would leave that chain unable to prove
+ * authorship even once the on-chain gate is enforced. This closes it today, with
+ * no RPC.
+ */
+export function signAnchorEd25519(
+  privateKey: Uint8Array,
+  paymentId: string,
+  contentHash: string,
+  pointer = '',
+): string {
+  if (privateKey.length !== 32) {
+    throw new DX402Error(`ed25519 seed must be 32 bytes, got ${privateKey.length}`);
+  }
+  const digest = anchorDigest(paymentId, contentHash, pointer, ZERO_ADDRESS, 0);
+  return '0x' + bytesToHex(ed25519.sign(digest, privateKey));
+}
+
+/**
+ * Sign an anchor authorization with an EVM secp256k1 key.
+ *
+ * `payee` must be the address of `privateKey` — the facilitator recovers the
+ * signer and compares, so declaring somebody else's address simply leaves the
+ * anchor provisional.
+ */
+export function signAnchorEvm(
+  privateKey: Uint8Array,
+  paymentId: string,
+  contentHash: string,
+  pointer: string,
+  payee: string,
+  chainId: number,
+): string {
+  const digest = anchorDigest(paymentId, contentHash, pointer, payee, chainId);
+  const sig = secp256k1.sign(digest, privateKey);
+  return '0x' + bytesToHex(sig.toCompactRawBytes()) + (sig.recovery === 1 ? '01' : '00');
 }

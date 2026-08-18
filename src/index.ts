@@ -137,6 +137,10 @@ export {
   ed25519ToX25519,
   payerKeyFromEvmSignature,
   sealedRoles,
+  anchorDigest,
+  signAnchorEd25519,
+  signAnchorEvm,
+  ZERO_ADDRESS,
 } from './dx402';
 export type { AnchoredEvidence, EvidenceMode, RecipientRole } from './dx402';
 
