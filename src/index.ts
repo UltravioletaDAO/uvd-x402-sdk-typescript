@@ -141,8 +141,12 @@ export {
   signAnchorEd25519,
   signAnchorEvm,
   ZERO_ADDRESS,
+  sealEvidenceTo,
+  payerKeyFromSolanaAddress,
+  anchorEvidence,
+  evidenceHeader,
 } from './dx402';
-export type { AnchoredEvidence, EvidenceMode, RecipientRole } from './dx402';
+export type { AnchoredEvidence, EvidenceMode, RecipientRole, AnchorOptions } from './dx402';
 
 export { X402Client } from './client';
 
