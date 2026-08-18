@@ -31,7 +31,14 @@ import { sha256, sha512 } from '@noble/hashes/sha2';
 export const EVIDENCE_HEADER = 'X-Durable-Evidence';
 
 const MAGIC = new Uint8Array([0x44, 0x58, 0x34, 0x30, 0x32]); // "DX402"
-const FORMAT_VERSION = 1;
+/** One recipient (the payer). Still emitted for that case, so deployed readers keep working. */
+const FORMAT_V1 = 1;
+/** Several recipients. A v2 blob positively signals that somebody besides the payer can open it. */
+const FORMAT_V2 = 2;
+
+/** Why a party holds a key to this evidence. */
+export type RecipientRole = 'payer' | 'seller' | 'auditor';
+const ROLE_NAMES: RecipientRole[] = ['payer', 'seller', 'auditor'];
 const NONCE_LEN = 12;
 const CEK_LEN = 32;
 const HKDF_INFO = new TextEncoder().encode('DX402-v1-wrap');
@@ -197,13 +204,29 @@ export function dereferencePointer(pointer: string): string {
   return pointer;
 }
 
-interface SealedEnvelope {
+interface Recipient {
+  role: RecipientRole;
   alg: 'secp256k1' | 'x25519';
   ephemeral: Uint8Array;
   cekNonce: Uint8Array;
   wrappedCek: Uint8Array;
+}
+
+interface SealedEnvelope {
+  recipients: Recipient[];
   bodyNonce: Uint8Array;
   ciphertext: Uint8Array;
+}
+
+/**
+ * Who can open this blob, without decrypting anything.
+ *
+ * Worth surfacing: a buyer has to be able to see that the seller — or a
+ * designated auditor — also holds a key to what they bought. Finding that out
+ * afterwards would destroy the privacy property.
+ */
+export function sealedRoles(raw: Uint8Array): RecipientRole[] {
+  return parseSealed(raw).recipients.map((r) => r.role);
 }
 
 /**
@@ -230,35 +253,47 @@ export function parseSealed(raw: Uint8Array): SealedEnvelope {
   }
 
   const version = take(1, 'version')[0];
-  if (version !== FORMAT_VERSION) {
-    throw new DX402Error(`unsupported sealed-blob version ${version}`);
+  let count: number;
+  if (version === FORMAT_V1) count = 1;
+  else if (version === FORMAT_V2) count = take(1, 'recipient count')[0];
+  else throw new DX402Error(`unsupported sealed-blob version ${version}`);
+
+  // An envelope nobody can open is not evidence.
+  if (count === 0) throw new DX402Error('DX402 sealed blob has no recipients');
+
+  const recipients: Recipient[] = [];
+  for (let i = 0; i < count; i++) {
+    let role: RecipientRole = 'payer';
+    if (version === FORMAT_V2) {
+      const b = take(1, 'role')[0];
+      if (b >= ROLE_NAMES.length) throw new DX402Error(`unknown role ${b}`);
+      role = ROLE_NAMES[b];
+    }
+
+    const algByte = take(1, 'algorithm')[0];
+    if (algByte !== 1 && algByte !== 2) {
+      throw new DX402Error(`unknown key algorithm ${algByte}`);
+    }
+    const ephLen = take(1, 'ephemeral key length')[0];
+    const ephemeral = take(ephLen, 'ephemeral key');
+    const cekNonce = take(NONCE_LEN, 'cek nonce');
+    const lenBytes = take(2, 'wrapped key length');
+    const wrappedCek = take((lenBytes[0] << 8) | lenBytes[1], 'wrapped cek');
+
+    recipients.push({
+      role,
+      alg: algByte === 1 ? 'secp256k1' : 'x25519',
+      ephemeral,
+      cekNonce,
+      wrappedCek,
+    });
   }
 
-  const algByte = take(1, 'algorithm')[0];
-  if (algByte !== 1 && algByte !== 2) {
-    throw new DX402Error(`unknown key algorithm ${algByte}`);
-  }
-
-  const ephLen = take(1, 'ephemeral key length')[0];
-  const ephemeral = take(ephLen, 'ephemeral key');
-  const cekNonce = take(NONCE_LEN, 'cek nonce');
-  const lenBytes = take(2, 'wrapped key length');
-  const wrappedLen = (lenBytes[0] << 8) | lenBytes[1];
-  const wrappedCek = take(wrappedLen, 'wrapped cek');
   const bodyNonce = take(NONCE_LEN, 'body nonce');
-  const ciphertext = raw.subarray(pos);
-
-  return {
-    alg: algByte === 1 ? 'secp256k1' : 'x25519',
-    ephemeral,
-    cekNonce,
-    wrappedCek,
-    bodyNonce,
-    ciphertext,
-  };
+  return { recipients, bodyNonce, ciphertext: raw.subarray(pos) };
 }
 
-function sharedSecret(sealed: SealedEnvelope, privateKey: Uint8Array): Uint8Array {
+function sharedSecret(sealed: Recipient, privateKey: Uint8Array): Uint8Array {
   if (sealed.alg === 'secp256k1') {
     // Compressed output is 33 bytes: a 0x02/0x03 tag plus the x-coordinate.
     // Only the x-coordinate is the ECDH result, matching what the Rust side
@@ -282,21 +317,43 @@ function sharedSecret(sealed: SealedEnvelope, privateKey: Uint8Array): Uint8Arra
   return shared;
 }
 
-/** Decrypt a sealed envelope with the payer's private key. */
+/**
+ * Decrypt a sealed envelope with whichever recipient slot belongs to `privateKey`.
+ *
+ * Tries every slot: a holder does not necessarily know which one is theirs, and
+ * in a multi-recipient envelope the payer is not always first. A slot that does
+ * not open is skipped, not reported — "that one was not for me" is not an error.
+ */
 export function unseal(
   sealed: SealedEnvelope,
   privateKey: Uint8Array,
   aad: Uint8Array,
 ): Uint8Array {
-  const shared = sharedSecret(sealed, privateKey);
-  const wrapKey = hkdf(sha256, shared, aad, HKDF_INFO, 32);
+  for (const recipient of sealed.recipients) {
+    let shared: Uint8Array;
+    try {
+      shared = sharedSecret(recipient, privateKey);
+    } catch (err) {
+      if (err instanceof DX402Error) throw err;
+      continue;
+    }
 
-  const cek = gcm(wrapKey, sealed.cekNonce, aad).decrypt(sealed.wrappedCek);
-  if (cek.length !== CEK_LEN) {
-    throw new DX402Error(`unwrapped CEK is ${cek.length} bytes, expected ${CEK_LEN}`);
+    const wrapKey = hkdf(sha256, shared, aad, HKDF_INFO, 32);
+    let cek: Uint8Array;
+    try {
+      cek = gcm(wrapKey, recipient.cekNonce, aad).decrypt(recipient.wrappedCek);
+    } catch {
+      continue; // not our slot
+    }
+    if (cek.length !== CEK_LEN) {
+      throw new DX402Error(`unwrapped CEK is ${cek.length} bytes, expected ${CEK_LEN}`);
+    }
+    return gcm(cek, sealed.bodyNonce, aad).decrypt(sealed.ciphertext);
   }
 
-  return gcm(cek, sealed.bodyNonce, aad).decrypt(sealed.ciphertext);
+  throw new DX402Error(
+    'no recipient slot opened -- wrong key, or the blob belongs to another payment',
+  );
 }
 
 /**
@@ -470,7 +527,7 @@ export function sealEvidence(
   );
   let pos = 0;
   out.set(MAGIC, pos); pos += MAGIC.length;
-  out[pos++] = FORMAT_VERSION;
+  out[pos++] = FORMAT_V1;
   out[pos++] = algByte;
   out[pos++] = ephemeral.length;
   out.set(ephemeral, pos); pos += ephemeral.length;
