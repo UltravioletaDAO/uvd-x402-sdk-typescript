@@ -28,6 +28,7 @@ import {
   paymentId,
   recoverEvidence,
   unseal,
+  sealedRoles,
   type AnchoredEvidence,
 } from './dx402';
 
@@ -53,15 +54,15 @@ describe('cross-implementation vectors (sealed by Rust)', () => {
 
   it('decrypts a secp256k1 envelope sealed by Rust', () => {
     const sealed = parseSealed(hexToBytes(vectors.secp256k1.blob));
-    expect(sealed.alg).toBe('secp256k1');
-    expect(sealed.ephemeral.length).toBe(33);
+    expect(sealed.recipients[0].alg).toBe('secp256k1');
+    expect(sealed.recipients[0].ephemeral.length).toBe(33);
     expect(unseal(sealed, hexToBytes(vectors.secp256k1.privateKey), AAD)).toEqual(BODY);
   });
 
   it('decrypts an X25519 envelope sealed by Rust', () => {
     const sealed = parseSealed(hexToBytes(vectors.ed25519.blob));
-    expect(sealed.alg).toBe('x25519');
-    expect(sealed.ephemeral.length).toBe(32);
+    expect(sealed.recipients[0].alg).toBe('x25519');
+    expect(sealed.recipients[0].ephemeral.length).toBe(32);
     expect(unseal(sealed, hexToBytes(vectors.ed25519.seed), AAD)).toEqual(BODY);
   });
 
@@ -213,5 +214,39 @@ describe('recoverEvidence', () => {
         fetch: serve(vectors.secp256k1.blob),
       }),
     ).rejects.toThrow(ContentHashMismatch);
+  });
+});
+
+
+describe('multi-recipient envelopes (v2, sealed by Rust)', () => {
+  const m = (vectors as unknown as Record<string, Record<string, string>>).multiRecipient;
+  const AAD2 = new TextEncoder().encode(vectors.paymentId);
+
+  it('opens as the buyer', () => {
+    const sealed = parseSealed(hexToBytes(m.blob));
+    expect(sealed.recipients.length).toBe(2);
+    expect(unseal(sealed, hexToBytes(m.buyerPrivateKey), AAD2)).toEqual(BODY);
+  });
+
+  it('opens as the seller', () => {
+    // The property that did not exist before v2: the seller can answer a false
+    // "that is not what you sent".
+    const sealed = parseSealed(hexToBytes(m.blob));
+    expect(unseal(sealed, hexToBytes(m.sellerPrivateKey), AAD2)).toEqual(BODY);
+  });
+
+  it('still refuses a stranger', () => {
+    const sealed = parseSealed(hexToBytes(m.blob));
+    expect(() => unseal(sealed, new Uint8Array(32).fill(0x77), AAD2)).toThrow();
+  });
+
+  it('reports who holds a key without decrypting', () => {
+    expect(sealedRoles(hexToBytes(m.blob))).toEqual(['payer', 'seller']);
+  });
+
+  it('reads a v1 blob as a single payer recipient', () => {
+    // Every blob anchored before v2 existed is v1. If this stopped parsing,
+    // evidence already in the store would become unreadable.
+    expect(sealedRoles(hexToBytes(vectors.secp256k1.blob))).toEqual(['payer']);
   });
 });

@@ -136,8 +136,9 @@ export {
   sealEvidence,
   ed25519ToX25519,
   payerKeyFromEvmSignature,
+  sealedRoles,
 } from './dx402';
-export type { AnchoredEvidence, EvidenceMode } from './dx402';
+export type { AnchoredEvidence, EvidenceMode, RecipientRole } from './dx402';
 
 export { X402Client } from './client';
 
