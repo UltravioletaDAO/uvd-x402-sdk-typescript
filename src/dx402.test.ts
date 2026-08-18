@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { secp256k1 } from '@noble/curves/secp256k1';
 
 import vectors from './dx402.vectors.json';
 import {
@@ -31,6 +32,9 @@ import {
   sealedRoles,
   anchorDigest,
   ZERO_ADDRESS,
+  anchorEvidence,
+  sealEvidenceTo,
+  payerKeyFromSolanaAddress,
   type AnchoredEvidence,
 } from './dx402';
 
@@ -296,5 +300,45 @@ describe('anchor authorization digest', () => {
     const base = anchorDigest('0x' + '11'.repeat(32), '0x' + '22'.repeat(32), 'p', ZERO_ADDRESS, 0);
     const other = anchorDigest('0x' + '11'.repeat(32), '0x' + '22'.repeat(32), 'otro', ZERO_ADDRESS, 0);
     expect(base).not.toEqual(other);
+  });
+});
+
+describe('the whole seller side in one call', () => {
+  it('never throws — an unreachable facilitator costs the receipt, not the sale', async () => {
+    const result = await anchorEvidence(new TextEncoder().encode('body'), {
+      paymentId: vectors.paymentId,
+      network: 'solana',
+      txHash: 'abc',
+      payer: 'p',
+      payee: 'q',
+      payerKey: new Uint8Array(32),
+      facilitator: 'http://127.0.0.1:1',
+    });
+    expect(result.skipped).toBe('anchor_failed');
+  });
+
+  it('decodes a Solana address into an encryption key', () => {
+    const k = payerKeyFromSolanaAddress('3znAGhp6Tk4kmebhXnk9K3jaTMffu82PJfEG91AeRkq2');
+    expect(k.length).toBe(32);
+    // An empty address used to pad up to 32 bytes and yield a small-order point.
+    expect(() => payerKeyFromSolanaAddress('')).toThrow();
+    expect(() => payerKeyFromSolanaAddress('1')).toThrow();
+  });
+
+  it('seals to both parties and reports the roles', () => {
+    const buyer = secp256k1.getPublicKey(new Uint8Array(32).fill(0x42), true);
+    const seller = secp256k1.getPublicKey(new Uint8Array(32).fill(0x55), true);
+    const blob = sealEvidenceTo(BODY, [
+      { role: 'payer', key: buyer },
+      { role: 'seller', key: seller },
+    ], vectors.paymentId);
+    expect(sealedRoles(blob)).toEqual(['payer', 'seller']);
+    expect(unseal(parseSealed(blob), new Uint8Array(32).fill(0x55), AAD)).toEqual(BODY);
+  });
+
+  it('emits a single-payer envelope as v1', () => {
+    const buyer = secp256k1.getPublicKey(new Uint8Array(32).fill(0x42), true);
+    const blob = sealEvidenceTo(BODY, [{ role: 'payer', key: buyer }], vectors.paymentId);
+    expect(blob[5]).toBe(1);
   });
 });

@@ -680,3 +680,213 @@ export function signAnchorEvm(
   const sig = secp256k1.sign(digest, privateKey);
   return '0x' + bytesToHex(sig.toCompactRawBytes()) + (sig.recovery === 1 ? '01' : '00');
 }
+
+/**
+ * Derive the encryption target from a Solana (or Fogo) address.
+ *
+ * On ed25519 chains the address **is** the public key, so this needs no
+ * signature and no lookup. Rejects anything that does not decode to exactly 32
+ * bytes: a short decode silently padded up to 32 produces a small-order point,
+ * which fails a layer later with a message that points nowhere near the cause.
+ */
+export function payerKeyFromSolanaAddress(address: string): Uint8Array {
+  if (!address || !address.trim()) throw new DX402Error('empty Solana address');
+
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let num = 0n;
+  for (const ch of address) {
+    const idx = alphabet.indexOf(ch);
+    if (idx < 0) throw new DX402Error(`invalid base58 character '${ch}' in address`);
+    num = num * 58n + BigInt(idx);
+  }
+
+  let hex = num.toString(16);
+  if (hex.length % 2) hex = '0' + hex;
+  const body = hexToBytes(hex);
+  const leading = address.length - address.replace(/^1+/, '').length;
+
+  const decoded = new Uint8Array(leading + body.length);
+  decoded.set(body, leading);
+  if (decoded.length !== 32) {
+    throw new DX402Error(`Solana address decodes to ${decoded.length} bytes, expected 32`);
+  }
+  return ed25519ToX25519(decoded);
+}
+
+/**
+ * Seal `body` so every listed recipient can read it, and nobody else.
+ *
+ * The body is encrypted **once**; only the content key is wrapped per recipient,
+ * so adding the seller costs about sixty bytes rather than a second copy of the
+ * payload. That is what makes it practical for a seller to keep a readable copy
+ * of what it delivered — and answer a false "that is not what you sent" —
+ * instead of paying to anchor evidence it cannot open.
+ *
+ * A single payer recipient is emitted as format **v1, byte-for-byte**, so
+ * nothing already anchored becomes unreadable and readers still on v1 keep
+ * working.
+ */
+export function sealEvidenceTo(
+  body: Uint8Array,
+  recipients: Array<{ role: RecipientRole; key: Uint8Array }>,
+  paymentIdValue: string,
+): Uint8Array {
+  if (recipients.length === 0) {
+    throw new DX402Error('an envelope with no recipients could never be opened');
+  }
+
+  const aad = new TextEncoder().encode(paymentIdValue);
+  const cek = randomBytes(CEK_LEN);
+  const bodyNonce = randomBytes(NONCE_LEN);
+  const ciphertext = gcm(cek, bodyNonce, aad).encrypt(body);
+
+  const wrapped = recipients.map(({ role, key }) => {
+    let algByte: number;
+    let ephemeral: Uint8Array;
+    let shared: Uint8Array;
+
+    if (key.length === 33) {
+      algByte = 1;
+      const priv = secp256k1.utils.randomPrivateKey();
+      ephemeral = secp256k1.getPublicKey(priv, true);
+      shared = secp256k1.getSharedSecret(priv, key, true).subarray(1);
+    } else if (key.length === 32) {
+      algByte = 2;
+      const priv = randomBytes(32);
+      ephemeral = x25519.getPublicKey(priv);
+      shared = x25519.getSharedSecret(priv, key);
+      if (shared.every((b) => b === 0)) {
+        throw new DX402Error('degenerate ECDH result (small-order public key)');
+      }
+    } else {
+      throw new DX402Error(
+        `public key must be 33 bytes (secp256k1) or 32 (X25519), got ${key.length}`,
+      );
+    }
+
+    const wrapKey = hkdf(sha256, shared, aad, HKDF_INFO, 32);
+    const cekNonce = randomBytes(NONCE_LEN);
+    return {
+      role,
+      algByte,
+      ephemeral,
+      cekNonce,
+      wrappedCek: gcm(wrapKey, cekNonce, aad).encrypt(cek),
+    };
+  });
+
+  const singlePayer = wrapped.length === 1 && wrapped[0].role === 'payer';
+  const parts: Uint8Array[] = [MAGIC, new Uint8Array([singlePayer ? FORMAT_V1 : FORMAT_V2])];
+  if (!singlePayer) parts.push(new Uint8Array([wrapped.length]));
+
+  for (const r of wrapped) {
+    if (!singlePayer) parts.push(new Uint8Array([ROLE_NAMES.indexOf(r.role)]));
+    parts.push(new Uint8Array([r.algByte, r.ephemeral.length]));
+    parts.push(r.ephemeral, r.cekNonce);
+    parts.push(new Uint8Array([(r.wrappedCek.length >> 8) & 0xff, r.wrappedCek.length & 0xff]));
+    parts.push(r.wrappedCek);
+  }
+
+  parts.push(bodyNonce, ciphertext);
+  return concatBytes(...parts);
+}
+
+// ============================================================================
+// The whole seller side, in one call
+// ============================================================================
+
+export interface AnchorOptions {
+  paymentId: string;
+  network: string;
+  txHash: string;
+  payer: string;
+  payee: string;
+  /** The buyer's encryption key, from `payerKeyFromSolanaAddress` or similar. */
+  payerKey: Uint8Array;
+  /**
+   * Your **public** key, to keep a readable copy so you can answer a false
+   * "that is not what you sent".
+   *
+   * It does not have to be your payment key, and should not be — a custodial
+   * payment wallet works fine here, because this key only ever decrypts.
+   */
+  sellerEncryptionKey?: Uint8Array;
+  /**
+   * `(digest) => "0x..."`. A callable rather than a private key is what lets a
+   * custodian sign: it receives the digest and returns the signature without the
+   * seed ever leaving it.
+   *
+   * Without one the anchor is **provisional** — it holds the slot, but a signed
+   * anchor for the same payment supersedes it.
+   */
+  sign?: (digest: Uint8Array) => string | Promise<string>;
+  retention?: string;
+  facilitator?: string;
+  fetch?: typeof fetch;
+}
+
+/**
+ * Seal a response body, anchor it, and return the `X-Durable-Evidence` value.
+ *
+ * **It never throws.** Every failure resolves to a skip notice, because evidence
+ * is an addition to the payment path and must never be a gate in front of it —
+ * an unreachable facilitator has to cost the receipt, never the sale.
+ */
+export async function anchorEvidence(
+  body: Uint8Array,
+  opts: AnchorOptions,
+): Promise<Record<string, unknown>> {
+  try {
+    const recipients: Array<{ role: RecipientRole; key: Uint8Array }> = [
+      { role: 'payer', key: opts.payerKey },
+    ];
+    if (opts.sellerEncryptionKey) {
+      recipients.push({ role: 'seller', key: opts.sellerEncryptionKey });
+    }
+    const blob = sealEvidenceTo(body, recipients, opts.paymentId);
+    const hash = contentHash(body);
+
+    const payload: Record<string, unknown> = {
+      paymentId: opts.paymentId,
+      network: opts.network,
+      txHash: opts.txHash,
+      payer: opts.payer,
+      payee: opts.payee,
+      sealed: btoa(String.fromCharCode(...blob)),
+      backend: 's3',
+      contentHash: hash,
+      keyAlg: opts.payerKey.length === 32 ? 'ECIES-X25519' : 'ECIES-secp256k1',
+      mode: 'direct',
+      retention: opts.retention ?? '90d',
+    };
+
+    if (opts.sign) {
+      // Empty pointer: the facilitator issues it from the sealed blob, and you
+      // cannot sign a value you have not seen.
+      payload.sellerSignature = await opts.sign(
+        anchorDigest(opts.paymentId, hash, '', ZERO_ADDRESS, 0),
+      );
+    }
+
+    const base = (opts.facilitator ?? 'https://facilitator.ultravioletadao.xyz').replace(
+      /\/+$/,
+      '',
+    );
+    const doFetch = opts.fetch ?? fetch;
+    const res = await doFetch(`${base}/dx402/anchor`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return { v: 1, skipped: 'anchor_failed' };
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { v: 1, skipped: 'anchor_failed' };
+  }
+}
+
+/** Encode an anchor result for the `X-Durable-Evidence` response header. */
+export function evidenceHeader(evidence: unknown): string {
+  const json = JSON.stringify(evidence);
+  return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
