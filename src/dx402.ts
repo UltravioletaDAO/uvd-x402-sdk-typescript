@@ -26,6 +26,8 @@ import { ed25519, x25519 } from '@noble/curves/ed25519';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { hkdf } from '@noble/hashes/hkdf';
 import { keccak_256 } from '@noble/hashes/sha3';
+
+import { getChainById, getChainByName } from './chains';
 import { sha256, sha512 } from '@noble/hashes/sha2';
 
 export const EVIDENCE_HEADER = 'X-Durable-Evidence';
@@ -832,6 +834,54 @@ export interface AnchorOptions {
  * is an addition to the payment path and must never be a gate in front of it —
  * an unreachable facilitator has to cost the receipt, never the sale.
  */
+
+/** `0x` + 40 hex. An ed25519 payee (Solana, Stellar) never matches. */
+function isEvmAddress(value: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test((value ?? '').trim());
+}
+
+/** The chain id behind a network name or CAIP-2 id, or undefined if unknown. */
+function chainIdFor(network: string): number | undefined {
+  const name = (network ?? '').includes(':')
+    ? (network.split(':')[1] ?? '')
+    : network;
+  const byId = Number(name);
+  if (Number.isFinite(byId) && byId > 0) return getChainById(byId)?.chainId;
+  return getChainByName(name)?.chainId;
+}
+
+/**
+ * The digest the facilitator will ACTUALLY verify, chosen by the payee's curve.
+ *
+ * The gate dispatches on the payee and checks **one** form -- never both. A
+ * secp256k1 payee is verified against the digest built with its REAL address and
+ * chain id; an ed25519 payee, whose address does not fit the `address` field, is
+ * verified against the zero address and chain id 0.
+ *
+ * Signing the wrong form throws nothing. It yields a signature that never
+ * verifies, the anchor silently stays **provisional**, and a provisional anchor
+ * can be superseded by anyone -- the very hijack a signed anchor exists to stop.
+ * Reproduced against production by KarmaKadabra, 2026-08-19: with everything else
+ * identical, the ed25519 form was refused (`409 dx402_already_anchored`) and the
+ * EVM form superseded the provisional.
+ *
+ * `pointer` stays empty on both branches: this call sends `sealed`, so the
+ * facilitator issues the pointer and you cannot sign what you have not seen.
+ */
+export function sellerDigestFor(
+  paymentId: string,
+  contentHash: string,
+  payee: string,
+  network: string,
+): Uint8Array {
+  if (isEvmAddress(payee)) {
+    const chainId = chainIdFor(network);
+    if (chainId) return anchorDigest(paymentId, contentHash, '', payee, chainId);
+  }
+  return anchorDigest(paymentId, contentHash, '', ZERO_ADDRESS, 0);
+}
+
+
 export async function anchorEvidence(
   body: Uint8Array,
   opts: AnchorOptions,
@@ -861,10 +911,8 @@ export async function anchorEvidence(
     };
 
     if (opts.sign) {
-      // Empty pointer: the facilitator issues it from the sealed blob, and you
-      // cannot sign a value you have not seen.
       payload.sellerSignature = await opts.sign(
-        anchorDigest(opts.paymentId, hash, '', ZERO_ADDRESS, 0),
+        sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network),
       );
     }
 
