@@ -882,6 +882,25 @@ export function sellerDigestFor(
 }
 
 
+/**
+ * Largest `POST /dx402/anchor` request the facilitator accepts, mirroring its
+ * `MAX_REQUEST_BODY_BYTES` (default 64 KiB, an anti-OOM bound on every route).
+ * After base64 inflation and ~600 bytes of metadata this leaves ~47 KB of
+ * plaintext.
+ */
+export const ANCHOR_MAX_REQUEST_BYTES = 64 * 1024;
+
+/** base64 without spreading the array into arguments -- a large blob would
+ * otherwise overflow the call stack and surface as a generic failure. */
+function toBase64(bytes: Uint8Array): string {
+  let out = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    out += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(out);
+}
+
 export async function anchorEvidence(
   body: Uint8Array,
   opts: AnchorOptions,
@@ -902,7 +921,7 @@ export async function anchorEvidence(
       txHash: opts.txHash,
       payer: opts.payer,
       payee: opts.payee,
-      sealed: btoa(String.fromCharCode(...blob)),
+      sealed: toBase64(blob),
       backend: 's3',
       contentHash: hash,
       keyAlg: opts.payerKey.length === 32 ? 'ECIES-X25519' : 'ECIES-secp256k1',
@@ -916,6 +935,17 @@ export async function anchorEvidence(
       );
     }
 
+    // Measure the SEALED, serialised request -- not the plaintext. The
+    // envelope adds a nonce, the wrapped CEK and its JSON, and the ciphertext
+    // travels base64 (4/3). Checking the plaintext lets through bodies the
+    // facilitator then rejects, arriving as a generic failure long after the
+    // sealing work was done. Measured by KarmaKadabra, 2026-08-19: 47 KB of
+    // plaintext fits, 48 KB does not.
+    const wire = JSON.stringify(payload);
+    if (new TextEncoder().encode(wire).length > ANCHOR_MAX_REQUEST_BYTES) {
+      return { v: 1, skipped: 'too_large' };
+    }
+
     const base = (opts.facilitator ?? 'https://facilitator.ultravioletadao.xyz').replace(
       /\/+$/,
       '',
@@ -924,9 +954,21 @@ export async function anchorEvidence(
     const res = await doFetch(`${base}/dx402/anchor`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: wire,
     });
-    if (!res.ok) return { v: 1, skipped: 'anchor_failed' };
+    // Carry the facilitator's own diagnosis out rather than flattening every
+    // failure to `anchor_failed`. A rejected signature answers 422
+    // `dx402_signature_not_verified`; erasing it here would reproduce, one
+    // layer down, the exact problem that code exists to solve.
+    if (!res.ok) {
+      let error: unknown;
+      try {
+        error = ((await res.json()) as { error?: unknown }).error;
+      } catch {
+        /* a non-JSON error body is still a failure */
+      }
+      return { v: 1, skipped: 'anchor_failed', status: res.status, error };
+    }
     return (await res.json()) as Record<string, unknown>;
   } catch {
     return { v: 1, skipped: 'anchor_failed' };
