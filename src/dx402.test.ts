@@ -33,6 +33,7 @@ import {
   anchorDigest,
   ZERO_ADDRESS,
   anchorEvidence,
+  evidenceHeader,
   sealEvidenceTo,
   sellerDigestFor,
   payerKeyFromSolanaAddress,
@@ -482,5 +483,44 @@ describe('the seller digest form is never guessed', () => {
     expect(anchorDigest(pid, ch, '', evm, 8453)).not.toEqual(
       anchorDigest(pid, ch, '', ZERO_ADDRESS, 0),
     );
+  });
+});
+
+describe('reaching verified, and headers that survive non-ASCII', () => {
+  it('forwards proofOfPayment, which is the only route to verified:true', async () => {
+    // v1.85.0 made rung 2 require an on-chain proof. Without a way to send one,
+    // no SDK user could ever be certified -- the security fix and the SDK would
+    // disagree, silently, forever.
+    let sent: Record<string, unknown> | undefined;
+    const capture = async (_url: string, init?: { body?: string }) => {
+      sent = JSON.parse(init!.body!);
+      return new Response(JSON.stringify({ v: 1, verified: true }), { status: 201 });
+    };
+
+    const proof = { transactionHash: '0x' + 'cd'.repeat(32), blockNumber: 7, network: 'base' };
+    await anchorEvidence(new Uint8Array([1, 2, 3]), {
+      paymentId: '0x' + 'ab'.repeat(32),
+      network: 'base',
+      txHash: '0x' + 'cd'.repeat(32),
+      payer: '0x' + '11'.repeat(20),
+      payee: '0x' + '22'.repeat(20),
+      payerKey: new Uint8Array(32).fill(7),
+      proofOfPayment: proof,
+      fetch: capture as unknown as typeof fetch,
+    });
+    expect(sent?.proofOfPayment).toEqual(proof);
+  });
+
+  it('encodes a header containing non-ASCII instead of throwing', () => {
+    // `btoa` takes a BINARY string: a code point above U+00FF throws, and one
+    // between U+0080 and U+00FF is emitted as a single latin-1 byte, so the far
+    // side decodes mojibake. A pointer or a reason string is enough to hit it.
+    const evidence = { v: 1, skipped: 'anchor_failed', error: 'símbolo — ✓' };
+    const header = evidenceHeader(evidence);
+
+    const pad = header + '='.repeat((4 - (header.length % 4)) % 4);
+    const raw = atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
+    const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
+    expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual(evidence);
   });
 });

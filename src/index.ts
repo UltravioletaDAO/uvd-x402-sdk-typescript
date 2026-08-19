@@ -144,6 +144,10 @@ export {
   sealEvidenceTo,
   payerKeyFromSolanaAddress,
   anchorEvidence,
+  // Reachable only via a deep import before this: the helper that exists so
+  // nobody hand-builds a digest was the one you had to already know about.
+  sellerDigestFor,
+  ANCHOR_MAX_REQUEST_BYTES,
   evidenceHeader,
 } from './dx402';
 export type { AnchoredEvidence, EvidenceMode, RecipientRole, AnchorOptions } from './dx402';

@@ -825,6 +825,18 @@ export interface AnchorOptions {
    */
   sellerEncryptionKey?: Uint8Array;
   /**
+   * The settlement proof, in the facilitator's `ProofOfPayment` shape
+   * (`transactionHash`, `blockNumber`, `network`, `payer`, `payee`, `amount`,
+   * `token`, `timestamp`, `paymentHash`).
+   *
+   * **The only thing that reaches `verified: true`.** Without it the
+   * facilitator has checked no chain, so it records the anchor as provisional
+   * and answers `notVerifiedReason: "dx402_proof_missing"`: the signature is
+   * accepted (`signed: true`) but authorship is not certified, and a claim that
+   * proves more may supersede it.
+   */
+  proofOfPayment?: Record<string, unknown>;
+  /**
    * `(digest) => "0x..."`. A callable rather than a private key is what lets a
    * custodian sign: it receives the digest and returns the signature without the
    * seed ever leaving it.
@@ -953,6 +965,10 @@ export async function anchorEvidence(
     };
 
     let unsigned: string | undefined;
+    if (opts.proofOfPayment) {
+      payload.proofOfPayment = opts.proofOfPayment;
+    }
+
     if (opts.sign) {
       const digest = sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network);
       if (digest === undefined) {
@@ -1006,6 +1022,11 @@ export async function anchorEvidence(
 
 /** Encode an anchor result for the `X-Durable-Evidence` response header. */
 export function evidenceHeader(evidence: unknown): string {
-  const json = JSON.stringify(evidence);
-  return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  // Encode to UTF-8 first. `btoa` takes a *binary* string: any code point above
+  // U+00FF throws InvalidCharacterError, and one between U+0080 and U+00FF is
+  // silently emitted as a single latin-1 byte, so the far side decodes mojibake.
+  // Either is reachable from ordinary evidence -- a `notVerifiedReason` or a
+  // pointer with a non-ASCII character is enough.
+  const bytes = new TextEncoder().encode(JSON.stringify(evidence));
+  return toBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
