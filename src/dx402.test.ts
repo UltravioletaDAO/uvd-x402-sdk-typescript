@@ -34,6 +34,7 @@ import {
   ZERO_ADDRESS,
   anchorEvidence,
   sealEvidenceTo,
+  sellerDigestFor,
   payerKeyFromSolanaAddress,
   type AnchoredEvidence,
 } from './dx402';
@@ -340,5 +341,38 @@ describe('the whole seller side in one call', () => {
     const buyer = secp256k1.getPublicKey(new Uint8Array(32).fill(0x42), true);
     const blob = sealEvidenceTo(BODY, [{ role: 'payer', key: buyer }], vectors.paymentId);
     expect(blob[5]).toBe(1);
+  });
+});
+
+// ---- the digest form the facilitator actually verifies (KK, 2026-08-19) ----
+
+describe('sellerDigestFor', () => {
+  const pid = '0x' + '11'.repeat(32);
+  const ch = '0x' + '22'.repeat(32);
+  const payee = '0x' + '33'.repeat(20);
+
+  it('signs an EVM payee against its REAL address and chain id', () => {
+    // The facilitator's gate dispatches on the payee's curve and verifies
+    // exactly ONE form. Signing the ed25519 form for an EVM payee throws
+    // nothing -- it yields a signature that never verifies and leaves the
+    // anchor provisional, the hijack a signed anchor exists to prevent.
+    // Reproduced against production: identical payloads, the ed25519 form was
+    // refused (409 dx402_already_anchored), the EVM form superseded.
+    const got = sellerDigestFor(pid, ch, payee, 'base');
+    expect(got).toEqual(anchorDigest(pid, ch, '', payee, 8453));
+    expect(got).not.toEqual(anchorDigest(pid, ch, '', ZERO_ADDRESS, 0));
+  });
+
+  it('keeps the zero-address form for an ed25519 payee', () => {
+    // A Solana address does not fit the EIP-712 `address` field.
+    const got = sellerDigestFor(
+      pid, ch, '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', 'solana',
+    );
+    expect(got).toEqual(anchorDigest(pid, ch, '', ZERO_ADDRESS, 0));
+  });
+
+  it('falls back instead of throwing on an unknown network', () => {
+    const got = sellerDigestFor(pid, ch, payee, 'not-a-network');
+    expect(got).toEqual(anchorDigest(pid, ch, '', ZERO_ADDRESS, 0));
   });
 });
