@@ -371,9 +371,11 @@ describe('sellerDigestFor', () => {
     expect(got).toEqual(anchorDigest(pid, ch, '', ZERO_ADDRESS, 0));
   });
 
-  it('falls back instead of throwing on an unknown network', () => {
-    const got = sellerDigestFor(pid, ch, payee, 'not-a-network');
-    expect(got).toEqual(anchorDigest(pid, ch, '', ZERO_ADDRESS, 0));
+  it('declines to sign an unknown network instead of throwing OR guessing', () => {
+    // This used to assert the fallback to the ed25519 form, pinning the 0.53.0
+    // bug as intended behaviour: for an EVM payee that form yields a signature
+    // that never verifies, silently. Not throwing is the part worth keeping.
+    expect(sellerDigestFor(pid, ch, payee, 'not-a-network')).toBeUndefined();
   });
 });
 
@@ -445,5 +447,40 @@ describe('hex decoding is strict', () => {
     const b = anchorDigest('0x' + 'ab'.repeat(32), '0x' + 'cd'.repeat(32), '', '0x' + '11'.repeat(20), 8453);
     expect(Buffer.from(a).toString('hex')).toBe(Buffer.from(b).toString('hex'));
     expect(a.length).toBe(32);
+  });
+});
+
+describe('the seller digest form is never guessed', () => {
+  const pid = '0x' + 'ab'.repeat(32);
+  const ch = '0x' + 'cd'.repeat(32);
+  const evm = '0x' + '22'.repeat(20);
+
+  it('declines to sign an EVM payee whose chain id cannot be resolved', () => {
+    // Falling through to the ed25519 form is the 0.53.0 bug: it throws nothing
+    // and yields a signature that never verifies, leaving the anchor
+    // provisional forever with no error anywhere.
+    expect(sellerDigestFor(pid, ch, evm, 'totally-unknown-net')).toBeUndefined();
+  });
+
+  it('reads the chain id straight out of a CAIP-2 network', () => {
+    // The chain table has no EVM testnets, so this is the only path that works
+    // for a seller on one.
+    expect(sellerDigestFor(pid, ch, evm, 'eip155:84532')).toEqual(
+      anchorDigest(pid, ch, '', evm, 84532),
+    );
+  });
+
+  it('still uses the EVM form on a known mainnet and ed25519 for an ed25519 payee', () => {
+    expect(sellerDigestFor(pid, ch, evm, 'base')).toEqual(anchorDigest(pid, ch, '', evm, 8453));
+    const sol = 'F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq';
+    expect(sellerDigestFor(pid, ch, sol, 'solana')).toEqual(
+      anchorDigest(pid, ch, '', ZERO_ADDRESS, 0),
+    );
+  });
+
+  it('the two forms actually differ, or the tests above prove nothing', () => {
+    expect(anchorDigest(pid, ch, '', evm, 8453)).not.toEqual(
+      anchorDigest(pid, ch, '', ZERO_ADDRESS, 0),
+    );
   });
 });

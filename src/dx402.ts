@@ -853,9 +853,15 @@ function isEvmAddress(value: string): boolean {
 
 /** The chain id behind a network name or CAIP-2 id, or undefined if unknown. */
 function chainIdFor(network: string): number | undefined {
-  const name = (network ?? '').includes(':')
-    ? (network.split(':')[1] ?? '')
-    : network;
+  // `eip155:8453` carries the chain id literally. Read it rather than going
+  // through the chain table, which has no entry for EVM TESTNETS -- so without
+  // this a seller on one cannot produce a verifiable anchor signature at all.
+  const raw = network ?? '';
+  if (raw.toLowerCase().startsWith('eip155:')) {
+    const tail = raw.slice('eip155:'.length);
+    if (/^\d+$/.test(tail)) return Number(tail);
+  }
+  const name = raw.includes(':') ? (raw.split(':')[1] ?? '') : raw;
   const byId = Number(name);
   if (Number.isFinite(byId) && byId > 0) return getChainById(byId)?.chainId;
   return getChainByName(name)?.chainId;
@@ -884,10 +890,16 @@ export function sellerDigestFor(
   contentHash: string,
   payee: string,
   network: string,
-): Uint8Array {
+): Uint8Array | undefined {
   if (isEvmAddress(payee)) {
     const chainId = chainIdFor(network);
-    if (chainId) return anchorDigest(paymentId, contentHash, '', payee, chainId);
+    // An EVM payee whose chain id we cannot resolve. Falling through to the
+    // ed25519 form is how this shipped in 0.53.0: it throws nothing and yields
+    // a signature that never verifies, so the anchor stays provisional forever
+    // with no error anywhere. Refuse instead -- unsigned is honest and
+    // recoverable, signed-but-worthless only looks done.
+    if (!chainId) return undefined;
+    return anchorDigest(paymentId, contentHash, '', payee, chainId);
   }
   return anchorDigest(paymentId, contentHash, '', ZERO_ADDRESS, 0);
 }
@@ -940,10 +952,14 @@ export async function anchorEvidence(
       retention: opts.retention ?? '90d',
     };
 
+    let unsigned: string | undefined;
     if (opts.sign) {
-      payload.sellerSignature = await opts.sign(
-        sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network),
-      );
+      const digest = sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network);
+      if (digest === undefined) {
+        unsigned = 'unknown_chain_id';
+      } else {
+        payload.sellerSignature = await opts.sign(digest);
+      }
     }
 
     // Measure the SEALED, serialised request -- not the plaintext. The
@@ -980,7 +996,9 @@ export async function anchorEvidence(
       }
       return { v: 1, skipped: 'anchor_failed', status: res.status, error };
     }
-    return (await res.json()) as Record<string, unknown>;
+    const out = (await res.json()) as Record<string, unknown>;
+    if (unsigned) out.unsigned = unsigned;
+    return out;
   } catch {
     return { v: 1, skipped: 'anchor_failed' };
   }
