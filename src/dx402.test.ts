@@ -426,3 +426,24 @@ describe('anchorEvidence size and error reporting', () => {
     expect(out.error).toBe('dx402_signature_not_verified');
   });
 });
+
+describe('hex decoding is strict', () => {
+  it('rejects malformed hex instead of turning it into plausible key bytes', () => {
+    // The old parseInt loop stored NaN as 0, so 'zz'.repeat(32) became 32 zero
+    // bytes and parseInt('4z', 16) became 4 — malformed input silently became a
+    // valid-looking key. Same failure class as the Python base58 rjust(32) bug.
+    expect(() => anchorDigest('0x' + 'ab'.repeat(32), '0x' + 'cd'.repeat(32), '', 'zz'.repeat(20), 8453)).toThrow(
+      /invalid hex/,
+    );
+    expect(() => anchorDigest('0x' + 'ab'.repeat(32), '0x' + 'cd'.repeat(32), '', '0x' + '4z'.repeat(20), 8453)).toThrow(
+      /invalid hex/,
+    );
+  });
+
+  it('still decodes well-formed hex byte-identically', () => {
+    const a = anchorDigest('0x' + 'ab'.repeat(32), '0x' + 'cd'.repeat(32), '', '0x' + '11'.repeat(20), 8453);
+    const b = anchorDigest('0x' + 'ab'.repeat(32), '0x' + 'cd'.repeat(32), '', '0x' + '11'.repeat(20), 8453);
+    expect(Buffer.from(a).toString('hex')).toBe(Buffer.from(b).toString('hex'));
+    expect(a.length).toBe(32);
+  });
+});
