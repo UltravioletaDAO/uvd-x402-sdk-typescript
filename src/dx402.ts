@@ -25,6 +25,10 @@ import { gcm } from '@noble/ciphers/aes';
 import { ed25519, x25519 } from '@noble/curves/ed25519';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { hkdf } from '@noble/hashes/hkdf';
+import {
+  hexToBytes as nobleHexToBytes,
+  bytesToHex,
+} from '@noble/hashes/utils';
 import { keccak_256 } from '@noble/hashes/sha3';
 
 import { getChainById, getChainByName } from './chains';
@@ -115,20 +119,27 @@ function b64urlDecode(value: string): Uint8Array {
   return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
 }
 
+/**
+ * Hex decode, strictly.
+ *
+ * The hand-rolled loop this replaces used `parseInt`, which returns NaN for
+ * non-hex input — and a Uint8Array stores NaN as 0. So `'zz'.repeat(32)`
+ * decoded to 32 zero bytes and `parseInt('4z', 16)` to 4: malformed input
+ * became a plausible-looking key instead of an error. This gates real key
+ * material (the payer private key in `recoverEvidence`, the 65-byte signature
+ * in `payerKeyFromEvmSignature`, the payee address in `anchorDigest`), and the
+ * symptom was a misleading 'wrong key, or the blob belongs to another payment'
+ * one layer later. Same failure class as the base58 `rjust(32)` bug in the
+ * Python SDK. Python (`bytes.fromhex`) and Rust (`hex::decode`) already reject;
+ * TypeScript was the permissive outlier.
+ */
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
-  if (clean.length % 2 !== 0) throw new DX402Error('odd-length hex string');
-  const out = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  try {
+    return nobleHexToBytes(clean);
+  } catch (e) {
+    throw new DX402Error(`invalid hex: ${(e as Error).message}`);
   }
-  return out;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 /** keccak256 of a body, `0x`-prefixed — matching the facilitator's `contentHash`. */
