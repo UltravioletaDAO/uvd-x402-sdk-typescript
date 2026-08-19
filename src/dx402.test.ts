@@ -376,3 +376,53 @@ describe('sellerDigestFor', () => {
     expect(got).toEqual(anchorDigest(pid, ch, '', ZERO_ADDRESS, 0));
   });
 });
+
+describe('anchorEvidence size and error reporting', () => {
+  const common = {
+    paymentId: '0x' + 'ab'.repeat(32),
+    network: 'base',
+    txHash: '0x' + 'cd'.repeat(32),
+    payer: '0x' + '11'.repeat(20),
+    payee: '0x' + '22'.repeat(20),
+    payerKey: new Uint8Array(32).fill(7),
+  };
+
+  it('skips a body that cannot be anchored, measured on the SEALED request', async () => {
+    // Measured against production by KarmaKadabra, 2026-08-19: 47 KB of
+    // plaintext fits the facilitator's 64 KiB request limit, 48 KB does not.
+    // Measuring the plaintext would let the 48 KB case through and turn a
+    // knowable size problem into a generic failure after sealing was done.
+    const never = () => {
+      throw new Error('a too-large body must not reach the network');
+    };
+
+    const big = await anchorEvidence(new Uint8Array(48 * 1024), {
+      ...common,
+      fetch: never as unknown as typeof fetch,
+    });
+    expect(big.skipped).toBe('too_large');
+
+    // And it does not over-reject: 47 KB is allowed through to the network,
+    // where the stub is what fails it.
+    const ok = await anchorEvidence(new Uint8Array(47 * 1024), {
+      ...common,
+      fetch: never as unknown as typeof fetch,
+    });
+    expect(ok.skipped).toBe('anchor_failed');
+  });
+
+  it('keeps the facilitator diagnosis instead of flattening to anchor_failed', async () => {
+    const rejects = async () =>
+      new Response(JSON.stringify({ error: 'dx402_signature_not_verified' }), {
+        status: 422,
+      });
+
+    const out = await anchorEvidence(new Uint8Array([1, 2, 3]), {
+      ...common,
+      fetch: rejects as unknown as typeof fetch,
+    });
+    expect(out.skipped).toBe('anchor_failed'); // still never throws
+    expect(out.status).toBe(422);
+    expect(out.error).toBe('dx402_signature_not_verified');
+  });
+});
