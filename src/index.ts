@@ -144,6 +144,8 @@ export {
   sealEvidenceTo,
   payerKeyFromSolanaAddress,
   anchorEvidence,
+  availableBackends,
+  type BackendOffer,
   // Reachable only via a deep import before this: the helper that exists so
   // nobody hand-builds a digest was the one you had to already know about.
   sellerDigestFor,

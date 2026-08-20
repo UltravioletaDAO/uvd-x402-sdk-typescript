@@ -837,6 +837,17 @@ export interface AnchorOptions {
    */
   proofOfPayment?: Record<string, unknown>;
   /**
+   * Which backend to anchor to (`"s3"`, `"ipfs-private"`, `"ipfs-public"`).
+   * Omit to take the facilitator's default.
+   *
+   * Ask {@link availableBackends} what a given facilitator offers rather than
+   * assuming — it depends on the deployment, and you may be pointed at one that
+   * is not ours. **`ipfs-public` is irreversible**: the bytes become permanently
+   * resolvable by anyone, and nobody, the facilitator included, can take them
+   * down.
+   */
+  storage?: string;
+  /**
    * `(digest) => "0x..."`. A callable rather than a private key is what lets a
    * custodian sign: it receives the digest and returns the signature without the
    * seed ever leaving it.
@@ -969,6 +980,10 @@ export async function anchorEvidence(
       payload.proofOfPayment = opts.proofOfPayment;
     }
 
+    if (opts.storage) {
+      payload.storage = opts.storage;
+    }
+
     if (opts.sign) {
       const digest = sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network);
       if (digest === undefined) {
@@ -1017,6 +1032,50 @@ export async function anchorEvidence(
     return out;
   } catch {
     return { v: 1, skipped: 'anchor_failed' };
+  }
+}
+
+/** One storage option a facilitator offers, from `GET /dx402/stats`. */
+export interface BackendOffer {
+  id: string;
+  retention: string;
+  /**
+   * Whether the bytes can actually be removed when retention expires.
+   *
+   * `false` means the `retentionUntil` in the signed receipt **cannot be
+   * honoured**: on public IPFS, unpinning removes the facilitator's copy, not
+   * the network's.
+   */
+  revocable: boolean;
+  /** Whether anyone resolves the bytes without going through the facilitator. */
+  public: boolean;
+  enabled: boolean;
+  disabledReason?: string;
+}
+
+/**
+ * Ask a facilitator which storage backends it actually offers.
+ *
+ * Ask instead of assuming. What exists depends on the deployment — one without
+ * a Pinata credential offers only `s3` — and an integrator may be pointed at a
+ * facilitator that is not ours. A hardcoded list in your code is a promise
+ * somebody else has to keep.
+ *
+ * Resolves to `[]` rather than rejecting when the facilitator is unreachable or
+ * does not run DX402 — same discipline as {@link anchorEvidence}.
+ */
+export async function availableBackends(
+  facilitator = 'https://facilitator.ultravioletadao.xyz',
+  opts: { fetch?: typeof fetch } = {},
+): Promise<BackendOffer[]> {
+  try {
+    const doFetch = opts.fetch ?? fetch;
+    const res = await doFetch(`${facilitator.replace(/\/+$/, '')}/dx402/stats`);
+    if (!res.ok) return [];
+    const body = (await res.json()) as { backends?: BackendOffer[] };
+    return body.backends ?? [];
+  } catch {
+    return [];
   }
 }
 
