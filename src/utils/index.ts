@@ -6,6 +6,7 @@
 
 export {
   detectX402Version,
+  paymentChallengeFrom,
   chainToCAIP2,
   caip2ToChain,
   parseNetworkIdentifier,

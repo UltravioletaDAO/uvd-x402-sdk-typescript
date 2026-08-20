@@ -192,6 +192,7 @@ export {
 // x402 utilities
 export {
   detectX402Version,
+  paymentChallengeFrom,
   chainToCAIP2,
   caip2ToChain,
   parseNetworkIdentifier,

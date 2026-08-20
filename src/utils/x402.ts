@@ -25,6 +25,34 @@ import { decodeBase64Utf8, encodeBase64Json } from './base64';
  * @returns The detected version (1 or 2)
  */
 export function detectX402Version(data: unknown): X402Version {
+  if (typeof data === 'string') {
+    // A `PAYMENT-REQUIRED` header value is base64 JSON, and the doc above
+    // invites one. Returning 1 without decoding misread every v2 challenge as
+    // v1 — silently, as a plausible value rather than an error, and the two
+    // wire forms are structurally incompatible.
+    //
+    // This is not hypothetical: measured 2026-08-20, 36 of 36 live Bazaar
+    // resources answering 402 carry the challenge in the header, and several
+    // put a free content preview in the body, so the header is the only place
+    // the version signal exists.
+    const trimmed = data.trim();
+    if (!trimmed) return 1;
+    for (const decode of [
+      () => JSON.parse(decodeBase64Utf8(trimmed)),
+      () => JSON.parse(trimmed),
+    ]) {
+      try {
+        const parsed = decode();
+        if (typeof parsed === 'object' && parsed !== null) {
+          return detectX402Version(parsed);
+        }
+      } catch {
+        // not this encoding; try the next
+      }
+    }
+    return 1; // undecodable: fall back to v1, as before
+  }
+
   if (typeof data !== 'object' || data === null) {
     return 1; // Default to v1
   }
@@ -292,5 +320,78 @@ export function convertX402Header(
       network: chainName,
       payload: header.payload,
     };
+  }
+}
+
+/**
+ * Read a 402 payment challenge from wherever the seller put it.
+ *
+ * x402 allows BOTH transports and sellers pick freely:
+ *
+ * - base64 JSON in the `PAYMENT-REQUIRED` (or `X-PAYMENT-REQUIRED`) header
+ * - JSON in the response body
+ *
+ * Measured against production on 2026-08-20: of 40 live Bazaar resources,
+ * **36 of 36 that answered 402 carried the challenge in the header, and none in
+ * the body**. Worse, sellers like Tenjin use the 402 body for a free preview of
+ * the paid content — so the body is valid JSON that simply has no `accepts`, and
+ * a body-only reader parses it happily and finds nothing.
+ *
+ * Reads the header first because that is where live sellers put it, and falls
+ * back to the body so the sellers who use it keep working.
+ *
+ * Returns `null` when neither transport carries a challenge — a real "no terms
+ * here", distinct from a challenge we failed to decode.
+ */
+export function paymentChallengeFrom(
+  headers: { get(name: string): string | null } | Record<string, string>,
+  body?: unknown,
+): Record<string, unknown> | null {
+  const read = (name: string): string | null => {
+    if (typeof (headers as { get?: unknown }).get === 'function') {
+      return (headers as { get(n: string): string | null }).get(name);
+    }
+    const rec = headers as Record<string, string>;
+    return rec[name] ?? rec[name.toLowerCase()] ?? rec[name.toUpperCase()] ?? null;
+  };
+
+  const raw = read('payment-required') ?? read('x-payment-required');
+  if (raw) {
+    const trimmed = raw.trim();
+    for (const decode of [
+      () => JSON.parse(decodeBase64Utf8(trimmed)),
+      () => JSON.parse(trimmed),
+    ]) {
+      try {
+        const parsed = decode();
+        if (isChallenge(parsed)) return parsed as Record<string, unknown>;
+      } catch {
+        // not this encoding; try the next
+      }
+    }
+  }
+
+  const parsedBody = typeof body === 'string' ? tryJson(body) : body;
+  return isChallenge(parsedBody) ? (parsedBody as Record<string, unknown>) : null;
+}
+
+/**
+ * Whether a value actually looks like an x402 challenge.
+ *
+ * Deliberately stricter than "is an object": a 402 body carrying a free preview
+ * is valid JSON with no payment terms in it, and treating that as a challenge is
+ * how a body-only reader concludes it looked and found nothing wrong.
+ */
+function isChallenge(v: unknown): boolean {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return Array.isArray(o.accepts) || typeof o.payTo === 'string';
+}
+
+function tryJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
   }
 }
