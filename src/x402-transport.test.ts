@@ -69,3 +69,22 @@ describe('reading the 402 challenge from either transport', () => {
     expect(paymentChallengeFrom(headers, body)).not.toBeNull();
   });
 });
+
+describe('the v1 spelling of accepts', () => {
+  it('recognises paymentRequirements as a challenge', () => {
+    // KarmaKadabra's buyer matched both keys in production; ours matched only
+    // one, so a seller using the v1 spelling read as "no terms here" — the
+    // exact false negative this reader exists to prevent.
+    const v1 = { paymentRequirements: [{ payTo: '0xAAAA' }] };
+    expect(paymentChallengeFrom(new Headers(), v1)).not.toBeNull();
+  });
+
+  it('still refuses a preview that has neither key', () => {
+    expect(paymentChallengeFrom(new Headers(), { id: 'x', title: 'preview' })).toBeNull();
+  });
+
+  it('reads paymentRequirements out of the header too', () => {
+    const raw = btoa(JSON.stringify({ paymentRequirements: [{ payTo: '0xBBBB' }] }));
+    expect(paymentChallengeFrom({ 'payment-required': raw })).not.toBeNull();
+  });
+});

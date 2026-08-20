@@ -69,6 +69,13 @@ export function detectX402Version(data: unknown): X402Version {
     return 2;
   }
 
+  // `paymentRequirements` is the v1 spelling, so its presence points at v1 --
+  // but only when there is no v2 signal, which the checks above already ruled
+  // out. Recognised so the value is not treated as an unknown shape.
+  if (Array.isArray(obj.paymentRequirements)) {
+    return 1;
+  }
+
   // Check if network is in CAIP-2 format
   if (typeof obj.network === 'string') {
     if (obj.network.includes(':')) {
@@ -385,7 +392,15 @@ export function paymentChallengeFrom(
 function isChallenge(v: unknown): boolean {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
-  return Array.isArray(o.accepts) || typeof o.payTo === 'string';
+  // `paymentRequirements` is the v1 spelling of `accepts`. Missing it made a
+  // seller using it look like "no terms here" — the exact false negative this
+  // function exists to prevent. Found in the Python SDK by KarmaKadabra's
+  // buyer, which matched both keys in production, 2026-08-20.
+  return (
+    Array.isArray(o.accepts) ||
+    Array.isArray(o.paymentRequirements) ||
+    typeof o.payTo === 'string'
+  );
 }
 
 function tryJson(s: string): unknown {
