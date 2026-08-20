@@ -33,6 +33,7 @@ import {
   anchorDigest,
   ZERO_ADDRESS,
   anchorEvidence,
+  availableBackends,
   evidenceHeader,
   sealEvidenceTo,
   sellerDigestFor,
@@ -522,5 +523,67 @@ describe('reaching verified, and headers that survive non-ASCII', () => {
     const raw = atob(pad.replace(/-/g, '+').replace(/_/g, '/'));
     const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
     expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual(evidence);
+  });
+});
+
+describe('choosing where evidence is stored', () => {
+  it('forwards the storage choice to the facilitator', async () => {
+    let sent: Record<string, unknown> | undefined;
+    const capture = async (_u: string, init?: { body?: string }) => {
+      sent = JSON.parse(init!.body!);
+      return new Response(JSON.stringify({ v: 1 }), { status: 201 });
+    };
+    await anchorEvidence(new Uint8Array([1]), {
+      paymentId: '0x' + 'ab'.repeat(32),
+      network: 'base',
+      txHash: '0x' + 'cd'.repeat(32),
+      payer: '0x' + '11'.repeat(20),
+      payee: '0x' + '22'.repeat(20),
+      payerKey: new Uint8Array(32).fill(7),
+      storage: 'ipfs-private',
+      fetch: capture as unknown as typeof fetch,
+    });
+    expect(sent?.storage).toBe('ipfs-private');
+  });
+
+  it('discovers backends and surfaces the irrevocable one as such', async () => {
+    // `revocable` is the field that decides whether the signed `retentionUntil`
+    // is true. A caller that ignores it can promise a deletion that never
+    // happens.
+    const stats = async () =>
+      new Response(
+        JSON.stringify({
+          anchored: 1,
+          backends: [
+            { id: 's3', retention: '90d', revocable: true, public: false, enabled: true },
+            {
+              id: 'ipfs-public',
+              retention: 'permanent',
+              revocable: false,
+              public: true,
+              enabled: false,
+              disabledReason: 'irreversible; awaiting buyer opt-in',
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+
+    const backends = await availableBackends('https://f.test', {
+      fetch: stats as unknown as typeof fetch,
+    });
+    expect(backends.map((b) => b.id)).toEqual(['s3', 'ipfs-public']);
+    const pub = backends.find((b) => b.id === 'ipfs-public')!;
+    expect(pub.revocable).toBe(false);
+    expect(pub.enabled).toBe(false);
+    expect(pub.disabledReason).toMatch(/irreversible/);
+  });
+
+  it('returns an empty list instead of throwing when DX402 is not there', async () => {
+    // A facilitator without DX402 404s. Discovery must never be a gate.
+    const gone = async () => new Response('nope', { status: 404 });
+    await expect(
+      availableBackends('https://f.test', { fetch: gone as unknown as typeof fetch }),
+    ).resolves.toEqual([]);
   });
 });
