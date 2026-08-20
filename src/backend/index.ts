@@ -71,6 +71,7 @@ import type {
   X402Version,
 } from '../types';
 import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
+import { REVIEW_WINDOW_SEC, REFUND_WINDOW_SEC } from '../escrow-preauth';
 import { getChainByName } from '../chains';
 
 // ============================================================================
@@ -4822,9 +4823,24 @@ export class AdvancedEscrowClient {
     amount: string,
     tier: AdvancedEscrowTaskTier = 'standard',
     salt?: string,
+    opts?: { deadline?: number; reviewWindowSec?: number },
   ): AdvancedPaymentInfo {
     const now = Math.floor(Date.now() / 1000);
     const t = TIER_TIMINGS[tier];
+    // The release window must outlast the REVIEW, not just the tier. `micro`
+    // alone gives two hours; a buyer approving later gets
+    // `AfterAuthorizationExpiry` on-chain — the release reverts, the worker is
+    // not paid, and only the payer's `reclaim()` can move the funds. Measured in
+    // production 2026-08-19: a release attempted 26.2 HOURS past expiry, 8
+    // escrows stuck on one network in 24h.
+    //
+    // buildEscrowPreAuth — the other escrow path in this same SDK — already
+    // floors both windows this way and says why. This path never got the memo,
+    // and it is the one the marketplace documents as recommended.
+    const reviewWindow = opts?.reviewWindowSec ?? REVIEW_WINDOW_SEC;
+    const reviewBase = Math.max(now, opts?.deadline ?? now);
+    const authorizationExpiry = Math.max(now + t.auth, reviewBase + reviewWindow);
+    const refundExpiry = Math.max(now + t.refund, authorizationExpiry + REFUND_WINDOW_SEC);
     // Use crypto-safe randomness (Node.js crypto or Web Crypto API)
     let generatedSalt = salt;
     if (!generatedSalt) {
@@ -4846,8 +4862,8 @@ export class AdvancedEscrowClient {
       token: this.contracts.usdc,
       maxAmount: amount,
       preApprovalExpiry: now + t.pre,
-      authorizationExpiry: now + t.auth,
-      refundExpiry: now + t.refund,
+      authorizationExpiry,
+      refundExpiry,
       minFeeBps: 0,
       maxFeeBps: 800,
       feeReceiver: this.contracts.operator,

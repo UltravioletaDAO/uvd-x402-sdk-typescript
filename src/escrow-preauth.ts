@@ -111,8 +111,8 @@ export const ESCROW_TIER_WINDOWS: Record<string, EscrowTierWindows> = {
  * on-chain release REVERTS (AfterAuthorizationExpiry). So release/refund
  * windows are extended to comfortably outlast the deadline + review buffer.
  */
-const REVIEW_WINDOW_SEC = 7 * 24 * 3600; // >=7 days to approve after the deadline
-const REFUND_WINDOW_SEC = 7 * 24 * 3600; // +7 days to refund after that
+export const REVIEW_WINDOW_SEC = 7 * 24 * 3600; // >=7 days to approve after the deadline
+export const REFUND_WINDOW_SEC = 7 * 24 * 3600; // +7 days to refund after that
 
 /**
  * One network's escrow parameters, as published by the marketplace server
