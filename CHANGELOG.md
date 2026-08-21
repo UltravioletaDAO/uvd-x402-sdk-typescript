@@ -4,6 +4,46 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.67.0] - 2026-08-20
+
+### Fixed
+
+- **`settle()` reported success whenever the HTTP call succeeded.** The returned
+  object carried the literal `success: true`, so the facilitator's own verdict
+  was never read — even though the line above it already consulted
+  `result.success` for a warning.
+
+  "The request arrived" is not "the money moved", and the gap is not
+  hypothetical: a transfer that mines and then REVERTS is answered with HTTP 200
+  and `success: false` (x402-rs `src/chain/evm.rs:1343`, serialised through
+  `StatusCode::OK`). Every consumer written as `result.success === true` was
+  therefore reading a constant, so a reverted payment was booked as settled and
+  the reconciliation paths built to catch exactly that could never fire.
+
+  Now `success: result.success === true`. A response with no `success` field is
+  treated as **not** successful: a facilitator that does not say it worked has
+  not said it worked.
+
+  Found while adopting DX402 in MeshRelay, where `settle_status: 'settle_failed'`
+  turned out to be unreachable in two services.
+
+### Added
+
+- **`errorReason`, `payer` and `proofOfPayment` on `SettleResponse`.** `settle()`
+  rebuilt its return value field by field and dropped everything else the
+  facilitator sent.
+
+  `proofOfPayment` is the consequential one: `anchorEvidence` documents it as
+  *"the only thing that reaches `verified: true`"*, the facilitator returns it
+  when the ERC-8004 extension asks for one, and this client threw it away. A
+  seller using the SDK end to end could therefore only ever produce
+  **provisional** anchors — which a gate-verified anchor can supersede. Read in
+  both `camelCase` and `snake_case`.
+
+  `errorReason` is what separates a reverted transfer from a rejected
+  authorization without parsing prose. It is distinct from `error`: `error` is
+  this client failing to ask, `errorReason` is the facilitator answering no.
+
 ## [2.53.0] - 2026-08-09
 
 ### Added
