@@ -141,7 +141,24 @@ export interface SettleResponse {
   success: boolean;
   transactionHash?: string;
   network?: string;
+  /** Transport-level failure (unreachable facilitator, non-2xx, timeout). */
   error?: string;
+  /**
+   * The facilitator's own reason when it settled nothing — e.g. a transfer that
+   * mined and reverted. Distinct from `error` above, which is this client
+   * failing to ask; this one is the facilitator answering "no".
+   */
+  errorReason?: string;
+  /** The address the facilitator confirmed as the payer. */
+  payer?: string;
+  /**
+   * Settlement proof, present when the ERC-8004 extension asked for it.
+   *
+   * Typed here rather than only on {@link SettleResponseWithProof} because
+   * `settle()` returns it whenever the facilitator sends it, and it is what
+   * DX402's `anchorEvidence` needs to reach `verified: true`.
+   */
+  proofOfPayment?: ProofOfPayment;
 }
 
 /**
@@ -744,9 +761,34 @@ export class FacilitatorClient {
         );
       }
       return {
-        success: true,
+        // Read the facilitator's verdict instead of asserting one.
+        //
+        // This was the literal `true`, so a settle was reported successful
+        // whenever the HTTP call was — and "the request arrived" is not "the
+        // money moved". A payment that MINES AND THEN REVERTS is answered with
+        // 200 and `success: false` (x402-rs src/chain/evm.rs:1343, serialised
+        // through StatusCode::OK), which is precisely the case a caller most
+        // needs to hear about. Every consumer doing `result.success === true`
+        // was reading a constant, so a reverted payment was booked as settled
+        // and no reconciliation path could ever fire.
+        //
+        // Absent `success` is treated as NOT successful: a facilitator that
+        // does not say it worked has not said it worked.
+        success: result.success === true,
         transactionHash,
         network: result.network,
+        // Why it failed, when it did. Without this the caller gets `success:
+        // false` and no way to tell a reverted transfer from a rejected
+        // authorization except by parsing prose.
+        errorReason: result.errorReason ?? result.error_reason,
+        // The settlement proof, when the facilitator attached one (it does for
+        // the ERC-8004 extension). Dropping it here made `verified: true`
+        // unreachable for DX402 anchoring through this client: `anchorEvidence`
+        // documents proofOfPayment as the only thing that gets there, the
+        // facilitator returns it, and this method threw it away — so a seller
+        // using the SDK end to end could only ever produce provisional anchors.
+        proofOfPayment: result.proofOfPayment ?? result.proof_of_payment,
+        payer: result.payer,
       };
     } catch (error) {
       clearTimeout(timeoutId);

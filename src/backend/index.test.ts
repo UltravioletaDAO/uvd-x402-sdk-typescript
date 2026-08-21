@@ -119,7 +119,7 @@ describe('createPaymentMiddleware', () => {
       ok: true,
       json: async () => url.endsWith('/verify')
         ? { isValid: true }
-        : { transactionHash: '0xsettled', network: 'ethereum' },
+        : { success: true, transactionHash: '0xsettled', network: 'ethereum' },
       text: async () => 'ok',
     }));
     vi.stubGlobal('fetch', fetchMock);
@@ -197,7 +197,7 @@ describe('createPaymentMiddleware', () => {
 
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ transactionHash: '0xsettled', network: 'ethereum' }),
+      json: async () => ({ success: true, transactionHash: '0xsettled', network: 'ethereum' }),
       text: async () => 'ok',
     });
 
@@ -250,7 +250,7 @@ describe('createHonoMiddleware', () => {
       ok: true,
       json: async () => url.endsWith('/verify')
         ? { isValid: true }
-        : { transactionHash: '0xsettled', network: 'ethereum' },
+        : { success: true, transactionHash: '0xsettled', network: 'ethereum' },
       text: async () => 'ok',
     }));
     vi.stubGlobal('fetch', fetchMock);
