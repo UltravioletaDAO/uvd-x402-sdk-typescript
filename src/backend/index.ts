@@ -2901,6 +2901,10 @@ export type AgentId = number | string;
 // Mainnet addresses (CREATE2 deterministic - same on all mainnets)
 const MAINNET_IDENTITY = '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432';
 const MAINNET_REPUTATION = '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63';
+// Deployed after the identity/reputation pair, which is why it was missing here.
+// Verified live on all ten EVM mainnets; SKALE Base has no code at this address
+// and is the one mainnet that legitimately has no validation registry.
+const MAINNET_VALIDATION = '0x8004Cc8439f36fd5F9F049D9fF86523Df6dAAB58';
 
 // Testnet addresses (same on all testnets)
 const TESTNET_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
@@ -2912,7 +2916,7 @@ const SOLANA_AGENT_REGISTRY = '8oo4dC4JvBLwy5tGgiH3WwK4B9PWxL9Z4XjA2jzkQMbQ';
 const SOLANA_ATOM_ENGINE = 'AToMw53aiPQ8j7iHVb4fGt6nzUNxUhcPc3tbPBZuzVVb';
 
 /**
- * ERC-8004 contract addresses per network (20 networks: 18 EVM + 2 Solana)
+ * ERC-8004 contract addresses per network (21 networks: 19 EVM + 2 Solana)
  */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
@@ -2921,46 +2925,68 @@ export const ERC8004_CONTRACTS: Record<string, {
   agentRegistryProgram?: string;
   atomEngineProgram?: string;
 }> = {
-  // Mainnets (10)
+  // Mainnets (11)
   ethereum: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
-  'base-mainnet': {
+  base: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   polygon: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   arbitrum: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   optimism: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   celo: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   bsc: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   monad: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   avalanche: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
+  scroll: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
+  },
+  // SKALE Base is the one mainnet without a validation registry (no code at
+  // the canonical address), so leaving it out is correct, not an omission.
   'skale-base': {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
+  },
+  // Deprecated alias for 'base' -- kept so existing lookups keep resolving.
+  'base-mainnet': {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
   },
   // Testnets (8)
   'ethereum-sepolia': {
@@ -3015,11 +3041,31 @@ export const ERC8004_CONTRACTS: Record<string, {
 };
 
 /**
- * Network type for ERC-8004 operations (20 networks: 18 EVM + 2 Solana)
+ * Return the network name the facilitator actually accepts.
+ *
+ * `base-mainnet` reads like the canonical spelling and is not: the facilitator
+ * answers `400 {"error": "Invalid network: base-mainnet"}`. Every name is passed
+ * through here before it reaches a URL or a request body, so callers holding the
+ * old spelling keep working instead of being rejected at the edge.
+ */
+export function wireNetwork(network: string): string {
+  return network === 'base-mainnet' ? 'base' : network;
+}
+
+/**
+ * Network type for ERC-8004 operations (21 networks: 19 EVM + 2 Solana)
+ *
+ * These are the names the FACILITATOR accepts, verified against
+ * GET /feedback -> supportedNetworks. 'base-mainnet' is kept only as a
+ * deprecated alias: the facilitator rejects it outright (400 "Invalid network"),
+ * so anything passed through this module is normalised to 'base' before it
+ * reaches the wire. Use 'base'.
  */
 export type Erc8004Network =
   // EVM Mainnets
-  | 'ethereum' | 'base-mainnet' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'skale-base'
+  | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base'
+  // Deprecated alias, rewritten to 'base' before it reaches the wire
+  | 'base-mainnet'
   // EVM Testnets
   | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia'
   // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)
@@ -3543,7 +3589,7 @@ export class Erc8004Client {
    * @returns Agent identity information
    */
   async getIdentity(network: Erc8004Network, agentId: AgentId): Promise<AgentIdentity> {
-    const url = `${this.baseUrl}/identity/${network}/${agentId}`;
+    const url = `${this.baseUrl}/identity/${wireNetwork(network)}/${agentId}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -3585,7 +3631,7 @@ export class Erc8004Client {
    * ```
    */
   async getIdentityByOwner(network: Erc8004Network, address: string): Promise<IdentityByOwnerResponse> {
-    const url = `${this.baseUrl}/identity/${network}/owner/${address}`;
+    const url = `${this.baseUrl}/identity/${wireNetwork(network)}/owner/${address}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -3682,7 +3728,7 @@ export class Erc8004Client {
     if (options.includeFeedback) params.set('includeFeedback', 'true');
     if (options.clientAddresses) params.set('clientAddresses', options.clientAddresses);
 
-    const url = `${this.baseUrl}/reputation/${network}/${agentId}${params.toString() ? `?${params}` : ''}`;
+    const url = `${this.baseUrl}/reputation/${wireNetwork(network)}/${agentId}${params.toString() ? `?${params}` : ''}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -3752,7 +3798,7 @@ export class Erc8004Client {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
 
@@ -3801,7 +3847,7 @@ export class Erc8004Client {
 
     const payload: Record<string, unknown> = {
       x402Version: 1,
-      network,
+      network: wireNetwork(network),
       agentId,
       feedbackIndex,
     };
@@ -3940,7 +3986,7 @@ export class Erc8004Client {
 
     const payload: Record<string, unknown> = {
       x402Version: 1,
-      network,
+      network: wireNetwork(network),
       agentId,
       feedbackIndex,
       response,
@@ -4044,7 +4090,7 @@ export class Erc8004Client {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
 
@@ -4118,7 +4164,7 @@ export class Erc8004Client {
           'Accept': 'application/json',
           'Prefer': 'respond-async',
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
 
@@ -4251,7 +4297,7 @@ export class Erc8004Client {
     agentId: AgentId,
     key: string,
   ): Promise<IdentityMetadataResponse> {
-    const url = `${this.baseUrl}/identity/${network}/${agentId}/metadata/${encodeURIComponent(key)}`;
+    const url = `${this.baseUrl}/identity/${wireNetwork(network)}/${agentId}/metadata/${encodeURIComponent(key)}`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -4284,7 +4330,7 @@ export class Erc8004Client {
    * @returns Total supply count
    */
   async getIdentityTotalSupply(network: Erc8004Network): Promise<IdentityTotalSupplyResponse> {
-    const url = `${this.baseUrl}/identity/${network}/total-supply`;
+    const url = `${this.baseUrl}/identity/${wireNetwork(network)}/total-supply`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
