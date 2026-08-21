@@ -14,7 +14,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **React & Wagmi**: First-class integrations
 - **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
 - **ERC-8128 Signed Requests**: Authenticate HTTP requests with a wallet (RFC 9421 + EIP-191) — no API keys
-- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 20 networks (18 EVM + 2 Solana)
+- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 21 networks (19 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
 - **Escrow Pre-Auth**: Sign-on-assignment `X-Payment-Auth` builder (`buildEscrowPreAuth`) — vector-pinned parity with the Python SDK and Execution Market
@@ -871,7 +871,10 @@ try {
 
 ## ERC-8004 Trustless Agents
 
-Build verifiable on-chain reputation for AI agents and services. Supports **20 networks** (18 EVM + 2 Solana).
+Build verifiable on-chain reputation for AI agents and services. Supports **21 networks** (19 EVM + 2 Solana).
+
+> Name Base as `'base'`. The old `'base-mainnet'` spelling is rejected by the facilitator
+> (`400 Invalid network`); the SDK now rewrites it for you, but new code should use `'base'`.
 
 On EVM networks, agent IDs are sequential numbers. On Solana, agent IDs are base58 pubkey strings. The `AgentId` type (`number | string`) handles both.
 
