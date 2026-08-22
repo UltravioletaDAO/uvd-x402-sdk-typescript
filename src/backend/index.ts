@@ -5328,7 +5328,18 @@ export class AdvancedEscrowClient {
             transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
           };
         }
-        return { success: false, error: result.errorReason || result.error || 'Release failed' };
+        // Parity with the Python SDK (2026-08-22): a last-resort message that
+        // says only "Release failed" is the same dead end as an empty string —
+        // name the status and what the body DID carry so the caller has a
+        // thread to pull. Divergence between the two SDKs is exactly what let
+        // the escrow-window bug live in one of them for weeks.
+        return {
+          success: false,
+          error:
+            result.errorReason ||
+            result.error ||
+            `Release refused with no reason (HTTP ${response.status}, body keys: ${Object.keys(result ?? {}).sort().join(', ') || 'none'})`,
+        };
       } catch (fetchErr: any) {
         clearTimeout(timeoutId);
 
