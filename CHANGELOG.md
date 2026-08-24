@@ -4,6 +4,53 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.70.0] - 2026-08-23
+
+### Added
+
+- **`prepareRelayedFeedback()` + `submitRelayedFeedback()`: ratings the CHAIN
+  attributes to the rater, not to the facilitator.**
+
+  The ERC-8004 Reputation Registry records `msg.sender` as the author and the
+  deployed implementation has no delegation path -- no
+  `giveFeedbackWithSignature`, no ERC-2771 forwarder. So every rating relayed
+  through `submitFeedback()` is a rating authored by the FACILITATOR. That is
+  not a theoretical concern: 87,2% of the reputation on Base (1.384 of 1.587
+  feedbacks) is attributed to one wallet, and the same wallet can revoke any of
+  it.
+
+  EIP-7702 closes it without touching the registry: the rater delegates their
+  own EOA to a `FeedbackDelegate` and the transaction is sent TO THE RATER'S
+  ADDRESS, so the registry sees the rater while the facilitator still pays the
+  gas. `prepare` hands back the digest, deadline, single-use nonce and -- when
+  the account is not delegated yet -- the account nonce for the EIP-7702
+  authorization. `submit` relays it.
+
+  The feedback parameters are repeated on `submit` on purpose: the facilitator
+  rebuilds the registry calldata from them and requires the rater's signature to
+  cover exactly that. It does not relay calldata it was handed.
+
+- **`RELAYED_FEEDBACK_NETWORKS` + `supportsRelayedFeedback()`** so a caller can
+  route without paying a round trip for a 400. Nine networks: the eight mainnets
+  Execution Market deployed a delegate on (base, ethereum, polygon, arbitrum,
+  optimism, celo, bsc, monad) plus base-sepolia. It is a routing hint -- the
+  facilitator re-checks the delegate on-chain on every request.
+
+  `avalanche` is absent and is not waiting to join: its C-Chain rejects the
+  transaction type itself (`-32000 transaction type not supported`), so there is
+  nothing to deploy against. Anchor the rating on a chain that supports
+  EIP-7702; the payment stays where it was made.
+
+### Deprecated
+
+- **`submitFeedback()`** where a delegate exists. It still works and is not
+  going away without notice -- it is the only route available where no delegate
+  is deployed -- but on those nine networks it writes the facilitator's address
+  into somebody else's reputation.
+
+Requires facilitator v1.93.0 or later for the mainnet networks; base-sepolia has
+served this rail since v1.74.0.
+
 ## [2.67.0] - 2026-08-20
 
 ### Fixed

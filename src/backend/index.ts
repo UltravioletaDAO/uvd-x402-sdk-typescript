@@ -3072,6 +3072,141 @@ export type Erc8004Network =
   | 'solana' | 'solana-devnet';
 
 /**
+ * Networks where the facilitator serves the RELAYED feedback rail, i.e. where
+ * Execution Market has deployed a `FeedbackDelegate` and the facilitator
+ * verified it on-chain (code present, and its `REPUTATION_REGISTRY()` reads
+ * back that network's registry).
+ *
+ * Anywhere else `POST /feedback/evm/prepare` answers 400 — and it should. An
+ * invented delegate address would send a type-4 transaction to an account with
+ * no code behind it, and in the EVM a `.call()` to an address with no code
+ * RETURNS SUCCESS. The failure would look exactly like a rating that rated
+ * nobody.
+ *
+ * `avalanche` is absent and is not waiting to join: the C-Chain rejects the
+ * transaction type itself (`-32000 transaction type not supported`), so there
+ * is nothing to deploy against. Anchor the rating on a chain that supports
+ * EIP-7702; the payment stays where it was made.
+ */
+export const RELAYED_FEEDBACK_NETWORKS: readonly Erc8004Network[] = [
+  'base',
+  'ethereum',
+  'polygon',
+  'arbitrum',
+  'optimism',
+  'celo',
+  'bsc',
+  'monad',
+  'base-sepolia',
+] as const;
+
+/**
+ * Whether `network` serves the rater-authored feedback rail.
+ *
+ * Lets a caller route without paying a round trip for a 400. The facilitator
+ * re-checks the delegate on-chain on every request regardless — this list is a
+ * routing hint, never the authority.
+ */
+export function supportsRelayedFeedback(network: string): boolean {
+  return (RELAYED_FEEDBACK_NETWORKS as readonly string[]).includes(wireNetwork(network));
+}
+
+/**
+ * An EIP-7702 authorization, as a wallet produces it.
+ *
+ * Needed only the first time a rater rates: it points their EOA at the
+ * `FeedbackDelegate`. Once delegated, `prepare` answers `delegated: true` and
+ * the submission carries no authorization at all.
+ */
+export interface RelayAuthorizationParams {
+  /**
+   * Chain the authorization is for.
+   *
+   * `0` is EIP-7702's wildcard and is valid on EVERY chain — a far broader
+   * grant than pinning this one. Send the chain id `prepare` returned.
+   */
+  chainId: number;
+  /**
+   * The delegate the account is pointed at. Must be the address `prepare`
+   * offered; the facilitator refuses anything else before it pays for a
+   * transaction.
+   */
+  address: string;
+  /** The rater account's nonce at the moment the authorization executes */
+  nonce: number;
+  yParity: number;
+  r: string;
+  s: string;
+}
+
+/**
+ * Request body for `POST /feedback/evm/prepare`.
+ *
+ * `rater` is the address that will appear on-chain as the author, which is the
+ * whole point of this rail.
+ */
+export interface PrepareRelayFeedbackRequest {
+  x402Version: 1 | 2;
+  network: Erc8004Network;
+  feedback: FeedbackParams & { rater: string };
+}
+
+/**
+ * Response from `POST /feedback/evm/prepare`.
+ *
+ * Everything the rater has to sign so the CHAIN records them as the author
+ * while the facilitator pays the gas.
+ */
+export interface PrepareRelayFeedbackResponse {
+  success: boolean;
+  /** The `FeedbackDelegate` the rater's EOA must be delegated to */
+  delegate?: string;
+  /** Registry calldata the rater is authorising, hex-encoded */
+  data?: string;
+  /** EIP-191 digest to sign with the rater's key */
+  digest?: string;
+  /**
+   * Unix seconds after which the authorisation is void. Short on purpose:
+   * relaying is permissionless, so a signed authorisation is live in the wild
+   * until it expires.
+   */
+  deadline?: number;
+  /** Single-use value binding this authorisation. Echo it back on submit */
+  nonce?: string;
+  /**
+   * Whether the account is already delegated. When `false` the submission MUST
+   * carry an `authorization`.
+   */
+  delegated: boolean;
+  /** The account nonce to put in the EIP-7702 authorization, when needed */
+  accountNonce?: number;
+  chainId: number;
+  error?: string;
+  network: Erc8004Network;
+}
+
+/**
+ * Request body for `POST /feedback/evm/submit`.
+ *
+ * The feedback parameters are not redundant with `prepare`: the facilitator
+ * rebuilds the registry calldata from them and requires the rater's signature
+ * to cover exactly that. It does not relay calldata it was handed.
+ */
+export interface SubmitRelayFeedbackRequest {
+  x402Version: 1 | 2;
+  network: Erc8004Network;
+  feedback: FeedbackParams & { rater: string };
+  /** The deadline `prepare` returned */
+  deadline: number;
+  /** The single-use nonce `prepare` returned */
+  nonce: string;
+  /** The rater's EIP-191 signature over `digest` */
+  signature: string;
+  /** Required only when `prepare` answered `delegated: false` */
+  authorization?: RelayAuthorizationParams;
+}
+
+/**
  * Proof of payment returned when settling with ERC-8004 extension
  */
 export interface ProofOfPayment {
@@ -3759,6 +3894,14 @@ export class Erc8004Client {
    *
    * Requires proof of payment for authorized feedback submission.
    *
+   * @deprecated On this route the facilitator is the AUTHOR: the registry
+   * records `msg.sender`, and that is the facilitator's wallet — which can also
+   * revoke what it wrote. On the networks in {@link RELAYED_FEEDBACK_NETWORKS}
+   * use {@link Erc8004Client.prepareRelayedFeedback} +
+   * {@link Erc8004Client.submitRelayedFeedback} instead, which record the RATER
+   * as author. This route still works and is not going away without notice: it
+   * is the only one available where no `FeedbackDelegate` is deployed.
+   *
    * @param request - Feedback request with agent ID, value, and proof
    * @returns Feedback response with transaction hash
    *
@@ -3787,6 +3930,148 @@ export class Erc8004Client {
    */
   async submitFeedback(request: FeedbackRequest): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `Facilitator error: ${response.status} - ${errorText}`,
+          network: request.network,
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network: request.network,
+      };
+    }
+  }
+
+  /**
+   * Ask the facilitator what the rater must sign to author a rating.
+   *
+   * Step 1 of the rater-authored rail. Writes nothing on-chain and costs
+   * nothing: it reads the delegate, the rater's delegation state and their
+   * account nonce, then hands back a digest, a deadline and a single-use nonce.
+   *
+   * Why this exists: the ERC-8004 Reputation Registry records `msg.sender` as
+   * the author, and the deployed implementation has no delegation path — no
+   * `giveFeedbackWithSignature`, no ERC-2771 forwarder. So a rating the
+   * facilitator relays the ordinary way is a rating attributed to the
+   * FACILITATOR. EIP-7702 fixes it without touching the registry: the rater
+   * delegates their own EOA to the `FeedbackDelegate` and the transaction is
+   * sent TO THE RATER'S ADDRESS, so the registry sees the rater while the
+   * facilitator pays.
+   *
+   * What to do with the answer:
+   * 1. Sign `digest` with the rater's key (EIP-191 personal-sign).
+   * 2. If `delegated` is `false`, also produce an EIP-7702 authorization over
+   *    `(chainId, delegate, accountNonce)`.
+   * 3. Hand both to {@link submitRelayedFeedback} with the SAME feedback
+   *    parameters, `deadline` and `nonce`.
+   *
+   * @param request - Network, rater address and feedback parameters
+   * @returns Everything needed to sign, including whether an EIP-7702
+   * authorization is still required
+   *
+   * @example
+   * ```ts
+   * const prep = await erc8004.prepareRelayedFeedback({
+   *   x402Version: 1,
+   *   network: 'base',
+   *   feedback: { agentId: 18896, value: 95, tag1: 'quality', rater: raterAddress },
+   * });
+   * // prep.delegated === false -> an EIP-7702 authorization is required
+   * ```
+   */
+  async prepareRelayedFeedback(
+    request: PrepareRelayFeedbackRequest,
+  ): Promise<PrepareRelayFeedbackResponse> {
+    const url = `${this.baseUrl}/feedback/evm/prepare`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          delegated: false,
+          chainId: 0,
+          error: `Facilitator error: ${response.status} - ${errorText}`,
+          network: request.network,
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        delegated: false,
+        chainId: 0,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network: request.network,
+      };
+    }
+  }
+
+  /**
+   * Relay a rater-authored rating; the facilitator pays the gas.
+   *
+   * Step 2 of the rater-authored rail. The on-chain record that comes out of it
+   * has the RATER as `msg.sender`, so `getClients(agentId)` shows the rater
+   * rather than the facilitator.
+   *
+   * Pass back the same feedback parameters, `deadline` and `nonce` that
+   * {@link prepareRelayedFeedback} returned. They are not redundant: the
+   * facilitator rebuilds the registry calldata from them and requires the
+   * rater's signature to cover exactly that.
+   *
+   * `authorization` is required only when `prepare` answered
+   * `delegated: false`. One that names a different delegate than the one
+   * `prepare` offered is refused before any gas is spent.
+   *
+   * @param request - Feedback parameters plus the rater's signature
+   * @returns Feedback response with the transaction hash
+   */
+  async submitRelayedFeedback(
+    request: SubmitRelayFeedbackRequest,
+  ): Promise<FeedbackResponse> {
+    const url = `${this.baseUrl}/feedback/evm/submit`;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
