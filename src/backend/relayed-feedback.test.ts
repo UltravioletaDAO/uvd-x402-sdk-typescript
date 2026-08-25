@@ -151,6 +151,72 @@ describe('the EIP-191 envelope', () => {
   });
 
   /**
+   * Two versions on the wire, mutually exclusive by design.
+   *
+   * A v4 chain sends `typedData` and no `signingPayload`: `signTypedData` has no
+   * envelope to apply twice, so the field that exists only to anticipate that
+   * envelope has nothing to do. A client that keeps reaching for
+   * `signingPayload` on a v4 chain gets `undefined` and must fall through to the
+   * typed data — never to `digest`.
+   */
+  it('carries typedData and no signingPayload on a v4 delegate', async () => {
+    respondWith(200, {
+      success: true,
+      digest: `0x${'cd'.repeat(32)}`,
+      typedData: {
+        primaryType: 'RelayedGiveFeedback',
+        domain: {
+          name: 'FeedbackDelegate',
+          version: '1',
+          chainId: 8453,
+          verifyingContract: '0x09C32b8FC0a94A1EeD424499A42180e29667bEeE',
+        },
+        types: { RelayedGiveFeedback: [{ name: 'registry', type: 'address' }] },
+        message: { agentId: '2106' },
+      },
+      delegated: true,
+      chainId: 8453,
+      network: 'base',
+    });
+
+    const prep = await new Erc8004Client().prepareRelayedFeedback({
+      x402Version: 1,
+      network: 'base',
+      feedback: { agentId: 1, value: 1, rater: '0x0000000000000000000000000000000000000001' },
+    });
+
+    expect(prep.typedData).toBeDefined();
+    expect((prep.typedData as any).primaryType).toBe('RelayedGiveFeedback');
+    // The domain names the RATER, not the delegate: with the delegate as
+    // verifyingContract every account pointed at it would share one domain and
+    // the signature would replay across them.
+    expect((prep.typedData as any).domain.verifyingContract).toBe(
+      '0x09C32b8FC0a94A1EeD424499A42180e29667bEeE'
+    );
+    expect(prep.signingPayload).toBeUndefined();
+  });
+
+  it('carries signingPayload and no typedData on a v3 delegate', async () => {
+    respondWith(200, {
+      success: true,
+      digest: `0x${'cd'.repeat(32)}`,
+      signingPayload: `0x${'ab'.repeat(32)}`,
+      delegated: true,
+      chainId: 84532,
+      network: 'base-sepolia',
+    });
+
+    const prep = await new Erc8004Client().prepareRelayedFeedback({
+      x402Version: 1,
+      network: 'base-sepolia',
+      feedback: { agentId: 1, value: 1, rater: '0x0000000000000000000000000000000000000001' },
+    });
+
+    expect(prep.typedData).toBeUndefined();
+    expect(prep.signingPayload).toBe(`0x${'ab'.repeat(32)}`);
+  });
+
+  /**
    * An older facilitator omits it. That must read as absent, never as `digest`:
    * a client that needs it should fail loudly rather than hand a wallet the one
    * value it cannot sign.
