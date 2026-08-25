@@ -36,3 +36,8 @@ export {
   DEFAULT_PAYMENT_HEADER,
   PAYMENT_HEADER_NAMES,
 } from './validation';
+
+export {
+  recoverPersonalSignAddress,
+  verifyPersonalSign,
+} from './personal-sign';
