@@ -3163,8 +3163,29 @@ export interface PrepareRelayFeedbackResponse {
   delegate?: string;
   /** Registry calldata the rater is authorising, hex-encoded */
   data?: string;
-  /** EIP-191 digest to sign with the rater's key */
+  /**
+   * The value the rater's signature must recover against.
+   *
+   * **The EIP-191 envelope is already applied here.** A holder of a raw key
+   * signs this directly as a prehash (viem's `sign({ hash })`, ethers'
+   * `signingKey.sign`). A WALLET must not be handed this value: `personal_sign`
+   * applies the envelope itself, so it gets wrapped twice and recovers an
+   * address that is not the rater. Wallets sign {@link signingPayload}.
+   */
   digest?: string;
+  /**
+   * The same hash with the envelope still OFF — what a wallet signs.
+   *
+   * `keccak256('\x19Ethereum Signed Message:\n32' || signingPayload)` is
+   * exactly {@link digest}, so a client can check the two against each other
+   * rather than rebuilding the preimage from `data`.
+   *
+   * Requires facilitator v1.95.0+. Older facilitators omit it; a client that
+   * needs it should fail loudly rather than fall back to signing `digest`
+   * through a wallet, which produces a well-formed signature that authorises
+   * nobody.
+   */
+  signingPayload?: string;
   /**
    * Unix seconds after which the authorisation is void. Short on purpose:
    * relaying is permissionless, so a signed authorisation is live in the wild
@@ -3200,7 +3221,11 @@ export interface SubmitRelayFeedbackRequest {
   deadline: number;
   /** The single-use nonce `prepare` returned */
   nonce: string;
-  /** The rater's EIP-191 signature over `digest` */
+  /**
+   * The rater's signature. It must recover to `rater` over `digest` — so
+   * either a raw-key prehash signature over `digest`, or a wallet
+   * `personal_sign` over `signingPayload`. Not `personal_sign` over `digest`.
+   */
   signature: string;
   /** Required only when `prepare` answered `delegated: false` */
   authorization?: RelayAuthorizationParams;
@@ -3984,7 +4009,14 @@ export class Erc8004Client {
    * facilitator pays.
    *
    * What to do with the answer:
-   * 1. Sign `digest` with the rater's key (EIP-191 personal-sign).
+   * 1. Produce the rater's signature. **Which value you sign depends on how you
+   *    sign it**, and getting it wrong yields a well-formed signature that
+   *    authorises nobody:
+   *    - raw key: sign `digest` as a **prehash**. It already carries the
+   *      EIP-191 envelope.
+   *    - wallet: `personal_sign` over `signingPayload`. `personal_sign` adds the
+   *      envelope itself, so signing `digest` with it wraps the value TWICE and
+   *      recovers a stranger — the only symptom is `relay_bad_signature`.
    * 2. If `delegated` is `false`, also produce an EIP-7702 authorization over
    *    `(chainId, delegate, accountNonce)`.
    * 3. Hand both to {@link submitRelayedFeedback} with the SAME feedback
