@@ -3248,6 +3248,41 @@ export interface SubmitRelayFeedbackRequest {
 }
 
 /**
+ * Request body for `POST /feedback/response/evm/prepare`.
+ *
+ * `responder` is the address the chain will record as the author.
+ */
+export interface PrepareRelayResponseRequest {
+  x402Version: 1 | 2;
+  network: Erc8004Network;
+  responder: string;
+  agentId: number | string;
+  /** WHOSE feedback is being answered — inside the signed struct. */
+  clientAddress: string;
+  /** Which feedback (1-indexed) — also inside the struct. */
+  feedbackIndex: number;
+  responseUri: string;
+  responseHash?: string;
+}
+
+/** Request body for `POST /feedback/response/evm/submit`. */
+export interface SubmitRelayResponseRequest {
+  x402Version: 1 | 2;
+  network: Erc8004Network;
+  responder: string;
+  agentId: number | string;
+  clientAddress: string;
+  feedbackIndex: number;
+  responseUri: string;
+  responseHash?: string;
+  deadline: number;
+  nonce: string;
+  /** The responder's signature over the typed data. */
+  signature: string;
+  authorization?: RelayAuthorizationParams;
+}
+
+/**
  * Proof of payment returned when settling with ERC-8004 extension
  */
 export interface ProofOfPayment {
@@ -4285,10 +4320,88 @@ export class Erc8004Client {
   }
 
   /**
+   * Ask what the RESPONDER must sign to author a response on-chain.
+   *
+   * The mirror of {@link prepareRelayedFeedback}, for the other write the
+   * registry accepts from anybody. `appendResponse` is not agent-only — the
+   * registry takes it from any address — so on the plain {@link appendResponse}
+   * route the `responder` recorded on-chain is the FACILITATOR. That does not
+   * destroy anyone's reputation the way a revoke would; it ties the
+   * facilitator's on-chain identity to a third party's content, which is its own
+   * kind of wrong.
+   *
+   * **v4 delegates only.** The v3 delegate accepts exactly two selectors and
+   * `appendResponse` is not one of them, so a v3 network answers 400
+   * `relay_response_needs_v4` rather than silently falling back to the route
+   * this replaces.
+   *
+   * `clientAddress` and `feedbackIndex` are inside the signed struct: without
+   * them one signature would answer any client's rating, or any rating at that
+   * index.
+   */
+  async prepareRelayedResponse(
+    request: PrepareRelayResponseRequest
+  ): Promise<PrepareRelayFeedbackResponse> {
+    return this.postRelay('/feedback/response/evm/prepare', request, {
+      success: false,
+      delegated: false,
+      chainId: 0,
+      network: request.network,
+    });
+  }
+
+  /**
+   * Relay a responder-authored response; the facilitator pays the gas.
+   *
+   * Pass back the same parameters, `deadline` and `nonce` that
+   * {@link prepareRelayedResponse} returned: the facilitator rebuilds the struct
+   * from them and refuses to relay anything the signature does not cover.
+   */
+  async submitRelayedResponse(
+    request: SubmitRelayResponseRequest
+  ): Promise<FeedbackResponse> {
+    return this.postRelay('/feedback/response/evm/submit', request, {
+      success: false,
+      network: request.network,
+    });
+  }
+
+  /** Shared POST for the relay routes: a refusal is data, never a throw. */
+  private async postRelay<T>(path: string, request: { network: Erc8004Network }, onError: T): Promise<T> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    try {
+      const response = await fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { ...onError, error: `Facilitator error: ${response.status} - ${errorText}` };
+      }
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return { ...onError, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  /**
    * Append a response to existing feedback
    *
-   * Allows agents to respond to feedback they received.
-   * Only the agent (identity owner) can append responses.
+   * @deprecated On this route the facilitator is the AUTHOR: the registry
+   * records `msg.sender` as the `responder`, and that is the facilitator's
+   * wallet. Where the delegate is **v4**, use {@link prepareRelayedResponse} +
+   * {@link submitRelayedResponse} instead. This route still works and is the
+   * only one available where the delegate is still v3.
+   *
+   * **This is NOT agent-only**, despite what this comment claimed until
+   * 2026-08-25. Verified on-chain on 2026-08-18: the registry accepts
+   * `appendResponse` from ANY address. There is no identity-owner check, here or
+   * in the contract.
    *
    * @param network - Network where feedback was submitted
    * @param agentId - Agent ID
