@@ -4,6 +4,51 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.71.0] - 2026-08-25
+
+### Fixed
+
+- **The signing instructions in 2.70.0 were wrong, and no wallet signature could
+  ever have worked.**
+
+  `prepareRelayedFeedback()` returns a `digest` that ALREADY carries the EIP-191
+  envelope — the facilitator recovers against it as a prehash, adding nothing.
+  This README and these docstrings told you to `signMessage(prep.digest)`.
+  `signMessage` / `personal_sign` applies the envelope itself, so the value got
+  wrapped **twice** and recovered an address that was not the rater.
+
+  The failure is silent by construction: the signature is well-formed, the
+  request is well-formed, and the facilitator answers `relay_bad_signature` —
+  which reads like the rater signed the wrong content, not like the client
+  wrapped it twice. Measured against production on 2026-08-25: signing the
+  digest recovered `0x98C5…7c97` for a rater whose address was `0x0B35…DcA5`.
+
+  Found by Karma Kadabra reading the code before emitting anything, and
+  confirmed independently on our side. Every wallet surface across three
+  projects had the same bug.
+
+### Added
+
+- **`signingPayload` on `PrepareRelayFeedbackResponse`** — the same hash with the
+  envelope still off. This is what a wallet signs:
+
+  | how you sign | what you sign |
+  |---|---|
+  | raw key (prehash) | `digest` |
+  | wallet `personal_sign` | `signingPayload` |
+  | ✗ `personal_sign(digest)` | recovers a stranger |
+
+  `keccak256('\x19Ethereum Signed Message:\n32' || signingPayload) === digest`,
+  so a client can check the two against each other rather than rebuilding the
+  preimage from `data`.
+
+  Served by the facilitator from **v1.95.0**. Older facilitators omit it and the
+  field is `undefined` — fail loudly rather than falling back to signing
+  `digest` through a wallet, which is the broken path.
+
+Requires facilitator v1.95.0+ for `signingPayload`. Raw-key signers were never
+affected and need no change.
+
 ## [2.70.0] - 2026-08-23
 
 ### Added

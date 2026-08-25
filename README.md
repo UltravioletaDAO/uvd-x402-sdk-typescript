@@ -959,8 +959,18 @@ const prep = await erc8004.prepareRelayedFeedback({
   },
 });
 
-// 1. Sign the digest with the RATER's key (EIP-191 personal-sign).
-const signature = await signMessage(prep.digest!);
+// 1. Sign with the RATER's key. WHICH value you sign depends on HOW you sign
+//    it — get this wrong and you produce a well-formed signature that
+//    authorises nobody, and the only symptom is `relay_bad_signature`.
+//
+//    `prep.digest` already carries the EIP-191 envelope. A raw key signs it as
+//    a prehash; a wallet's personal_sign would add the envelope a SECOND time,
+//    so wallets sign `prep.signingPayload` instead.
+const signature = await account.sign({ hash: prep.digest! });   // raw key
+// ...or, from a browser wallet:
+//   const signature = await walletClient.signMessage({
+//     account, message: { raw: prep.signingPayload! },
+//   });
 
 // 2. Only the first time this rater rates: point their EOA at the delegate.
 const authorization = prep.delegated

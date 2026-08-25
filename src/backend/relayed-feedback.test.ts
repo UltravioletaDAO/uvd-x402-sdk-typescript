@@ -95,6 +95,86 @@ describe('the networks that serve the rail', () => {
   });
 });
 
+describe('the EIP-191 envelope', () => {
+  /**
+   * `digest` and `signingPayload` differ by exactly the envelope, and both are
+   * served.
+   *
+   * `digest` is what the signature must recover against and ALREADY carries the
+   * envelope; `signingPayload` is the same hash before it. A raw key signs the
+   * first as a prehash; a wallet's `personal_sign` signs the second, because
+   * `personal_sign` applies the envelope itself.
+   *
+   * Signing `digest` through a wallet wraps it TWICE and recovers a stranger.
+   * Not hypothetical: it is what every wallet surface did, and what THIS SDK's
+   * own documentation prescribed until 2026-08-25 — which is why the rail ran
+   * for days without one successful signed rating.
+   */
+  it('carries both values, and they differ by the envelope', async () => {
+    const { keccak_256 } = await import('@noble/hashes/sha3');
+
+    // The envelope, applied by hand exactly as `personal_sign` applies it.
+    const envelope = (payloadHex: string) => {
+      const prefix = new TextEncoder().encode('\x19Ethereum Signed Message:\n32');
+      const body = Uint8Array.from(
+        payloadHex.slice(2).match(/../g)!.map((b) => parseInt(b, 16))
+      );
+      const buf = new Uint8Array(prefix.length + body.length);
+      buf.set(prefix);
+      buf.set(body, prefix.length);
+      return `0x${Buffer.from(keccak_256(buf)).toString('hex')}`;
+    };
+
+    const signingPayload = `0x16f16acc${'11'.repeat(30)}`;
+    const digest = envelope(signingPayload);
+
+    respondWith(200, {
+      success: true,
+      digest,
+      signingPayload,
+      delegated: true,
+      chainId: 8453,
+      network: 'base',
+    });
+
+    const prep = await new Erc8004Client().prepareRelayedFeedback({
+      x402Version: 1,
+      network: 'base',
+      feedback: { agentId: 1, value: 1, rater: '0x0000000000000000000000000000000000000001' },
+    });
+
+    expect(prep.signingPayload).toBe(signingPayload);
+    expect(prep.digest).toBe(digest);
+    // The relationship a client can check instead of rebuilding the preimage.
+    expect(envelope(prep.signingPayload!)).toBe(prep.digest);
+    expect(prep.signingPayload).not.toBe(prep.digest);
+  });
+
+  /**
+   * An older facilitator omits it. That must read as absent, never as `digest`:
+   * a client that needs it should fail loudly rather than hand a wallet the one
+   * value it cannot sign.
+   */
+  it('is undefined against a facilitator older than v1.95.0', async () => {
+    respondWith(200, {
+      success: true,
+      digest: `0x${'ab'.repeat(32)}`,
+      delegated: true,
+      chainId: 8453,
+      network: 'base',
+    });
+
+    const prep = await new Erc8004Client().prepareRelayedFeedback({
+      x402Version: 1,
+      network: 'base',
+      feedback: { agentId: 1, value: 1, rater: '0x0000000000000000000000000000000000000001' },
+    });
+
+    expect(prep.signingPayload).toBeUndefined();
+    expect(prep.digest).toBeDefined();
+  });
+});
+
 describe('prepareRelayedFeedback', () => {
   it('puts the rater on the wire', async () => {
     respondWith(200, {
