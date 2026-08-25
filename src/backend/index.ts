@@ -3187,6 +3187,22 @@ export interface PrepareRelayFeedbackResponse {
    */
   signingPayload?: string;
   /**
+   * The full `eth_signTypedData_v4` payload. **v4 delegates only.**
+   *
+   * Present exactly when the delegate deployed on that chain is v4, which the
+   * facilitator reads from the chain per request rather than assuming from a
+   * release. **When it is present, sign IT** — the wallet renders the agent, the
+   * score, the tags and the deadline as named fields, so the rater sees what
+   * they authorise instead of a hex blob.
+   *
+   * v4 carries no {@link signingPayload} and needs none: `signTypedData` has no
+   * envelope to apply twice, which is the entire class of bug that kept the v3
+   * rail at zero signatures for days.
+   *
+   * Requires facilitator v1.96.0+.
+   */
+  typedData?: Record<string, unknown>;
+  /**
    * Unix seconds after which the authorisation is void. Short on purpose:
    * relaying is permissionless, so a signed authorisation is live in the wild
    * until it expires.
@@ -4017,6 +4033,9 @@ export class Erc8004Client {
    *    - wallet: `personal_sign` over `signingPayload`. `personal_sign` adds the
    *      envelope itself, so signing `digest` with it wraps the value TWICE and
    *      recovers a stranger — the only symptom is `relay_bad_signature`.
+   *    - **unless `typedData` came back** — that chain runs a v4 delegate. Then
+   *      sign THAT with `eth_signTypedData_v4` and ignore the other two: it is
+   *      the only form the rater can read, and it has no envelope ambiguity.
    * 2. If `delegated` is `false`, also produce an EIP-7702 authorization over
    *    `(chainId, delegate, accountNonce)`.
    * 3. Hand both to {@link submitRelayedFeedback} with the SAME feedback
