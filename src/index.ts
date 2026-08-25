@@ -350,6 +350,20 @@ export type {
   EscrowTierWindows,
 } from './escrow-preauth';
 
+// EIP-7702 delegated accounts (which dialect a delegated payer must sign in)
+export {
+  DELEGATE_PREFIX,
+  SMA_WRAP_TARGETS,
+  delegateTarget,
+  isDelegated,
+  needsAccountWrap,
+  replaySafeTypedData,
+  resolveDelegation,
+  rpcDelegationResolver,
+  wrapSignature,
+} from './erc7702.js';
+export type { DelegationResolver, DelegationVerdict } from './erc7702.js';
+
 // Server-side middleware and facilitator client
 export {
   FacilitatorClient,

@@ -51,6 +51,13 @@
 
 import { ethers } from 'ethers';
 import { X402Error } from './types';
+import {
+  needsAccountWrap,
+  replaySafeTypedData,
+  resolveDelegation,
+  wrapSignature,
+  type DelegationResolver,
+} from './erc7702.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
@@ -268,6 +275,20 @@ export interface EscrowPreAuthParams {
    * publishes a different limit.
    */
   depositLimitUsd?: number;
+  /**
+   * How to find out whether `payerWallet` is EIP-7702-delegated, and to what.
+   *
+   * Optional, and its absence is honest rather than convenient: with no resolver
+   * the verdict is UNKNOWN and this function signs the ordinary way, exactly as
+   * it did before. Pass one — {@link rpcDelegationResolver} or your own — as soon
+   * as your payers can be delegated accounts, because a delegated payer signing
+   * the wrong dialect produces an authorization that **cannot settle on-chain**
+   * and only fails at lock time.
+   *
+   * When a resolver IS supplied and it reaches no verdict, this throws instead of
+   * guessing: an unreadable chain is not a "not delegated" answer.
+   */
+  delegationResolver?: DelegationResolver;
 }
 
 /**
@@ -370,26 +391,86 @@ export async function buildEscrowPreAuth(
   // String-valued message fields: the typed data travels as JSON to the
   // adapter (SigningWalletAdapter.signTypedData contract), and ethers
   // accepts decimal strings for uint256 / 0x-hex for bytes32.
-  const { signature } = await wallet.signTypedData(
-    JSON.stringify({
-      domain: {
-        name: cfg.usdc_domain_name,
-        version: cfg.usdc_domain_version,
-        chainId: cfg.chain_id,
-        verifyingContract: ethers.getAddress(cfg.usdc),
-      },
-      types: RECEIVE_WITH_AUTHORIZATION_TYPES,
-      primaryType: 'ReceiveWithAuthorization',
-      message: {
-        from: payer,
-        to: tokenCollector,
-        value: maxAmount.toString(),
-        validAfter: '0',
-        validBefore: String(paymentInfo.preApprovalExpiry),
-        nonce: nonce,
-      },
-    })
+  const typedData = {
+    domain: {
+      name: cfg.usdc_domain_name,
+      version: cfg.usdc_domain_version,
+      chainId: cfg.chain_id,
+      verifyingContract: ethers.getAddress(cfg.usdc),
+    },
+    types: RECEIVE_WITH_AUTHORIZATION_TYPES,
+    primaryType: 'ReceiveWithAuthorization',
+    message: {
+      from: payer,
+      to: tokenCollector,
+      value: maxAmount.toString(),
+      validAfter: '0',
+      validBefore: String(paymentInfo.preApprovalExpiry),
+      nonce: nonce,
+    },
+  };
+
+  // ── EIP-7702: a DELEGATED payer cannot settle a raw ECDSA authorization ──
+  //
+  // Once the payer's EOA carries code, USDC validates via ERC-1271 only and raw
+  // ECDSA reverts (0x151d90fe) — the lock fails on-chain. Measured in production
+  // 2026-07-31: 14 of 14 delegated payers failed; the one plain EOA locked fine.
+  //
+  // THREE STATES, and the third is the one that matters: an UNKNOWN delegation is
+  // NOT "not delegated". Collapsing it to false is exactly how the original bug
+  // survived eight days — signing raw for an account that can never settle it,
+  // silently.
+  //
+  // AND THE DIALECT DEPENDS ON THE TARGET. "Delegated" is not one signature
+  // scheme: the account-envelope wrap is Alchemy-SMA-specific. A delegate that
+  // validates plain ECDSA through ERC-1271 — Execution Market's FeedbackDelegate,
+  // which every account that has rated through the facilitator's rail is pointed
+  // at — needs the ORDINARY signature. Wrapping it is as unsettleable as signing
+  // raw for an SMA.
+  const { delegated, target } = await resolveDelegation(
+    payer,
+    `eip155:${cfg.chain_id}`,
+    params.delegationResolver
   );
+  if (delegated === null && params.delegationResolver) {
+    throw new X402Error(
+      `Could not determine whether ${payer} is EIP-7702-delegated on chain ` +
+        `${cfg.chain_id} (the resolver gave no verdict) — refusing to sign an ` +
+        'escrow authorization blindly: the wrong dialect is unsettleable ' +
+        'on-chain and the failure only shows up at lock time. Retry when the ' +
+        'chain is readable.',
+      'INVALID_CONFIG'
+    );
+  }
+
+  let signature: string;
+  if (delegated && (needsAccountWrap(target) || target === null)) {
+    // SMA-wrap: the known Alchemy account, OR a legacy boolean-only resolver that
+    // could not name the target — for which we keep the conservative behaviour
+    // rather than silently changing what such callers got. A resolver that
+    // returns the target lands any non-SMA delegate in the plain branch below.
+    const innerDigest = ethers.TypedDataEncoder.hash(
+      typedData.domain,
+      typedData.types,
+      typedData.message
+    );
+    const replaySafe = replaySafeTypedData(innerDigest, cfg.chain_id, payer);
+    const wrapped = await wallet.signTypedData(
+      JSON.stringify({ ...replaySafe, primaryType: 'ReplaySafeHash' })
+    );
+    if (!wrapped?.signature) {
+      throw new X402Error(
+        'The wallet returned no signature for the replay-safe wrap — refusing ' +
+          'to build an unsettleable authorization.',
+        'INVALID_CONFIG'
+      );
+    }
+    signature = wrapSignature(wrapped.signature);
+  } else {
+    // Plain EOA, unknown-with-no-resolver, or a delegate that takes ordinary
+    // ECDSA (FeedbackDelegate and the standard 1271 smart-EOA pattern).
+    signature = (await wallet.signTypedData(JSON.stringify(typedData))).signature;
+  }
 
   // Raw JSON (NOT base64): the backend relays this verbatim to the
   // Facilitator /settle after validating payer/amount/receiver.
