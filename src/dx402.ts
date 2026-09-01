@@ -1000,10 +1000,9 @@ export function sellerDigestFor(
 /**
  * Largest `POST /dx402/anchor` request the facilitator accepts, mirroring its
  * `MAX_REQUEST_BODY_BYTES` (default 64 KiB, an anti-OOM bound on every route).
- * After base64 inflation and ~600 bytes of metadata this leaves ~47 KB of
- * plaintext.
  */
 export const ANCHOR_MAX_REQUEST_BYTES = 64 * 1024;
+
 
 /** base64 without spreading the array into arguments -- a large blob would
  * otherwise overflow the call stack and surface as a generic failure. */
@@ -1075,6 +1074,12 @@ export async function anchorEvidence(
       // `sealed` -> it hosts and derives the pointer; `pointer` alone -> it uses
       // yours; neither -> error (x402-rs `dx402/service.rs`).
       ...(pointer !== undefined ? { pointer } : { sealed: toBase64(blob) }),
+      // Declared, not measured. Since x402-rs 2.3.0 the facilitator records
+      // the store that ACTUALLY took the bytes and returns that, so a response
+      // may name a different backend than the request did -- `ipfs` where you
+      // said `s3`, because a deployment whose primary is Pinata wrote there.
+      // That is the facilitator correcting the record, not a mismatch to
+      // assert on.
       backend: opts.backend ?? (pointer !== undefined ? backendForPointer(pointer) : 's3'),
       contentHash: hash,
       keyAlg: opts.payerKey.length === 32 ? 'ECIES-X25519' : 'ECIES-secp256k1',
