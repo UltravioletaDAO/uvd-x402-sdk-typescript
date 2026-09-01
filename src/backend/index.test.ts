@@ -453,7 +453,10 @@ describe('XRPL network support', () => {
 describe('X402Client private-key chain switching', () => {
   it('recreates the signer on the new chain and keeps payment creation working', async () => {
     const client = new X402Client({ defaultChain: 'base' });
-    const privateKey = '0x59c6995e998f97a5a0044976f3f12c0bbd1f8c8d6ef45f78c4e0d8bbd06c7c6b';
+    // Anvil/Hardhat account #0. Es una llave PUBLICA y conocida, a proposito:
+    // todo escaner la reconoce como fixture y nadie le manda fondos jamas.
+    // Nunca poner aca una llave generada: eso fue lo que hubo hasta hoy.
+    const privateKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
     const connectedAddress = await client.connectWithPrivateKey(privateKey, 'base');
     expect(connectedAddress).toBe(client.getAddress());
