@@ -73,6 +73,39 @@ import type {
 import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
 import { REVIEW_WINDOW_SEC, REFUND_WINDOW_SEC } from '../escrow-preauth';
 import { getChainByName } from '../chains';
+import {
+  DEFAULT_RETRY_AFTER_SECONDS,
+  carryFailureFields,
+  isReplayableLeaseReason,
+  facilitatorFetch,
+  failureFields,
+  readFacilitatorError,
+} from './facilitator-error';
+import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitator-error';
+
+// A facilitator refusal is DATA, not prose. `402` and `503` say opposite things
+// and this file used to answer both with `success: false` plus a sentence --
+// see ./facilitator-error.ts for why that costs the buyer a second payment.
+export {
+  AMBIGUOUS_LEASE_REASONS,
+  DEFAULT_FACILITATOR_RETRIES,
+  DEFAULT_RETRY_AFTER_SECONDS,
+  MAX_RETRY_AFTER_SECONDS,
+  REPLAYABLE_LEASE_REASONS,
+  WRITER_LEASE_REASONS,
+  carryFailureFields,
+  facilitatorFetch,
+  isAmbiguousLeaseReason,
+  isReplayableLeaseReason,
+  parseRetryAfterSeconds,
+  readFacilitatorError,
+} from './facilitator-error';
+export type {
+  FacilitatorErrorInfo,
+  FacilitatorFailureFields,
+  FacilitatorFetchOptions,
+  WriterLeaseReason,
+} from './facilitator-error';
 
 // ============================================================================
 // TYPES
@@ -127,8 +160,16 @@ export interface SettleRequest {
 /**
  * Verify response from the facilitator
  */
-export interface VerifyResponse {
+export interface VerifyResponse extends FacilitatorFailureFields {
   isValid: boolean;
+  /**
+   * Why the payment is not valid.
+   *
+   * Read `retryable` before showing this to anyone. When `retryable` is true the
+   * facilitator reached NO VERDICT -- it did not reject the payment, so this
+   * string is a transport diagnosis, not a rejection, and re-signing on it makes
+   * the buyer pay twice.
+   */
   invalidReason?: string;
   payer?: string;
   network?: string;
@@ -137,11 +178,17 @@ export interface VerifyResponse {
 /**
  * Settle response from the facilitator
  */
-export interface SettleResponse {
+export interface SettleResponse extends FacilitatorFailureFields {
   success: boolean;
   transactionHash?: string;
   network?: string;
-  /** Transport-level failure (unreachable facilitator, non-2xx, timeout). */
+  /**
+   * Transport-level failure (unreachable facilitator, non-2xx, timeout).
+   *
+   * `success: false` with `retryable: true` is NOT a rejected payment. The
+   * authorization is untouched and the same one must be resent; treating it as
+   * a refusal and asking for a new signature charges the buyer twice.
+   */
   error?: string;
   /**
    * The facilitator's own reason when it settled nothing — e.g. a transfer that
@@ -605,6 +652,15 @@ export interface FacilitatorClientOptions {
    * Set explicitly to override per-network auto-detection.
    */
   timeout?: number;
+  /**
+   * Extra attempts after the first when the facilitator answers a refusal it
+   * proved it did not execute (`safeToReplay`). Default 2; `0` disables.
+   *
+   * Only ever spent on `429` and on a `503` naming a pre-execution writer-lease
+   * reason. An ambiguous `forward_failed` -- whose write may already have landed
+   * -- is never replayed here, at any setting.
+   */
+  retries?: number;
 }
 
 /**
@@ -631,11 +687,13 @@ export class FacilitatorClient {
   private readonly baseUrl: string;
   private readonly timeout: number;
   private readonly explicitTimeout: boolean;
+  private readonly retries: number | undefined;
 
   constructor(options: FacilitatorClientOptions = {}) {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
     this.explicitTimeout = options.timeout !== undefined;
     this.timeout = options.timeout || 30000;
+    this.retries = options.retries;
   }
 
   /**
@@ -670,33 +728,41 @@ export class FacilitatorClient {
   ): Promise<VerifyResponse> {
     const body = buildVerifyRequest(paymentHeader, requirements);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     try {
-      const response = await fetch(`${this.baseUrl}/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      const { response, error } = await facilitatorFetch(
+        `${this.baseUrl}/verify`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        { timeoutMs: this.timeout, retries: this.retries },
+      );
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (error) {
+        // `isValid: false` is unavoidable -- nothing was validated -- but it is
+        // no longer the whole story. A caller that answers 402 on this without
+        // reading `retryable` tells the buyer their payment was REFUSED and
+        // asks them to sign another one, for a payment the facilitator never
+        // looked at. That is the double-charge this field exists to prevent.
         return {
           isValid: false,
-          invalidReason: `Facilitator error: ${response.status} - ${errorText}`,
+          invalidReason: error.error,
+          ...failureFields(error),
         };
       }
 
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
+      // A thrown error is a transport failure (timeout, DNS, connection reset).
+      // No verdict was reached either, so it is retryable for exactly the same
+      // reason a 503 is -- and it used to be reported as an invalid payment.
       return {
         isValid: false,
         invalidReason: error instanceof Error ? error.message : 'Unknown error',
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -717,24 +783,29 @@ export class FacilitatorClient {
     const body = buildSettleRequest(paymentHeader, requirements);
     const settleTimeout = this.getTimeout(requirements.network);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), settleTimeout);
-
     try {
-      const response = await fetch(`${this.baseUrl}/settle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      // A `/settle` refusal that the facilitator proved it did not execute is
+      // replayed here with the SAME authorization. That is safe twice over: the
+      // facilitator refused in its router before signing anything, and the
+      // authorization carries a single-use nonce the chain rejects on a real
+      // duplicate. What is NOT replayed is `forward_failed` -- the hop to the
+      // lease holder died after handing the write over, so the transfer may
+      // already be mining.
+      const { response, error } = await facilitatorFetch(
+        `${this.baseUrl}/settle`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        { timeoutMs: settleTimeout, retries: this.retries },
+      );
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (error) {
         return {
           success: false,
-          error: `Facilitator error: ${response.status} - ${errorText}`,
+          error: error.error,
+          ...failureFields(error),
         };
       }
 
@@ -791,10 +862,16 @@ export class FacilitatorClient {
         payer: result.payer,
       };
     } catch (error) {
-      clearTimeout(timeoutId);
+      // Timeout or connection failure. The write may have landed -- this is the
+      // same ambiguity as `forward_failed`, so it is retryable but never
+      // replayed automatically. Reconcile on-chain, or by transaction hash,
+      // before sending anything again.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -812,19 +889,25 @@ export class FacilitatorClient {
   async verifyAndSettle(
     paymentHeader: X402Header,
     requirements: PaymentRequirements
-  ): Promise<{
-    verified: boolean;
-    settled: boolean;
-    transactionHash?: string;
-    error?: string;
-  }> {
+  ): Promise<
+    {
+      verified: boolean;
+      settled: boolean;
+      transactionHash?: string;
+      error?: string;
+    } & FacilitatorFailureFields
+  > {
     // Verify first
     const verifyResult = await this.verify(paymentHeader, requirements);
     if (!verifyResult.isValid) {
+      // Carry the refusal's shape up. Flattening it to `verified: false` here
+      // would undo the whole point one level below: the caller could not tell a
+      // rejected authorization from a facilitator that never answered.
       return {
         verified: false,
         settled: false,
         error: verifyResult.invalidReason,
+        ...carryFailureFields(verifyResult),
       };
     }
 
@@ -835,6 +918,7 @@ export class FacilitatorClient {
       settled: settleResult.success,
       transactionHash: settleResult.transactionHash,
       error: settleResult.error,
+      ...carryFailureFields(settleResult),
     };
   }
 
@@ -1398,6 +1482,41 @@ function createVerifiedPaymentState(
 }
 
 /**
+ * Answer a no-verdict facilitator refusal as 503 + `Retry-After`.
+ *
+ * The body repeats the facilitator's own `reason` and a `retryable` flag so a
+ * client that only reads JSON still learns the payment was not rejected. The
+ * header is a whole-second integer, as RFC 9110 requires.
+ */
+function respondUnavailable(
+  res: {
+    status: (code: number) => {
+      json: (body: unknown) => void;
+      set: (headers: Record<string, string>) => { json: (body: unknown) => void };
+    };
+  },
+  message: string,
+  failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
+): void {
+  const seconds = Math.max(1, Math.ceil(failure.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS));
+  const body = {
+    error: message,
+    reason: failure.reason ?? failure.invalidReason ?? failure.error,
+    retryable: true,
+    retryAfterSeconds: seconds,
+    // False for `forward_failed` and for a bare timeout: the write may already
+    // have landed, so the caller must reconcile before resending.
+    safeToReplay: failure.safeToReplay === true,
+  };
+  const staged = res.status(503);
+  if (typeof staged.set === 'function') {
+    staged.set({ 'Retry-After': String(seconds) }).json(body);
+    return;
+  }
+  staged.json(body);
+}
+
+/**
  * Create an Express-compatible middleware for x402 payments
  *
  * @param getRequirements - Function to get payment requirements for a request
@@ -1436,6 +1555,7 @@ export function createPaymentMiddleware(
   const client = new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
+    retries: options.retries,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
@@ -1457,6 +1577,15 @@ export function createPaymentMiddleware(
     const verifyResult = await client.verify(payment, requirements);
 
     if (!verifyResult.isValid) {
+      // 402 says "your payment was REJECTED, sign a new authorization". Sending
+      // it for a facilitator that never reached a verdict is what makes the
+      // buyer pay twice: their first authorization was never refused and is
+      // still perfectly good. A no-verdict answer must keep the credential
+      // alive, so it goes out as 503 + Retry-After instead.
+      if (verifyResult.retryable) {
+        respondUnavailable(res, 'Payment verification unavailable', verifyResult);
+        return;
+      }
       res.status(402).json({
         error: 'Payment verification failed',
         reason: verifyResult.invalidReason,
@@ -1469,6 +1598,13 @@ export function createPaymentMiddleware(
     if (settlementStrategy === 'before-handler') {
       const settleResult = await req.x402.settle();
       if (!settleResult.success) {
+        // Same distinction on the settle side. A 500 tells a client its request
+        // is broken and to stop; a settle that reached no verdict is the one
+        // case where retrying the identical request is correct.
+        if (settleResult.retryable) {
+          respondUnavailable(res, 'Payment settlement unavailable', settleResult);
+          return;
+        }
         res.status(500).json({
           error: 'Payment settlement failed',
           reason: settleResult.error || 'Unknown settlement error',
@@ -1528,10 +1664,34 @@ export interface HonoMiddlewareOptions extends PaymentMiddlewareOptions {
  * });
  * ```
  */
+/** {@link respondUnavailable} for a Hono context. */
+function honoUnavailable(
+  c: {
+    json: (body: unknown, status?: number) => unknown;
+    header?: (name: string, value: string) => void;
+  },
+  message: string,
+  failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
+): unknown {
+  const seconds = Math.max(1, Math.ceil(failure.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS));
+  c.header?.('Retry-After', String(seconds));
+  return c.json(
+    {
+      error: message,
+      reason: failure.reason ?? failure.invalidReason ?? failure.error,
+      retryable: true,
+      retryAfterSeconds: seconds,
+      safeToReplay: failure.safeToReplay === true,
+    },
+    503,
+  );
+}
+
 export function createHonoMiddleware(options: HonoMiddlewareOptions) {
   const client = new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
+    retries: options.retries,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
@@ -1544,6 +1704,8 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
       req: { header: (name: string) => string | undefined; url: string };
       json: (body: unknown, status?: number) => unknown;
       set?: (key: string, value: unknown) => void;
+      /** Hono's response-header setter. Optional so older context doubles still fit. */
+      header?: (name: string, value: string) => void;
     },
     next: () => Promise<void>
   ) => {
@@ -1585,6 +1747,11 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
 
     const verifyResult = await client.verify(parsed, requirement);
     if (!verifyResult.isValid) {
+      // See respondUnavailable: 402 here would tell the buyer to sign again for
+      // an authorization the facilitator never rejected.
+      if (verifyResult.retryable) {
+        return honoUnavailable(c, 'Payment verification unavailable', verifyResult);
+      }
       return c.json({
         error: 'Payment verification failed',
         reason: verifyResult.invalidReason,
@@ -1597,6 +1764,9 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
     if (settlementStrategy === 'before-handler') {
       const settleResult = await verifiedPayment.settle();
       if (!settleResult.success) {
+        if (settleResult.retryable) {
+          return honoUnavailable(c, 'Payment settlement unavailable', settleResult);
+        }
         return c.json({
           error: 'Payment settlement failed',
           reason: settleResult.error || 'Unknown error',
@@ -3456,7 +3626,7 @@ export interface FeedbackRequest {
 /**
  * Feedback response from POST /feedback
  */
-export interface FeedbackResponse {
+export interface FeedbackResponse extends FacilitatorFailureFields {
   /** Whether the feedback was successfully submitted */
   success: boolean;
   /** Transaction hash of the feedback submission */
@@ -3487,12 +3657,21 @@ export class Erc8004LookupError extends Error {
   readonly status: number;
   /** Raw response body, for debugging */
   readonly body: string;
+  /**
+   * `Retry-After`, already clamped, when the facilitator sent one.
+   *
+   * Optional so every existing three-argument construction keeps compiling; it
+   * falls back to the default wait rather than to zero, because a caller that
+   * retries instantly on a 503 is the load that caused it.
+   */
+  private readonly retryAfterHint: number | undefined;
 
-  constructor(message: string, status: number, body: string) {
+  constructor(message: string, status: number, body: string, retryAfterSeconds?: number) {
     super(message);
     this.name = 'Erc8004LookupError';
     this.status = status;
     this.body = body;
+    this.retryAfterHint = retryAfterSeconds;
   }
 
   /** The address genuinely owns no agent on this network. */
@@ -3500,9 +3679,55 @@ export class Erc8004LookupError extends Error {
     return this.status === 404;
   }
 
-  /** The lookup reached no verdict. Retry; never read as "owns nothing". */
+  /**
+   * The lookup reached no verdict. Retry; never read as "owns nothing".
+   *
+   * `502` and `504` join `503` and `429` here: a gateway that answered on the
+   * facilitator's behalf is exactly as silent about the agent's existence, and
+   * reading either as absence has the same consequence -- a duplicate mint.
+   */
   get retryable(): boolean {
-    return this.status === 503;
+    return (
+      this.status === 429 ||
+      this.status === 502 ||
+      this.status === 503 ||
+      this.status === 504
+    );
+  }
+
+  /**
+   * The facilitator's own `reason`, when the body carried one.
+   *
+   * On a WRITE route this is the writer-lease reason and it decides whether the
+   * request may be re-sent; see {@link isReplayableLeaseReason}.
+   */
+  get reason(): string | undefined {
+    try {
+      const parsed = JSON.parse(this.body) as { reason?: unknown };
+      if (parsed && typeof parsed === 'object' && typeof parsed.reason === 'string') {
+        return parsed.reason;
+      }
+    } catch {
+      /* a non-JSON body is still a status */
+    }
+    return undefined;
+  }
+
+  /**
+   * The facilitator NAMED a reason proving it executed nothing.
+   *
+   * False for `forward_failed` and for every unattributed 5xx: "something
+   * answered" is not evidence that nothing ran. On `/register`, replaying when
+   * this is false is the sequence that minted five duplicate agents.
+   */
+  get safeToReplay(): boolean {
+    return this.status === 429 || (this.status === 503 && isReplayableLeaseReason(this.reason));
+  }
+
+  /** Seconds to wait before retrying, clamped. Absent when not retryable. */
+  get retryAfterSeconds(): number | undefined {
+    if (!this.retryable) return undefined;
+    return this.retryAfterHint ?? DEFAULT_RETRY_AFTER_SECONDS;
   }
 }
 
@@ -3581,7 +3806,7 @@ export interface RegisterAgentRequest {
 /**
  * Response from POST /register
  */
-export interface RegisterAgentResponse {
+export interface RegisterAgentResponse extends FacilitatorFailureFields {
   /** Whether registration succeeded */
   success: boolean;
   /** The newly assigned agent ID (EVM: tokenId number, Solana: base58 pubkey string) */
@@ -3744,6 +3969,12 @@ export interface Erc8004ClientOptions {
   baseUrl?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
+  /**
+   * Extra attempts after the first, spent only on a refusal the facilitator
+   * proved it did not execute. Default 2; `0` disables. An ambiguous
+   * `forward_failed` is never replayed at any setting.
+   */
+  retries?: number;
 }
 
 /**
@@ -3786,10 +4017,44 @@ export interface Erc8004ClientOptions {
 export class Erc8004Client {
   private readonly baseUrl: string;
   private readonly timeout: number;
+  private readonly retries: number | undefined;
 
   constructor(options: Erc8004ClientOptions = {}) {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
     this.timeout = options.timeout || 30000;
+    this.retries = options.retries;
+  }
+
+  /**
+   * POST a write route, keeping a refusal readable.
+   *
+   * Every ERC-8004 write goes through the facilitator's EVM writer lease, so
+   * every one of them can answer `503` + `reason`. Flattened to a string, those
+   * are indistinguishable from "the registry rejected your feedback" — and on
+   * `/register` the wrong reading re-POSTs a mint that may already have landed,
+   * which is precisely how five duplicate agents were once created.
+   *
+   * A refusal the facilitator proved it did not execute is replayed
+   * automatically (`safeToReplay`); `forward_failed` never is.
+   */
+  private async writeJson(
+    url: string,
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<{ response: Response; error?: FacilitatorErrorInfo }> {
+    return facilitatorFetch(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...extraHeaders,
+        },
+        body: JSON.stringify(body),
+      },
+      { timeoutMs: this.timeout, retries: this.retries },
+    );
   }
 
   /**
@@ -3847,33 +4112,28 @@ export class Erc8004Client {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
-      });
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId));
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        // 404 and 503 are different answers: "owns nothing" versus "could not
-        // find out". Reading the status out of a message string is how they get
-        // collapsed, and collapsing them mints a duplicate agent for an owner
-        // who already has one. Carry the status as a field.
-        throw new Erc8004LookupError(
-          `ERC-8004 API error: ${response.status} - ${errorText}`,
-          response.status,
-          errorText,
-        );
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
+    if (!response.ok) {
+      // 404 and 503 are different answers: "owns nothing" versus "could not
+      // find out". Reading the status out of a message string is how they get
+      // collapsed, and collapsing them mints a duplicate agent for an owner
+      // who already has one. Carry the status, the reason and the wait as
+      // fields.
+      const info = await readFacilitatorError(response);
+      throw new Erc8004LookupError(
+        `ERC-8004 API error: ${info.status} - ${info.body}`,
+        info.status,
+        info.body,
+        info.retryAfterSeconds,
+      );
     }
+
+    return await response.json();
   }
 
   /**
@@ -4007,38 +4267,32 @@ export class Erc8004Client {
   async submitFeedback(request: FeedbackRequest): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
-        signal: controller.signal,
+      const { response, error } = await this.writeJson(url, {
+        ...request,
+        network: wireNetwork(request.network),
       });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (error) {
         return {
           success: false,
-          error: `Facilitator error: ${response.status} - ${errorText}`,
+          error: error.error,
           network: request.network,
+          ...failureFields(error),
         };
       }
 
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
+      // Timeout or connection failure: the write may already be on-chain.
+      // Retryable, never replayable -- reconcile before resending.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         network: request.network,
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -4159,38 +4413,32 @@ export class Erc8004Client {
   ): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback/evm/submit`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
-        signal: controller.signal,
+      const { response, error } = await this.writeJson(url, {
+        ...request,
+        network: wireNetwork(request.network),
       });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (error) {
         return {
           success: false,
-          error: `Facilitator error: ${response.status} - ${errorText}`,
+          error: error.error,
           network: request.network,
+          ...failureFields(error),
         };
       }
 
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
+      // Timeout or connection failure: the write may already be on-chain.
+      // Retryable, never replayable -- reconcile before resending.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         network: request.network,
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -4213,9 +4461,6 @@ export class Erc8004Client {
   ): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback/revoke`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     const payload: Record<string, unknown> = {
       x402Version: 1,
       network: wireNetwork(network),
@@ -4232,34 +4477,26 @@ export class Erc8004Client {
     }
 
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      const { response, error } = await this.writeJson(url, payload);
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (error) {
         return {
           success: false,
-          error: `Facilitator error: ${response.status} - ${errorText}`,
+          error: error.error,
           network,
+          ...failureFields(error),
         };
       }
 
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         network,
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -4368,24 +4605,23 @@ export class Erc8004Client {
 
   /** Shared POST for the relay routes: a refusal is data, never a throw. */
   private async postRelay<T>(path: string, request: { network: Erc8004Network }, onError: T): Promise<T> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
-        signal: controller.signal,
+      const { response, error } = await this.writeJson(`${this.baseUrl}${path}`, {
+        ...request,
+        network: wireNetwork(request.network),
       });
-      clearTimeout(timeoutId);
-      if (!response.ok) {
-        const errorText = await response.text();
-        return { ...onError, error: `Facilitator error: ${response.status} - ${errorText}` };
+      if (error) {
+        return { ...onError, error: error.error, ...failureFields(error) };
       }
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
-      return { ...onError, error: error instanceof Error ? error.message : 'Unknown error' };
+      return {
+        ...onError,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
+      };
     }
   }
 
@@ -4430,9 +4666,6 @@ export class Erc8004Client {
   ): Promise<FeedbackResponse> {
     const url = `${this.baseUrl}/feedback/response`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     const payload: Record<string, unknown> = {
       x402Version: 1,
       network: wireNetwork(network),
@@ -4448,34 +4681,26 @@ export class Erc8004Client {
     }
 
     try {
-      const fetchResponse = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+      const { response: fetchResponse, error } = await this.writeJson(url, payload);
 
-      clearTimeout(timeoutId);
-
-      if (!fetchResponse.ok) {
-        const errorText = await fetchResponse.text();
+      if (error) {
         return {
           success: false,
-          error: `Facilitator error: ${fetchResponse.status} - ${errorText}`,
+          error: error.error,
           network,
+          ...failureFields(error),
         };
       }
 
       return await fetchResponse.json();
     } catch (error) {
-      clearTimeout(timeoutId);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         network,
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -4529,24 +4754,13 @@ export class Erc8004Client {
 
     const url = `${this.baseUrl}/register`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
-        signal: controller.signal,
+      const { response, error } = await this.writeJson(url, {
+        ...request,
+        network: wireNetwork(request.network),
       });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (error) {
         // The facilitator answers 4xx with a structured RegisterAgentResponse,
         // and on 409 - a registration for this agent is ALREADY IN FLIGHT -
         // that body carries the agent id and tx of the run already underway,
@@ -4556,14 +4770,15 @@ export class Erc8004Client {
         // a caller resolve instead of re-POSTing, and re-POSTing a mint is
         // exactly how duplicate agents get created. Keep the body.
         try {
-          const parsed = JSON.parse(errorText) as RegisterAgentResponse;
+          const parsed = JSON.parse(error.body) as RegisterAgentResponse;
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             return {
               ...parsed,
-              // Never let a 4xx body claim success, whatever it says.
+              // Never let a non-2xx body claim success, whatever it says.
               success: false,
-              error: parsed.error ?? `Facilitator error: ${response.status}`,
+              error: parsed.error ?? `Facilitator error: ${error.status}`,
               network: parsed.network ?? request.network,
+              ...failureFields(error),
             };
           }
         } catch {
@@ -4571,18 +4786,26 @@ export class Erc8004Client {
         }
         return {
           success: false,
-          error: `Facilitator error: ${response.status} - ${errorText}`,
+          error: error.error,
           network: request.network,
+          ...failureFields(error),
         };
       }
 
       return await response.json();
     } catch (error) {
-      clearTimeout(timeoutId);
+      // A MINT that timed out is the single most dangerous ambiguity in this
+      // SDK: the transaction may be mining right now. `safeToReplay: false`
+      // says so out loud. Resolve with
+      // `GET /identity/{network}/owner/{recipient}` -- honouring its 404-vs-503
+      // distinction -- or with `getRegisterStatus`, never by re-POSTing.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         network: request.network,
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
       };
     }
   }
@@ -4602,37 +4825,26 @@ export class Erc8004Client {
   async registerAgentAsync(request: RegisterAgentRequest): Promise<RegisterJobResponse> {
     const url = `${this.baseUrl}/register`;
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    // A 503 here is the SAFE half of the register story: the job was never
+    // created, so a replay creates one job, not two. `writeJson` replays only
+    // what the facilitator proved it did not execute, and never
+    // `forward_failed`.
+    const { response, error } = await this.writeJson(
+      url,
+      { ...request, network: wireNetwork(request.network) },
+      { Prefer: 'respond-async' },
+    );
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Prefer': 'respond-async',
-        },
-        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Erc8004LookupError(
-          `ERC-8004 API error: ${response.status} - ${errorText}`,
-          response.status,
-          errorText,
-        );
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
+    if (error) {
+      throw new Erc8004LookupError(
+        `ERC-8004 API error: ${error.status} - ${error.body}`,
+        error.status,
+        error.body,
+        error.retryAfterSeconds,
+      );
     }
+
+    return await response.json();
   }
 
   /**
@@ -4647,29 +4859,23 @@ export class Erc8004Client {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
-      });
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeoutId));
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Erc8004LookupError(
-          `ERC-8004 API error: ${response.status} - ${errorText}`,
-          response.status,
-          errorText,
-        );
-      }
-
-      return await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
+    if (!response.ok) {
+      const info = await readFacilitatorError(response);
+      throw new Erc8004LookupError(
+        `ERC-8004 API error: ${info.status} - ${info.body}`,
+        info.status,
+        info.body,
+        info.retryAfterSeconds,
+      );
     }
+
+    return await response.json();
   }
 
   /**
@@ -5102,10 +5308,19 @@ export interface AdvancedAuthorizationResult {
 /**
  * Result of an on-chain transaction (release, refund, charge).
  */
-export interface AdvancedTransactionResult {
+export interface AdvancedTransactionResult extends FacilitatorFailureFields {
   success: boolean;
   transactionHash?: string;
   gasUsed?: number;
+  /**
+   * Why it failed.
+   *
+   * On the gasless (`*ViaFacilitator`) paths, check `retryable` first: a
+   * facilitator that could not hand the write to its lease holder rejected
+   * nothing on-chain, and the escrow is exactly as it was. Reporting that as a
+   * failed refund is how funds get written off while they are still sitting in
+   * escrow, recoverable.
+   */
   error?: string;
 }
 
@@ -5199,6 +5414,11 @@ export interface AdvancedEscrowClientOptions {
    * ```
    */
   wallet?: import('../wallet').SigningWalletAdapter;
+  /**
+   * Extra attempts on the gasless facilitator paths when the facilitator proved
+   * it executed nothing. Default 2; `0` disables.
+   */
+  retries?: number;
 }
 
 /**
@@ -5276,6 +5496,7 @@ export class AdvancedEscrowClient {
   private chainId: number;
   private gasLimit: number;
   private readonly timeout: number;
+  private readonly retries: number | undefined;
   private contracts: AdvancedEscrowContracts;
   private signer: any; // ethers.Signer (legacy mode)
   private walletAdapter: import('../wallet').SigningWalletAdapter | null; // OWS mode (v2.36.0+)
@@ -5311,6 +5532,7 @@ export class AdvancedEscrowClient {
     this.chainId = options.chainId || 8453;
     this.gasLimit = options.gasLimit || 300000;
     this.timeout = options.timeout || ESCROW_TIMEOUT_MS[this.chainId] || DEFAULT_ESCROW_TIMEOUT_MS;
+    this.retries = options.retries;
 
     if (this.walletAdapter && !this.rpcUrl) {
       throw new Error(
@@ -5366,10 +5588,17 @@ export class AdvancedEscrowClient {
     const t = TIER_TIMINGS[tier];
     // The release window must outlast the REVIEW, not just the tier. `micro`
     // alone gives two hours; a buyer approving later gets
-    // `AfterAuthorizationExpiry` on-chain — the release reverts, the worker is
-    // not paid, and only the payer's `reclaim()` can move the funds. Measured in
-    // production 2026-08-19: a release attempted 26.2 HOURS past expiry, 8
-    // escrows stuck on one network in 24h.
+    // `AfterAuthorizationExpiry` on-chain — the release reverts and the worker
+    // is not paid. Measured in production 2026-08-19: a release attempted 26.2
+    // HOURS past expiry, 8 escrows stuck on one network in 24h.
+    //
+    // This comment used to add "and only the payer's `reclaim()` can move the
+    // funds". That is FALSE and it is why those escrows were treated as lost:
+    // `AuthCaptureEscrow.partialVoid` is `onlySender(operator)` — the operator
+    // is the facilitator — pays the PAYER, and does not look at
+    // `authorizationExpiry`. `refundViaFacilitator` reaches it with no gas and
+    // no payer. Widening the window still matters: it is what pays the WORKER,
+    // and a refund does not.
     //
     // buildEscrowPreAuth — the other escrow path in this same SDK — already
     // floors both windows this way and says why. This path never got the memo,
@@ -5758,17 +5987,23 @@ export class AdvancedEscrowClient {
         },
       };
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
       try {
-        const response = await fetch(`${this.facilitatorUrl}/settle`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
+        // A 503 from the writer lease is NOT a refused release. The facilitator
+        // never reached the chain, so the escrow still holds every token and
+        // the same request is the right thing to send again. Reading it as a
+        // refusal is how a recoverable escrow gets written off.
+        const { response, error } = await facilitatorFetch(
+          `${this.facilitatorUrl}/settle`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+          { timeoutMs: this.timeout, retries: this.retries },
+        );
+        if (error) {
+          return { success: false, error: error.error, ...failureFields(error) };
+        }
         const result = await response.json();
 
         if (result.success) {
@@ -5790,8 +6025,6 @@ export class AdvancedEscrowClient {
             `Release refused with no reason (HTTP ${response.status}, body keys: ${Object.keys(result ?? {}).sort().join(', ') || 'none'})`,
         };
       } catch (fetchErr: any) {
-        clearTimeout(timeoutId);
-
         // On timeout, check on-chain state as fallback
         if (fetchErr.name === 'AbortError') {
           try {
@@ -5810,23 +6043,53 @@ export class AdvancedEscrowClient {
   }
 
   /**
-   * GASLESS REFUND: Refund escrowed funds via the facilitator.
+   * GASLESS REFUND: return escrowed funds to the payer via the facilitator.
    *
-   * Instead of calling the PaymentOperator contract directly (which requires
-   * gas), this sends a refundInEscrow request to the facilitator, which
-   * submits the transaction on your behalf.
+   * Sends `action: "refundInEscrow"` to `POST /settle`; the facilitator's
+   * PaymentOperator calls `AuthCaptureEscrow.partialVoid`.
+   *
+   * # This is how an EXPIRED escrow is recovered
+   *
+   * A widely repeated claim — including in this SDK's own comments until now —
+   * says that once `authorizationExpiry` passes, only the payer's `reclaim()`
+   * can move the funds. **That is false, and believing it has left real money
+   * stranded.**
+   *
+   * Read the contract (`AuthCaptureEscrow.sol`):
+   *
+   * - `partialVoid` is `onlySender(paymentInfo.operator)` — the operator is the
+   *   FACILITATOR, not the payer — it sends the tokens **to the payer**, and it
+   *   **does not check `authorizationExpiry` at all**. It works before expiry
+   *   and after it, and the payer never has to appear.
+   * - `reclaim` is `onlySender(paymentInfo.payer)` and only after expiry. It is
+   *   a payer's self-service escape hatch, which is why this facilitator does
+   *   not expose it — **not** the only way out.
+   *
+   * So a release that reverted with `AfterAuthorizationExpiry` is recoverable
+   * from here, with no gas and no cooperation from the payer. Get the amount
+   * from {@link queryEscrowState}'s `capturableAmount`.
+   *
+   * # A refusal that is not a refusal
+   *
+   * Check `retryable` before writing an escrow off. A `503` means the
+   * facilitator never reached the chain — the escrow is untouched and the same
+   * request should be sent again.
    *
    * @param paymentInfo - PaymentInfo from the authorize step
-   * @param amount - Amount to refund in atomic units (defaults to maxAmount)
+   * @param amount - Amount to refund in atomic units (defaults to maxAmount).
+   *   For a stuck escrow pass `capturableAmount` from {@link queryEscrowState}.
    * @returns Transaction result from the facilitator
    *
-   * @example
+   * @example Recovering an escrow whose release window already closed
    * ```typescript
-   * const pi = client.buildPaymentInfo('0xWorker...', '5000000', 'standard');
-   * await client.authorize(pi);
-   * // Task cancelled...
-   * const result = await client.refundViaFacilitator(pi);
-   * console.log(result.transactionHash);
+   * const state = await client.queryEscrowState(pi);
+   * if (state.capturableAmount !== '0') {
+   *   // No payer needed, no gas, and expiry is irrelevant to partialVoid.
+   *   const result = await client.refundViaFacilitator(pi, state.capturableAmount);
+   *   if (!result.success && result.retryable) {
+   *     // No verdict was reached. The funds are still there; send it again.
+   *   }
+   * }
    * ```
    */
   async refundViaFacilitator(
@@ -5868,17 +6131,23 @@ export class AdvancedEscrowClient {
         },
       };
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
-
       try {
-        const response = await fetch(`${this.facilitatorUrl}/settle`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
+        // The non-2xx branch used to be missing entirely: `response.json()` on
+        // a 503 body yields `{error, reason}`, `result.success` is undefined,
+        // and the refund was reported as failed. That is a recoverable escrow
+        // declared lost on a facilitator hiccup.
+        const { response, error } = await facilitatorFetch(
+          `${this.facilitatorUrl}/settle`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          },
+          { timeoutMs: this.timeout, retries: this.retries },
+        );
+        if (error) {
+          return { success: false, error: error.error, ...failureFields(error) };
+        }
         const result = await response.json();
 
         if (result.success) {
@@ -5887,10 +6156,14 @@ export class AdvancedEscrowClient {
             transactionHash: result.transaction || result.transactionHash || result.transaction_hash,
           };
         }
-        return { success: false, error: result.errorReason || result.error || 'Refund failed' };
+        return {
+          success: false,
+          error:
+            result.errorReason ||
+            result.error ||
+            `Refund refused with no reason (HTTP ${response.status}, body keys: ${Object.keys(result ?? {}).sort().join(', ') || 'none'})`,
+        };
       } catch (fetchErr: any) {
-        clearTimeout(timeoutId);
-
         // On timeout, check on-chain state as fallback
         if (fetchErr.name === 'AbortError') {
           try {
