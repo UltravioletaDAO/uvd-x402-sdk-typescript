@@ -379,6 +379,19 @@ export {
   getCorsHeaders,
   X402_CORS_HEADERS,
   X402_HEADER_NAMES,
+  // Reading a facilitator refusal as data. A 503 is "no verdict", not a
+  // rejected payment: re-signing on one charges the buyer twice.
+  MAX_RETRY_AFTER_SECONDS,
+  DEFAULT_RETRY_AFTER_SECONDS,
+  DEFAULT_FACILITATOR_RETRIES,
+  WRITER_LEASE_REASONS,
+  REPLAYABLE_LEASE_REASONS,
+  AMBIGUOUS_LEASE_REASONS,
+  isReplayableLeaseReason,
+  isAmbiguousLeaseReason,
+  parseRetryAfterSeconds,
+  readFacilitatorError,
+  facilitatorFetch,
 } from './backend';
 export type {
   ResourceInfoV2,
@@ -391,4 +404,8 @@ export type {
   PaymentAcceptance,
   PaymentMiddlewareOptions,
   VerifiedPaymentState,
+  FacilitatorErrorInfo,
+  FacilitatorFailureFields,
+  FacilitatorFetchOptions,
+  WriterLeaseReason,
 } from './backend';

@@ -869,6 +869,78 @@ try {
 }
 ```
 
+## `503` is not `402` — read the refusal before you re-sign
+
+`402` and `503` say opposite things, and the difference is the buyer's money:
+
+| status | meaning | what the caller must do |
+|---|---|---|
+| **402** | the payment was **rejected** | sign a **new** authorization |
+| **503** | **no verdict was reached** | resend the **same** credential |
+
+Charging a `503` as a `402` makes the buyer sign and broadcast a second payment
+for money that was never refused — and the first authorization is still
+perfectly spendable. Every facilitator edge in this SDK therefore reports the
+refusal as data:
+
+```typescript
+const result = await client.settle(payment, requirements);
+
+if (!result.success) {
+  if (result.retryable) {
+    // Nothing was rejected. Do NOT ask for another signature.
+    // result.status            -> 503
+    // result.reason            -> 'holder_unknown' | 'forward_failed' | ...
+    // result.retryAfterSeconds -> already clamped, never an hour
+    // result.safeToReplay      -> true only if the facilitator proved nothing ran
+  } else {
+    // A real refusal. result.errorReason says why.
+  }
+}
+```
+
+The same fields appear on `verify()`, `verifyAndSettle()`, every `Erc8004Client`
+write, and the gasless escrow calls. `Erc8004LookupError` carries them as
+getters.
+
+### Why `reason` matters: the five are not interchangeable
+
+The facilitator serialises every EVM write through one process — they share a
+gas wallet whose nonce is allocated in memory. A task that does not hold that
+lease forwards the write; when it cannot, it answers `503` + `Retry-After: 5` +
+a `reason`.
+
+| `reason` | did the write run? | replay the same request? |
+|---|---|---|
+| `holder_unknown` | no | yes |
+| `forwarding_disabled` | no | yes |
+| `forwarded_but_not_writer` | no | yes |
+| `body_unreadable` | no | yes |
+| `forward_failed` | **maybe** | **no** |
+
+`forward_failed` is emitted *after* the write was handed over: the holder may
+have executed it and the response been lost coming back. It is a timeout wearing
+a status code. The SDK replays the first four automatically and never that one —
+resolve it by **reading state**, with `getIdentityByOwner` (respecting its
+404-vs-503 distinction) or `getRegisterStatus`. Re-POSTing an ambiguous mint is
+what once created five duplicate agents.
+
+Automatic replay is bounded and configurable:
+
+```typescript
+new FacilitatorClient({ retries: 0 });   // never replay; default is 2 extra attempts
+```
+
+`Retry-After` is honoured only up to `MAX_RETRY_AFTER_SECONDS` (15). A
+misconfigured facilitator answering `Retry-After: 3600` would otherwise hang the
+request for an hour.
+
+### Middleware
+
+`createPaymentMiddleware` and `createHonoMiddleware` answer **503 with a
+`Retry-After` header** — not `402`, not `500` — whenever the facilitator reached
+no verdict, and keep answering `402` for genuine rejections.
+
 ## ERC-8004 Trustless Agents
 
 Build verifiable on-chain reputation for AI agents and services. Supports **21 networks** (19 EVM + 2 Solana).
@@ -1128,6 +1200,39 @@ await client.releaseViaFacilitator(paymentInfo);
 // Gasless refund
 await client.refundViaFacilitator(paymentInfo);
 ```
+
+### Recovering an EXPIRED escrow
+
+A release attempted after `authorizationExpiry` reverts with
+`AfterAuthorizationExpiry`. It is widely believed — and this SDK's own comments
+said so until now — that the funds are then movable only by the payer's
+`reclaim()`. **That is false, and it is why stuck escrows were written off.**
+
+From `AuthCaptureEscrow.sol`:
+
+- `partialVoid` is `onlySender(paymentInfo.operator)` — the operator is the
+  **facilitator**, not the payer — it sends the tokens **to the payer**, and it
+  **never reads `authorizationExpiry`**. It works before expiry and after it.
+- `reclaim` is `onlySender(paymentInfo.payer)` and gated on expiry. It is a
+  payer's self-service escape hatch, which is why the facilitator does not
+  expose it — not the only exit.
+
+`refundViaFacilitator` sends `action: "refundInEscrow"`, which reaches
+`partialVoid`. So a stuck escrow is recoverable with no gas, no payer, and no
+regard for the expiry:
+
+```typescript
+const state = await client.queryEscrowState(paymentInfo);
+if (state.capturableAmount !== '0') {
+  const result = await client.refundViaFacilitator(paymentInfo, state.capturableAmount);
+  if (!result.success && result.retryable) {
+    // No verdict. The tokens are still in escrow — send it again.
+  }
+}
+```
+
+Widening the release window still matters: it is what pays the **worker**, and a
+refund does not.
 
 ### Direct Charge (No Escrow)
 
@@ -1443,10 +1548,49 @@ pointed at a facilitator that is not ours. `revocable: false` means the
 `retentionUntil` in the **signed** receipt cannot be honoured — on public IPFS,
 unpinning removes the facilitator's copy, not the network's.
 
+### Bringing your own storage
+
+By default the sealed envelope travels **inside** the anchor request and the
+facilitator stores it — nothing to set up, and bounded by the request limit
+below. Pass `upload` and the ciphertext goes to your own sink instead; the
+request then carries only the pointer, so that request limit no longer applies
+to your body.
+
+```ts
+await anchorEvidence(body, {
+  ...opts,
+  // called with the SEALED bytes, never the plaintext
+  upload: async (sealed) => {
+    await myBucket.put(key, sealed);
+    return `s3+https://cdn.example.com/${key}`;   // what the buyer dereferences
+  },
+});
+```
+
+`upload` is a **callable, not a precomputed pointer**, for the same reason
+`sign` is: the SDK has to seal first — the buyer must be able to decrypt — and
+only then is there anything to upload.
+
+Three things worth knowing:
+
+- **Sealing is not skipped.** You receive real ciphertext, not the body. The
+  facilitator still cannot read a `direct`-mode envelope either way; what
+  changes is who pays for durability and who can delete it.
+- **The signature covers your pointer.** The facilitator verifies against the
+  pointer in the request, so `anchorEvidence` signs the one you returned. Doing
+  this by hand with `sellerDigestFor` means passing the pointer as its fifth
+  argument — signing `''` next to a real pointer throws nothing and leaves the
+  anchor permanently *provisional*.
+- **A failed upload is a skip, never a failed sale.** If your sink throws or
+  hands back an empty pointer, the result is `skipped: 'anchor_failed'` with
+  `stage: 'upload'` and the payment is untouched.
+
 ### Limits
 
 - Inline anchors cap at **64 KiB of request** (~47 KB of plaintext); the SDK
-  returns `skipped: 'too_large'` before touching the network.
+  returns `skipped: 'too_large'` before touching the network. This bound is a
+  property of the *request*, so it does not apply when you supply your own
+  storage with `upload` — the ciphertext never travels through the anchor call.
 - Anchoring with `retention: 'permanent'` is **irrevocable**.
 - On Solana, `verified` is not reachable yet — the on-chain gate cannot read
   that payment, so `signed: true` is the honest maximum.

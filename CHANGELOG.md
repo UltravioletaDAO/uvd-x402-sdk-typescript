@@ -4,6 +4,134 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.76.0] - 2026-08-31
+
+### Fixed
+
+- **A `503` from the facilitator was reported as a rejected payment, which makes
+  the buyer pay twice.** `402` and `503` say opposite things: `402` is "the
+  payment was REFUSED, sign a new authorization", `503` is "no verdict was
+  reached, resend the SAME credential". Every facilitator edge in this SDK
+  flattened both into `success: false` plus an English sentence — so a caller
+  could not tell them apart, and the correct-looking reaction to the sentence
+  ("ask the buyer to sign again") charges them a second time for money that was
+  never refused. The first authorization stays perfectly spendable.
+
+  This is not hypothetical. Between 2026-08-29 and 2026-08-31 the facilitator's
+  `min_capacity` went 1 -> 2 and autoscaled to 3, and refusing rather than
+  forwarding turned the EVM writer lease into a permanent two-in-three failure
+  rate: **582 settle-path and 132 ERC-8004 rejections in a single six-hour
+  window**, every one of them a `503` with a valid signature behind it.
+
+  Every response type now carries `status`, `reason`, `retryable`,
+  `retryAfterSeconds` and `safeToReplay`: `VerifyResponse`, `SettleResponse`,
+  `verifyAndSettle`, `FeedbackResponse`, `RegisterAgentResponse`,
+  `AdvancedTransactionResult`. `Erc8004LookupError` exposes the same as getters
+  and its `retryable` now covers `429`/`502`/`504` alongside `503`.
+
+- **`refundViaFacilitator` had no non-2xx branch at all.** It called
+  `response.json()` straight through, so a `503` body parsed cleanly,
+  `result.success` came back `undefined`, and a refund the facilitator never
+  attempted was reported as failed — an escrow declared lost while every token
+  was still in it. It now reports the refusal and, like `releaseViaFacilitator`,
+  names the status when the body carries no reason.
+
+- **The claim that only the payer can recover an expired escrow is false, and it
+  is in this repo three times.** `AuthCaptureEscrow.partialVoid` is
+  `onlySender(paymentInfo.operator)` — the operator is the **facilitator** — it
+  sends the tokens **to the payer**, and it **never reads
+  `authorizationExpiry`**. `reclaim` is the payer-only, post-expiry path, which
+  is why the facilitator does not expose it — not the only exit. So a release
+  that reverted with `AfterAuthorizationExpiry` is recoverable through
+  `refundViaFacilitator` with no gas and no payer, and the belief that it was
+  not is why stuck escrows were written off. Corrected in `buildPaymentInfo`, in
+  `escrow-release-window.test.ts`, and documented in the README with the
+  `queryEscrowState` -> `capturableAmount` recipe.
+
+### Added
+
+- **`upload`: bring your own storage for DX402 anchors.** The facilitator has
+  accepted two anchor shapes since v0.1 — `sealed` (the ciphertext rides in the
+  request and it hosts the blob) and `pointer` (the seller stored it and sends
+  only the locator). Both SDKs implemented only the first, so an integrator
+  could not use their own storage at all and their body had to fit inside an
+  anchor request.
+
+  `upload` is a **callable, not a precomputed pointer**, for the same reason
+  `sign` is one: the SDK must seal first — the buyer has to be able to decrypt —
+  and only then is there anything to upload.
+
+  ```ts
+  await anchorEvidence(body, {
+    ...opts,
+    upload: async (sealed) => {        // the SEALED bytes, never the plaintext
+      await myBucket.put(key, sealed);
+      return `s3+https://cdn.example.com/${key}`;
+    },
+  });
+  ```
+
+  The request then carries only the pointer, so the request-size bound does not
+  apply to the body. Three properties are load-bearing:
+
+  - **Sealing still happens.** The buyer decrypts with the key they paid with.
+  - **The signature covers YOUR pointer.** The facilitator verifies against
+    `req.pointer` when present and `""` when absent, so `anchorEvidence` signs
+    the pointer it sent. Signing `""` next to a real pointer throws nothing and
+    leaves the anchor permanently *provisional* — the state anyone can supersede.
+    `sellerDigestFor` takes the pointer as an optional fifth argument.
+  - **A failed upload is a skip, never a failed sale.** A throw or an empty
+    pointer yields `skipped: 'anchor_failed'` with `stage: 'upload'`.
+
+  `backend` is inferred from the pointer scheme (`ipfs://`, `ar://`, otherwise
+  `s3`) and can be set explicitly.
+
+- **Bounded, opt-out automatic retry.** A refusal the facilitator *proved* it did
+  not execute is replayed with the identical request — no re-signing, ever.
+  `retries` (default 2 extra attempts, `0` disables) on `FacilitatorClient`,
+  `Erc8004Client`, `AdvancedEscrowClient` and both middlewares.
+
+  The five writer-lease reasons do **not** share retry semantics, which is the
+  whole point of surfacing them:
+
+  | `reason` | did the write run? | replayed? |
+  |---|---|---|
+  | `holder_unknown` | no | yes |
+  | `forwarding_disabled` | no | yes |
+  | `forwarded_but_not_writer` | no | yes |
+  | `body_unreadable` | no | yes |
+  | `forward_failed` | **maybe** | **never** |
+
+  `forward_failed` is emitted *after* the write was handed to the lease holder,
+  so it is a timeout wearing a status code. It is never replayed at any setting;
+  resolve it by reading state (`getIdentityByOwner`, honouring its 404-vs-503
+  distinction, or `getRegisterStatus`). Re-POSTing an ambiguous mint is what once
+  created five duplicate agents.
+
+- New exports: `readFacilitatorError`, `facilitatorFetch`,
+  `isReplayableLeaseReason`, `isAmbiguousLeaseReason`, `parseRetryAfterSeconds`,
+  `WRITER_LEASE_REASONS`, `REPLAYABLE_LEASE_REASONS`,
+  `AMBIGUOUS_LEASE_REASONS`, `MAX_RETRY_AFTER_SECONDS`,
+  `DEFAULT_RETRY_AFTER_SECONDS`, `DEFAULT_FACILITATOR_RETRIES`, and the types
+  `FacilitatorErrorInfo`, `FacilitatorFailureFields`, `FacilitatorFetchOptions`,
+  `WriterLeaseReason`.
+
+### Changed — behaviour, not signatures
+
+Nothing public was removed or renamed; every new field and option is optional.
+Two behaviours did move, deliberately:
+
+- **The middlewares answer `503` + `Retry-After` where they previously answered
+  `402` (verify) or `500` (settle)** — but only when the facilitator reached no
+  verdict. A genuine rejection is still `402`, and a genuine settlement failure
+  is still `500`. A client that treated the old `402` as "sign again" was being
+  told to double-charge.
+- **`verify()` and `settle()` may now make up to two extra attempts**, adding
+  latency on a facilitator that is refusing. `Retry-After` is honoured only up to
+  `MAX_RETRY_AFTER_SECONDS` (15) — a misconfigured `Retry-After: 3600` would
+  otherwise hang the caller for an hour inside a function documented as
+  returning promptly. Pass `retries: 0` for the old timing.
+
 ## [2.72.0] - 2026-08-25
 
 ### Added

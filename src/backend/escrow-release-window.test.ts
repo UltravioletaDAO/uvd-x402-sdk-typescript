@@ -8,8 +8,15 @@ import { REVIEW_WINDOW_SEC } from '../escrow-preauth';
  *
  * Production incident 2026-08-19: `micro` gives a two-hour `authorizationExpiry`.
  * A release attempted **26.2 hours** later reverted with
- * `AfterAuthorizationExpiry` — the worker went unpaid and only the payer's
- * `reclaim()` could move the funds. 8 escrows stuck on one network in 24h.
+ * `AfterAuthorizationExpiry` — the worker went unpaid. 8 escrows stuck on one
+ * network in 24h.
+ *
+ * The original of this comment said the funds could then be moved only by the
+ * payer's `reclaim()`. That is false: `partialVoid` is operator-only, ignores
+ * `authorizationExpiry`, and refunds the payer, so the facilitator can always
+ * unwind a stuck escrow (`refundViaFacilitator`). What a too-short window
+ * destroys is the WORKER'S payment, which no refund restores — which is what
+ * these tests defend.
  */
 function client(): any {
   const c = Object.create(AdvancedEscrowClient.prototype) as any;

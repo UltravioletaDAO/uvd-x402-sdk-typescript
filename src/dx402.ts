@@ -856,6 +856,41 @@ export interface AnchorOptions {
    * anchor for the same payment supersedes it.
    */
   sign?: (digest: Uint8Array) => string | Promise<string>;
+  /**
+   * `(sealedBytes) => pointer`. Bring your own storage.
+   *
+   * Without this the sealed envelope travels **inside** the anchor request and
+   * the facilitator hosts it, which is the easy path and stays the default. With
+   * it, the SDK still seals exactly as before -- the buyer has to be able to
+   * decrypt, so the sealing is not optional -- then hands you the ciphertext,
+   * you write it wherever you keep durable bytes, and you return the pointer
+   * that addresses it. The request then carries only that pointer, so the
+   * ciphertext never travels through the anchor call and
+   * {@link ANCHOR_MAX_REQUEST_BYTES} does not apply to your body.
+   *
+   * A callable rather than a precomputed pointer, for the same reason
+   * {@link AnchorOptions.sign} is one: the SDK must seal first, and only then
+   * can anything be uploaded. Handing in a pointer computed in advance would
+   * mean addressing bytes that do not exist yet.
+   *
+   * The returned pointer is what the buyer will dereference, so it must be
+   * readable by them -- see {@link dereferencePointer} for the schemes the SDK
+   * resolves out of the box. It is also bound into the seller signature.
+   *
+   * **It is never allowed to break the sale.** If it throws or returns
+   * something unusable, the anchor degrades to a skip and the payment is
+   * untouched.
+   */
+  upload?: (sealed: Uint8Array) => string | Promise<string>;
+  /**
+   * Which storage family the pointer belongs to: `s3`, `ipfs` or `arweave`.
+   *
+   * Defaults to `s3`, and in {@link AnchorOptions.upload} mode it is inferred
+   * from the pointer's scheme when you do not say. Distinct from `storage`,
+   * which names one of the FACILITATOR's own offers and is meaningless when you
+   * supply the bytes yourself.
+   */
+  backend?: 's3' | 'ipfs' | 'arweave';
   retention?: string;
   facilitator?: string;
   fetch?: typeof fetch;
@@ -867,6 +902,34 @@ export interface AnchorOptions {
  * **It never throws.** Every failure resolves to a skip notice, because evidence
  * is an addition to the payment path and must never be a gate in front of it —
  * an unreachable facilitator has to cost the receipt, never the sale.
+ *
+ * # Two ways to store the ciphertext
+ *
+ * **Hosted (default).** The sealed envelope travels inside the anchor request
+ * and the facilitator stores it and issues the pointer. Nothing to set up. The
+ * request carries the ciphertext, so it is bounded by
+ * {@link ANCHOR_MAX_REQUEST_BYTES}.
+ *
+ * **Your own storage.** Pass {@link AnchorOptions.upload}. The SDK seals
+ * identically, hands you the ciphertext, and sends the pointer you return in
+ * place of the blob — so the ciphertext never travels through the anchor call
+ * and that request bound does not apply to your body. The facilitator has
+ * accepted a caller-supplied pointer since v0.1; this is the SDK catching up.
+ *
+ * ```ts
+ * await anchorEvidence(body, {
+ *   ...common,
+ *   // called with the SEALED bytes, never the plaintext
+ *   upload: async (sealed) => {
+ *     await myBucket.put(key, sealed);
+ *     return `s3+https://cdn.example.com/${key}`;
+ *   },
+ * });
+ * ```
+ *
+ * Either way the seller keeps custody of nothing it did not already have: the
+ * facilitator cannot read a `direct`-mode envelope in the hosted case either.
+ * What changes is durability and cost, which become yours.
  */
 
 /** `0x` + 40 hex. An ed25519 payee (Solana, Stellar) never matches. */
@@ -905,14 +968,20 @@ function chainIdFor(network: string): number | undefined {
  * identical, the ed25519 form was refused (`409 dx402_already_anchored`) and the
  * EVM form superseded the provisional.
  *
- * `pointer` stays empty on both branches: this call sends `sealed`, so the
- * facilitator issues the pointer and you cannot sign what you have not seen.
+ * `pointer` defaults to the empty string, which is right when you send `sealed`:
+ * the facilitator issues the pointer and you cannot sign what you have not seen.
+ * When you supply your OWN pointer it must be passed here **verbatim** -- the
+ * facilitator verifies against `req.pointer` when one is present and against
+ * `""` when it is absent (x402-rs `dx402/service.rs`, `signed_pointer`), so
+ * signing the empty string alongside a pointer produces a signature that never
+ * verifies and an anchor that silently stays provisional.
  */
 export function sellerDigestFor(
   paymentId: string,
   contentHash: string,
   payee: string,
   network: string,
+  pointer = '',
 ): Uint8Array | undefined {
   if (isEvmAddress(payee)) {
     const chainId = chainIdFor(network);
@@ -922,9 +991,9 @@ export function sellerDigestFor(
     // with no error anywhere. Refuse instead -- unsigned is honest and
     // recoverable, signed-but-worthless only looks done.
     if (!chainId) return undefined;
-    return anchorDigest(paymentId, contentHash, '', payee, chainId);
+    return anchorDigest(paymentId, contentHash, pointer, payee, chainId);
   }
-  return anchorDigest(paymentId, contentHash, '', ZERO_ADDRESS, 0);
+  return anchorDigest(paymentId, contentHash, pointer, ZERO_ADDRESS, 0);
 }
 
 
@@ -947,6 +1016,19 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(out);
 }
 
+/**
+ * Which storage family a pointer names, for the anchor's `backend` field.
+ *
+ * The facilitator records this; it does not fetch through it. `s3` is the
+ * fallback because `s3+https://` is the SDK's own scheme for "an ordinary HTTPS
+ * URL", which is what most sellers' own sinks are.
+ */
+function backendForPointer(pointer: string): 's3' | 'ipfs' | 'arweave' {
+  if (pointer.startsWith('ipfs://')) return 'ipfs';
+  if (pointer.startsWith('ar://')) return 'arweave';
+  return 's3';
+}
+
 export async function anchorEvidence(
   body: Uint8Array,
   opts: AnchorOptions,
@@ -961,14 +1043,39 @@ export async function anchorEvidence(
     const blob = sealEvidenceTo(body, recipients, opts.paymentId);
     const hash = contentHash(body);
 
+    // Bring-your-own-storage. The sealing above is identical either way -- the
+    // buyer must be able to decrypt -- so all that changes is who holds the
+    // ciphertext and, therefore, whether it has to travel in this request.
+    //
+    // The upload is fenced off completely: a seller's bucket going down is not
+    // a reason for a paid response to fail, so anything thrown here becomes a
+    // skip, exactly like an unreachable facilitator.
+    let pointer: string | undefined;
+    if (opts.upload) {
+      try {
+        pointer = await opts.upload(blob);
+      } catch {
+        return { v: 1, skipped: 'anchor_failed', stage: 'upload' };
+      }
+      if (typeof pointer !== 'string' || pointer.trim() === '') {
+        // An empty pointer addresses nothing, and the facilitator would record
+        // an anchor that dereferences to a 404 forever. Worse than no anchor.
+        return { v: 1, skipped: 'anchor_failed', stage: 'upload' };
+      }
+      pointer = pointer.trim();
+    }
+
     const payload: Record<string, unknown> = {
       paymentId: opts.paymentId,
       network: opts.network,
       txHash: opts.txHash,
       payer: opts.payer,
       payee: opts.payee,
-      sealed: toBase64(blob),
-      backend: 's3',
+      // Exactly one of these. The facilitator dispatches on their presence:
+      // `sealed` -> it hosts and derives the pointer; `pointer` alone -> it uses
+      // yours; neither -> error (x402-rs `dx402/service.rs`).
+      ...(pointer !== undefined ? { pointer } : { sealed: toBase64(blob) }),
+      backend: opts.backend ?? (pointer !== undefined ? backendForPointer(pointer) : 's3'),
       contentHash: hash,
       keyAlg: opts.payerKey.length === 32 ? 'ECIES-X25519' : 'ECIES-secp256k1',
       mode: 'direct',
@@ -985,7 +1092,11 @@ export async function anchorEvidence(
     }
 
     if (opts.sign) {
-      const digest = sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network);
+      // The signature covers the pointer the facilitator will verify against:
+      // ours when we supply one, the empty string when the facilitator issues
+      // it. Signing the wrong one throws nothing and leaves the anchor
+      // provisional -- which is the state anyone can supersede.
+      const digest = sellerDigestFor(opts.paymentId, hash, opts.payee, opts.network, pointer ?? '');
       if (digest === undefined) {
         unsigned = 'unknown_chain_id';
       } else {
@@ -999,8 +1110,12 @@ export async function anchorEvidence(
     // facilitator then rejects, arriving as a generic failure long after the
     // sealing work was done. Measured by KarmaKadabra, 2026-08-19: 47 KB of
     // plaintext fits, 48 KB does not.
+    //
+    // In `upload` mode the ciphertext is not in the request at all, so this
+    // bound says nothing about the body and is not applied. The request is a
+    // pointer and some metadata; only a pathological pointer could approach it.
     const wire = JSON.stringify(payload);
-    if (new TextEncoder().encode(wire).length > ANCHOR_MAX_REQUEST_BYTES) {
+    if (pointer === undefined && new TextEncoder().encode(wire).length > ANCHOR_MAX_REQUEST_BYTES) {
       return { v: 1, skipped: 'too_large' };
     }
 
