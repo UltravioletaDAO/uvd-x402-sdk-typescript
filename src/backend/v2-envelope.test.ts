@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  FacilitatorClient,
   buildSettleRequestV2,
   buildVerifyRequest,
   buildVerifyRequestV2,
+  resolveEnvelopeVersion,
+  toPaymentRequirementsV2,
+  toResourceInfoV2,
   type PaymentRequirementsV2,
   type ResourceInfoV2,
 } from './index';
@@ -111,5 +115,252 @@ describe('v1 vs v2 envelopes stay distinct', () => {
     );
     expect(v1).toHaveProperty('paymentRequirements');
     expect(v1).not.toHaveProperty('accepted');
+  });
+});
+
+/**
+ * The half the SDK was missing until 2026-09-03.
+ *
+ * `buildVerifyRequestV2` above has existed since 2026-07-29 and its shape is
+ * still exactly what production accepts. What did NOT exist was any way to
+ * reach it: `FacilitatorClient.verify`/`settle` called the v1 builder
+ * unconditionally, and they are what `createPaymentMiddleware`,
+ * `createHonoMiddleware`, `verifyAndSettle` and every seller integration go
+ * through. So a seller whose 402 advertised CAIP-2 -- which
+ * `createHonoMiddleware` does on its own as soon as the accepts carry CAIP-2
+ * ids -- shipped a paywall that no buyer following that 402 could pay, and each
+ * consumer had to hand-port the v2 body. MeshRelay was porting it from its own
+ * Turnstile service when this was written.
+ *
+ * Every expectation below is pinned to a status measured against
+ * https://facilitator.ultravioletadao.xyz/verify on 2026-09-03 (facilitator
+ * 2.10.0). The envelope enum there is UNTAGGED: it matches on shape and ignores
+ * the `x402Version` marker, which is why the auto rule keys off CAIP-2 and not
+ * off the marker.
+ */
+describe('FacilitatorClient picks the envelope', () => {
+  const CAIP2_REQS = {
+    scheme: 'exact' as const,
+    network: 'eip155:8453',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  };
+  const PLAIN_REQS = { ...CAIP2_REQS, network: 'base' };
+
+  const V1_HEADER = {
+    x402Version: 1 as const,
+    scheme: 'exact' as const,
+    network: 'base',
+    payload: PAYLOAD,
+  };
+  const CAIP2_HEADER = { ...V1_HEADER, network: 'eip155:8453' };
+
+  function mockFacilitator(body: unknown = { isValid: true }) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  const sentBody = (fetchMock: ReturnType<typeof mockFacilitator>) =>
+    JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body) as Record<string, unknown>;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('sends the v2 envelope to /verify when the requirements are CAIP-2', async () => {
+    // RED before this change: the client emitted
+    // {x402Version, paymentPayload, paymentRequirements} with network
+    // "eip155:8453" inside, which production answers
+    // 400 `unknown variant \`eip155:8453\``.
+    const fetchMock = mockFacilitator();
+    await new FacilitatorClient().verify(V1_HEADER, CAIP2_REQS);
+
+    const body = sentBody(fetchMock);
+    expect(body.x402Version).toBe(2);
+    expect(body).not.toHaveProperty('paymentRequirements');
+    expect(body.accepted).toEqual(ACCEPTED);
+    expect(body.resource).toEqual(RESOURCE);
+  });
+
+  it('sends the v2 envelope to /settle on the same trigger', async () => {
+    const fetchMock = mockFacilitator({ success: true, transaction: '0xabc' });
+    await new FacilitatorClient().settle(V1_HEADER, CAIP2_REQS);
+
+    const body = sentBody(fetchMock);
+    expect(body.x402Version).toBe(2);
+    expect(body).not.toHaveProperty('paymentRequirements');
+    expect(body.accepted).toEqual(ACCEPTED);
+  });
+
+  it('upgrades on a CAIP-2 network in the PAYMENT HEADER too', async () => {
+    // Measured 400 today: CAIP-2 in the payload with plain-name requirements.
+    // The seller may have built requirements from a v1 config while the buyer
+    // echoed the CAIP-2 id from the 402.
+    const fetchMock = mockFacilitator();
+    await new FacilitatorClient().verify(CAIP2_HEADER, PLAIN_REQS);
+
+    const body = sentBody(fetchMock);
+    expect(body.x402Version).toBe(2);
+    // `base` had to become `eip155:8453`; a plain name inside a v2 body is a 400.
+    expect((body.accepted as { network: string }).network).toBe('eip155:8453');
+  });
+
+  it('leaves the v1 path byte-for-byte unchanged', async () => {
+    const fetchMock = mockFacilitator();
+    await new FacilitatorClient().verify(V1_HEADER, PLAIN_REQS);
+
+    expect(sentBody(fetchMock)).toEqual(buildVerifyRequest(V1_HEADER, PLAIN_REQS));
+  });
+
+  it('does NOT upgrade a header that only declares version 2 with plain names', async () => {
+    // The regression guard that decided the auto rule. Measured 200: the v1
+    // envelope carrying {x402Version: 2, network: "base"} is served correctly
+    // today, because the facilitator matches on shape. Upgrading it on the
+    // strength of the marker would change a call that already works.
+    const fetchMock = mockFacilitator();
+    await new FacilitatorClient().verify(
+      { x402Version: 2, scheme: 'exact', network: 'base', payload: PAYLOAD },
+      PLAIN_REQS
+    );
+
+    const body = sentBody(fetchMock);
+    expect(body).toHaveProperty('paymentRequirements');
+    expect(body).not.toHaveProperty('accepted');
+  });
+
+  it('honours an explicit pin over what the wire says', async () => {
+    const forcedV2 = mockFacilitator();
+    await new FacilitatorClient({ x402Version: 2 }).verify(V1_HEADER, PLAIN_REQS);
+    expect(sentBody(forcedV2)).toHaveProperty('accepted');
+
+    vi.unstubAllGlobals();
+
+    const forcedV1 = mockFacilitator();
+    await new FacilitatorClient({ x402Version: 1 }).verify(V1_HEADER, CAIP2_REQS);
+    expect(sentBody(forcedV1)).toHaveProperty('paymentRequirements');
+  });
+});
+
+describe('resolveEnvelopeVersion', () => {
+  const header = (network: string, x402Version: 1 | 2 = 1) =>
+    ({ x402Version, scheme: 'exact' as const, network, payload: PAYLOAD });
+  const reqs = (network: string) => ({
+    scheme: 'exact' as const,
+    network,
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  });
+
+  // One row per combination measured against production on 2026-09-03. The
+  // expected version is "which envelope does this pair have to travel in",
+  // and every pair mapped to 2 here is a hard 400 in the v1 envelope today.
+  it.each([
+    ['plain / plain -> v1 (200 today, must not move)', 'base', 'base', 1],
+    ['CAIP-2 / plain -> v2 (400 today)', 'eip155:8453', 'base', 2],
+    ['plain / CAIP-2 -> v2 (400 today)', 'base', 'eip155:8453', 2],
+    ['CAIP-2 / CAIP-2 -> v2 (400 today)', 'eip155:8453', 'eip155:8453', 2],
+  ] as const)('%s', (_label, headerNetwork, reqsNetwork, expected) => {
+    expect(resolveEnvelopeVersion(header(headerNetwork), reqs(reqsNetwork))).toBe(expected);
+  });
+
+  it('ignores the x402Version marker on the header', () => {
+    // Measured 200: a v1-shaped body whose marker says 2 is served fine.
+    expect(resolveEnvelopeVersion(header('base', 2), reqs('base'))).toBe(1);
+  });
+
+  it('keeps XRPL on v1 — its v1 network string IS its identifier', () => {
+    expect(resolveEnvelopeVersion(header('xrpl-mainnet'), reqs('xrpl-mainnet'))).toBe(1);
+  });
+
+  it('lets an explicit request win over the wire', () => {
+    expect(resolveEnvelopeVersion(header('base'), reqs('base'), 2)).toBe(2);
+    expect(resolveEnvelopeVersion(header('eip155:8453'), reqs('eip155:8453'), 1)).toBe(1);
+  });
+});
+
+describe('v1 -> v2 requirements conversion', () => {
+  const V1_REQS = {
+    scheme: 'exact' as const,
+    network: 'base',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  };
+
+  it('renames maxAmountRequired to amount', () => {
+    // The rename the facilitator does not report by name: an `accepted` still
+    // carrying `maxAmountRequired` and no `amount` is a measured 400.
+    const v2 = toPaymentRequirementsV2(V1_REQS);
+    expect(v2.amount).toBe('100000');
+    expect(v2).not.toHaveProperty('maxAmountRequired');
+  });
+
+  it('converts a plain network name to CAIP-2', () => {
+    expect(toPaymentRequirementsV2(V1_REQS).network).toBe('eip155:8453');
+  });
+
+  it('leaves an already-CAIP-2 network alone', () => {
+    expect(
+      toPaymentRequirementsV2({ ...V1_REQS, network: 'eip155:137' }).network
+    ).toBe('eip155:137');
+  });
+
+  it('carries extra through — EURC and the bridged USDCs need it', () => {
+    // extra.name/extra.version is the EIP-712 domain for tokens the facilitator
+    // does not know by address. Dropping it makes those tokens unpayable.
+    const extra = { name: 'EURC', version: '2' };
+    expect(toPaymentRequirementsV2({ ...V1_REQS, extra }).extra).toEqual(extra);
+  });
+
+  it('omits extra entirely when there is none', () => {
+    expect(toPaymentRequirementsV2(V1_REQS)).not.toHaveProperty('extra');
+  });
+
+  it('splits resource/description/mimeType into the resource object', () => {
+    expect(toResourceInfoV2(V1_REQS)).toEqual(RESOURCE);
+  });
+
+  it('fills description and mimeType rather than emitting a partial resource', () => {
+    // Measured 400: a resource object with only `url`. The types say these are
+    // required, but a JS caller can still omit them, and the facilitator answers
+    // "no variant matched" without naming the missing field.
+    const partial = { ...V1_REQS } as Record<string, unknown>;
+    delete partial.description;
+    delete partial.mimeType;
+
+    const resource = toResourceInfoV2(partial as unknown as typeof V1_REQS);
+    expect(resource.description).toBeTruthy();
+    expect(resource.mimeType).toBeTruthy();
+  });
+
+  it('fills maxTimeoutSeconds rather than omitting it', () => {
+    // Measured 400: `accepted` without maxTimeoutSeconds.
+    const partial = { ...V1_REQS } as Record<string, unknown>;
+    delete partial.maxTimeoutSeconds;
+
+    expect(
+      toPaymentRequirementsV2(partial as unknown as typeof V1_REQS).maxTimeoutSeconds
+    ).toBeGreaterThan(0);
   });
 });
