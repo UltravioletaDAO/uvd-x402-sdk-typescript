@@ -376,6 +376,13 @@ export {
   buildSettleRequest,
   buildVerifyRequestV2,
   buildSettleRequestV2,
+  // Choosing the envelope instead of assuming v1. `FacilitatorClient` now does
+  // this on its own; these are for callers that build the body themselves.
+  resolveEnvelopeVersion,
+  buildVerifyRequestForVersion,
+  buildSettleRequestForVersion,
+  toResourceInfoV2,
+  toPaymentRequirementsV2,
   getCorsHeaders,
   X402_CORS_HEADERS,
   X402_HEADER_NAMES,

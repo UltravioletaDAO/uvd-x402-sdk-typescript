@@ -294,11 +294,27 @@ describe('createHonoMiddleware', () => {
     expect(next).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
+    // This used to assert `paymentRequirements.network === 'eip155:1'`, and that
+    // body is a 400 at the facilitator -- measured 2026-09-03: `data did not
+    // match any variant of untagged enum VerifyRequestEnvelope`. The v1 envelope
+    // cannot carry a CAIP-2 id, and this middleware advertises CAIP-2 by itself
+    // as soon as there are two accepts (see the 402 asserted above). So the
+    // suite was pinning the exact body that made every conforming buyer fail;
+    // the stubbed fetch never noticed. Same request in the v2 envelope with a
+    // real mainnet token: 200.
+    //
+    // What is being checked has not changed -- the middleware still has to pick
+    // the `ethereum` accept over the `base` one. Only the envelope it travels in
+    // has, so the requirement is read from `accepted`, which is where v2 puts it.
     const verifyRequest = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
-      paymentRequirements: Record<string, unknown>;
+      accepted: Record<string, unknown>;
+      paymentRequirements?: Record<string, unknown>;
     };
-    expect(verifyRequest.paymentRequirements.network).toBe('eip155:1');
-    expect(verifyRequest.paymentRequirements.asset).toBe('0x2222222222222222222222222222222222222222');
+    expect(verifyRequest.paymentRequirements).toBeUndefined();
+    expect(verifyRequest.accepted.network).toBe('eip155:1');
+    expect(verifyRequest.accepted.asset).toBe('0x2222222222222222222222222222222222222222');
+    // v2 renames maxAmountRequired to amount; sending the v1 spelling is a 400.
+    expect(verifyRequest.accepted.amount).toBe('1000000');
     expect(stored.has('x402')).toBe(true);
   });
 

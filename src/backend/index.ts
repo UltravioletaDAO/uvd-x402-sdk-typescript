@@ -579,6 +579,167 @@ export function buildSettleRequest(
   };
 }
 
+// ----------------------------------------------------------------------------
+// CHOOSING THE ENVELOPE
+// ----------------------------------------------------------------------------
+//
+// Everything above emits ONE envelope and makes the caller pick. That is the
+// whole defect: `FacilitatorClient` picked v1 unconditionally, so a seller whose
+// 402 advertised v2 -- which `createHonoMiddleware` does on its own the moment
+// the accepts carry CAIP-2 ids -- could not call the facilitator at all, and
+// every consumer had to port the v2 body by hand. The functions below make the
+// version a decision rather than a constant.
+
+/**
+ * Networks are CAIP-2 in v2 (`eip155:8453`) and plain names in v1 (`base`).
+ *
+ * The colon is the whole test, and it is the same one `create402Response` and
+ * `normalizeRequirementForVersion` already use. Note `xrpl-mainnet` has no
+ * CAIP-2 form -- the v1 string IS its network id -- so XRPL stays on v1 here,
+ * which is correct.
+ */
+function isCaip2Network(network: string): boolean {
+  return network.includes(':');
+}
+
+/**
+ * Derive the v2 `resource` object from v1-shaped requirements.
+ *
+ * v2 moved `resource` / `description` / `mimeType` out of the requirements and
+ * into an object of their own, and the facilitator requires ALL THREE keys:
+ * measured 2026-09-03, a `resource` carrying only `url` is a 400.
+ *
+ * The `??` defaults are not decoration. `PaymentRequirements` types these as
+ * required, but a JavaScript caller can still hand over an object without them,
+ * and a missing key does not fail with "description is missing" -- it fails with
+ * `data did not match any variant of untagged enum VerifyRequestEnvelope`, which
+ * names no field. That error is what cost two teams a day.
+ */
+export function toResourceInfoV2(requirements: PaymentRequirements): ResourceInfoV2 {
+  return {
+    url: requirements.resource,
+    description: requirements.description ?? DEFAULT_PAYMENT_DESCRIPTION,
+    mimeType: requirements.mimeType ?? DEFAULT_PAYMENT_MIME_TYPE,
+  };
+}
+
+/**
+ * Derive v2 `accepted` requirements from v1-shaped requirements.
+ *
+ * Two renames do the damage, and neither is reported by name when it is wrong:
+ * - `maxAmountRequired` is spelled `amount` in v2.
+ * - `network` must be CAIP-2; a plain name inside a v2 body is a 400.
+ *
+ * `extra` is carried through when present -- it is where the EIP-712 domain
+ * `name`/`version` live for tokens the facilitator does not know by address, so
+ * dropping it breaks EURC and the bridged USDCs.
+ */
+export function toPaymentRequirementsV2(
+  requirements: PaymentRequirements
+): PaymentRequirementsV2 {
+  return {
+    scheme: requirements.scheme,
+    network: isCaip2Network(requirements.network)
+      ? requirements.network
+      : chainToCAIP2(requirements.network),
+    asset: requirements.asset,
+    amount: requirements.maxAmountRequired,
+    payTo: requirements.payTo,
+    // Required by the facilitator: omitting it is a 400, measured the same day.
+    maxTimeoutSeconds: requirements.maxTimeoutSeconds ?? DEFAULT_PAYMENT_TIMEOUT_SECONDS,
+    ...(requirements.extra !== undefined ? { extra: requirements.extra } : {}),
+  };
+}
+
+/**
+ * Decide which envelope this (payment, requirements) pair has to travel in.
+ *
+ * `requested` wins when it names a version; `'auto'` (the default) reads the
+ * wire.
+ *
+ * **Auto keys off CAIP-2, NOT off `paymentHeader.x402Version`,** and that is a
+ * measured decision rather than a stylistic one. The facilitator's envelope enum
+ * is untagged: it matches on SHAPE and ignores the version marker. Measured
+ * against production on 2026-09-03:
+ *
+ * | payload network | requirements network | v1 envelope today |
+ * |-----------------|----------------------|-------------------|
+ * | `base`          | `base`               | **200**           |
+ * | `base` (header says `x402Version: 2`) | `base` | **200**  |
+ * | `eip155:8453`   | `base`               | 400               |
+ * | `base`          | `eip155:8453`        | 400               |
+ * | `eip155:8453`   | `eip155:8453`        | 400 (`unknown variant \`eip155:8453\``) |
+ *
+ * So a header that merely *declares* version 2 while carrying plain names is
+ * being served correctly today. Upgrading it on the strength of the marker would
+ * change a call that works -- the one thing this must not do. Every CAIP-2
+ * combination, by contrast, is already a hard 400, so switching those to v2
+ * cannot regress anyone: it can only turn a failure into a payment.
+ */
+export function resolveEnvelopeVersion(
+  paymentHeader: X402Header,
+  requirements: PaymentRequirements,
+  requested: X402Version | 'auto' = 'auto'
+): X402Version {
+  if (requested !== 'auto') {
+    return requested;
+  }
+
+  return isCaip2Network(paymentHeader.network) || isCaip2Network(requirements.network)
+    ? 2
+    : 1;
+}
+
+/**
+ * Build a `/verify` body in whichever envelope `version` names.
+ *
+ * The v1 return is byte-for-byte what {@link buildVerifyRequest} produces, so
+ * pinning `1` is exactly today's behaviour.
+ *
+ * @example
+ * ```ts
+ * const version = resolveEnvelopeVersion(payment, requirements);
+ * const body = buildVerifyRequestForVersion(payment, requirements, version);
+ * ```
+ */
+export function buildVerifyRequestForVersion(
+  paymentHeader: X402Header,
+  requirements: PaymentRequirements,
+  version: X402Version
+): VerifyRequest | VerifyRequestV2 {
+  if (version === 2) {
+    return buildVerifyRequestV2(
+      paymentHeader.payload,
+      toResourceInfoV2(requirements),
+      toPaymentRequirementsV2(requirements)
+    );
+  }
+
+  return buildVerifyRequest(paymentHeader, requirements);
+}
+
+/**
+ * Build a `/settle` body in whichever envelope `version` names.
+ *
+ * See {@link buildVerifyRequestForVersion} -- `/settle` takes the same body as
+ * `/verify` in both versions.
+ */
+export function buildSettleRequestForVersion(
+  paymentHeader: X402Header,
+  requirements: PaymentRequirements,
+  version: X402Version
+): SettleRequest | SettleRequestV2 {
+  if (version === 2) {
+    return buildSettleRequestV2(
+      paymentHeader.payload,
+      toResourceInfoV2(requirements),
+      toPaymentRequirementsV2(requirements)
+    );
+  }
+
+  return buildSettleRequest(paymentHeader, requirements);
+}
+
 // ============================================================================
 // CORS CONFIGURATION
 // ============================================================================
@@ -661,6 +822,16 @@ export interface FacilitatorClientOptions {
    * -- is never replayed here, at any setting.
    */
   retries?: number;
+  /**
+   * Which envelope to send to `/verify` and `/settle`. Default `'auto'`.
+   *
+   * `'auto'` reads the wire: CAIP-2 networks get the v2 envelope, plain names
+   * get v1. See {@link resolveEnvelopeVersion} for the measurements behind that
+   * rule. Pin `1` or `2` to take the decision yourself -- a pin is honoured
+   * even when it contradicts the wire, because choosing the version is the
+   * point of the option.
+   */
+  x402Version?: X402Version | 'auto';
 }
 
 /**
@@ -688,12 +859,14 @@ export class FacilitatorClient {
   private readonly timeout: number;
   private readonly explicitTimeout: boolean;
   private readonly retries: number | undefined;
+  private readonly x402Version: X402Version | 'auto';
 
   constructor(options: FacilitatorClientOptions = {}) {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
     this.explicitTimeout = options.timeout !== undefined;
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
+    this.x402Version = options.x402Version ?? 'auto';
   }
 
   /**
@@ -726,7 +899,15 @@ export class FacilitatorClient {
     paymentHeader: X402Header,
     requirements: PaymentRequirements
   ): Promise<VerifyResponse> {
-    const body = buildVerifyRequest(paymentHeader, requirements);
+    // Not `buildVerifyRequest` any more. That one only speaks v1, so a seller
+    // advertising CAIP-2 -- which this SDK's own Hono middleware does by itself
+    // -- could not reach the facilitator at all: the body came back 400 with
+    // `unknown variant \`eip155:8453\``, and the buyer saw a broken checkout.
+    const body = buildVerifyRequestForVersion(
+      paymentHeader,
+      requirements,
+      resolveEnvelopeVersion(paymentHeader, requirements, this.x402Version)
+    );
 
     try {
       const { response, error } = await facilitatorFetch(
@@ -780,7 +961,11 @@ export class FacilitatorClient {
     paymentHeader: X402Header,
     requirements: PaymentRequirements
   ): Promise<SettleResponse> {
-    const body = buildSettleRequest(paymentHeader, requirements);
+    const body = buildSettleRequestForVersion(
+      paymentHeader,
+      requirements,
+      resolveEnvelopeVersion(paymentHeader, requirements, this.x402Version)
+    );
     const settleTimeout = this.getTimeout(requirements.network);
 
     try {

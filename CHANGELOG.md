@@ -4,6 +4,86 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.78.0] - 2026-09-03
+
+### Added
+
+- **`FacilitatorClient` picks the payment envelope instead of always sending
+  v1.** The v2 builders have been in this file since v2.44.0
+  (`buildVerifyRequestV2` / `buildSettleRequestV2`, shape verified against
+  production on 2026-07-29 and re-verified on 2026-09-03 — still exactly what it
+  accepts). Nothing could reach them: `verify()` and `settle()`
+  called the v1 builder unconditionally, and those two methods are what
+  `createPaymentMiddleware`, `createHonoMiddleware`, `verifyAndSettle` and every
+  seller integration go through. So the SDK could *describe* v2 and could not
+  *speak* it, and each consumer had to hand-port the v2 body. MeshRelay was
+  copying it out of its own Turnstile service when this was written; that is the
+  signal the defect was ours, not theirs.
+
+  This is not a corner case, because **this SDK advertises v2 on its own**:
+  `createHonoMiddleware` calls `resolveAdvertisedVersion`, which returns 2 as
+  soon as there are two accepts or any accept carries a CAIP-2 id, and the 402
+  then goes out saying `x402Version: 2` with `network: eip155:8453`. A buyer who
+  did exactly what that 402 said got a `400` back. The seller's own paywall was
+  unpayable and neither side could see why: the facilitator's envelope enum is
+  untagged, so the refusal is `data did not match any variant of untagged enum
+  VerifyRequestEnvelope`, which names no field.
+
+  The SDK's own suite had this pinned as correct —
+  `src/backend/index.test.ts` asserted the verify body carried
+  `paymentRequirements.network === 'eip155:1'`. Measured against production on
+  2026-09-03, that exact body is a `400`. A stubbed `fetch` never noticed.
+
+- **`resolveEnvelopeVersion`, `buildVerifyRequestForVersion`,
+  `buildSettleRequestForVersion`, `toResourceInfoV2`, `toPaymentRequirementsV2`.**
+  The conversion from the v1-shaped `PaymentRequirements` every part of this SDK
+  already builds into v2's `{resource, accepted}` pair. This is what "the
+  consumer writes no code" means in practice: they keep passing the
+  `PaymentRequirements` they have.
+
+  Three renames do the damage, and the facilitator reports none of them by name:
+  `maxAmountRequired` becomes `amount`; `network` must be CAIP-2; and
+  `resource`/`description`/`mimeType` move out into a `resource` OBJECT — all
+  three keys required, a bare URL string is a `400`. `extra` is carried through,
+  because that is where the EIP-712 domain lives for tokens the facilitator does
+  not know by address (EURC, the bridged USDCs); dropping it makes them
+  unpayable.
+
+### Changed
+
+- **`FacilitatorClientOptions.x402Version`** — `1`, `2` or `'auto'`
+  (default). The version is chosen, never imposed: a pin is honoured even when
+  it contradicts the wire.
+
+  **`'auto'` keys off CAIP-2, NOT off `paymentHeader.x402Version`**, and that is
+  a measured decision, not a stylistic one. The facilitator matches on SHAPE and
+  ignores the version marker. Measured against
+  `https://facilitator.ultravioletadao.xyz/verify` on 2026-09-03
+  (facilitator 2.10.0), v1 envelope:
+
+  | payload network | requirements network | today |
+  |---|---|---|
+  | `base` | `base` | **200** |
+  | `base`, header marker says `x402Version: 2` | `base` | **200** |
+  | `eip155:8453` | `base` | 400 |
+  | `base` | `eip155:8453` | 400 |
+  | `eip155:8453` | `eip155:8453` | 400 (`unknown variant \`eip155:8453\``) |
+
+  A header that merely *declares* version 2 while carrying plain names is being
+  served correctly today, so upgrading it on the strength of the marker would
+  change a call that works. Every CAIP-2 combination is already a hard `400`, so
+  switching those to v2 cannot regress anyone — it can only turn a failure into
+  a payment. That is the whole safety argument for making this a minor rather
+  than a major: **no request that succeeds today changes shape.**
+
+  XRPL stays on v1 by the same rule and correctly so — `xrpl-mainnet` has no
+  CAIP-2 form, its v1 string is its network id.
+
+- `buildVerifyRequest` / `buildSettleRequest` are untouched and still emit v1
+  with their exact existing return types. Widening them to a union would have
+  broken every TypeScript consumer for no gain; the version-aware builders are
+  additive instead.
+
 ## [2.76.0] - 2026-08-31
 
 ### Fixed
