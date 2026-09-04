@@ -10,7 +10,7 @@
  * strings — every signature in phase 3 and 4 is produced live, in one process,
  * and consumed live, in the other.
  *
- * Five phases, in dependency order:
+ * Six phases, in dependency order:
  *   1. ARTEFACT      both runtimes hash the vector document they ship; the two
  *                    hashes and the two CONFORMANCE_SHA256 maps must be equal,
  *                    key for key. (This is the check the spec asked for and
@@ -27,6 +27,15 @@
  *   5. MATRIX        the shipped `verify_cases` matrix, run through BOTH
  *                    verifiers: same verdict, same error code, same observed
  *                    profile, or the run fails.
+ *   6. ENVELOPE      the x402 request envelope. Both SDKs choose between the v1
+ *                    and v2 shapes off the same wire and build the /verify and
+ *                    /settle bodies; the version AND both bodies are compared
+ *                    key for key. Phases 1-5 are all ERC-8128 -- signatures,
+ *                    presets, verification -- and the envelope is where the two
+ *                    implementations ACTUALLY diverged (September 2026), with
+ *                    266 checks green the whole time. A conformance run that
+ *                    cannot see the divergence that happened is the failure
+ *                    mode this file was written to remove, so it now covers it.
  *
  * NO SKIPS. If the other runtime is missing, unbuilt or uninstallable, this
  * exits 1 with the fix printed. A "cross-language check" that quietly passes
@@ -534,6 +543,194 @@ if (seenUnpinned.size) {
   );
 }
 
+// ── phase 6 · the request envelope ─────────────────────────────────────────
+//
+// Phases 1-5 are ERC-8128 end to end. The envelope is the other wire contract
+// the two SDKs share, and it is the one they actually drifted on: TypeScript
+// 2.78.0 and Python 0.74.0 both taught their client to CHOOSE between the v1
+// and v2 shapes, independently, days apart -- and the only way anyone noticed
+// they had ended up with different bodies was a comparison run by hand while
+// writing the Python handoff. This run had 266 green checks and said nothing,
+// because it never looked at an envelope.
+//
+// Everything each agent needs is supplied HERE. If the driver let the agents
+// fill in their own payload or requirements, the two SDKs' defaults would be
+// what got compared, and a real divergence could hide behind a matching default.
+console.log('\nphase 6 · the request envelope, chosen and built by both SDKs');
+
+/** A signature that never existed, over an authorization that was never made.
+ *  The envelope is what is under test; nothing here is signed or sent. */
+const ENVELOPE_PAYLOAD = {
+  signature: '0xdeadbeef',
+  authorization: {
+    from: '0x7052cA449702e5ffafbE3dc63b74C7b7d8aF402B',
+    to: '0xe4dc963c56979E0260fc146b87eE24F18220e545',
+    value: '100000',
+    validAfter: '1761329327',
+    validBefore: '1961829987',
+    nonce: '0xa0c6b1edb9fed5b5cd99626dadf0e60b56013f94839d4fdcfa0117cce1f74485',
+  },
+};
+
+/** Every field except `network`, which each case sets. Both SDKs type these as
+ *  required, but both also fill in defaults when a caller omits them -- and two
+ *  different defaults would be invisible if the driver omitted them too. */
+const ENVELOPE_REQUIREMENTS = {
+  scheme: 'exact',
+  maxAmountRequired: '100000',
+  resource: 'https://irc.meshrelay.xyz/channel/alpha-test',
+  description: 'Alpha test channel',
+  mimeType: 'application/json',
+  payTo: '0xe4dc963c56979E0260fc146b87eE24F18220e545',
+  maxTimeoutSeconds: 300,
+  asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+};
+
+/**
+ * The wires. `marker` is what the PAYER declared, which is not the same thing as
+ * which envelope the body has to travel in -- mistaking one for the other is the
+ * defect this phase pins on both sides.
+ */
+const ENVELOPE_CASES = [
+  // The v1 path. Plain names on both sides: a measured 200 that must not move.
+  { id: 'plain/plain', payloadNetwork: 'base', requirementsNetwork: 'base' },
+  // The ChatGPT wire: the buyer echoes the CAIP-2 id our own 402 advertised.
+  { id: 'caip2/caip2', payloadNetwork: 'eip155:8453', requirementsNetwork: 'eip155:8453' },
+  // CAIP-2 on one side only. A seller can build requirements from a v1 config
+  // while the buyer answers with the CAIP-2 id, and the other way round.
+  { id: 'caip2/plain', payloadNetwork: 'eip155:8453', requirementsNetwork: 'base' },
+  { id: 'plain/caip2', payloadNetwork: 'base', requirementsNetwork: 'eip155:8453' },
+  // Another EVM chain, so the answer is not a `base` special case.
+  { id: 'caip2-avalanche', payloadNetwork: 'eip155:43114', requirementsNetwork: 'eip155:43114' },
+  // THE MARKER. A payer that declares 2 over plain names stays on v1 (v2 cannot
+  // carry a plain name), and the envelope's own marker must then read 1 in both
+  // SDKs. This is the case that diverged.
+  { id: 'marker-2/plain', payloadNetwork: 'base', requirementsNetwork: 'base', marker: 2 },
+  {
+    id: 'marker-2/caip2',
+    payloadNetwork: 'eip155:8453',
+    requirementsNetwork: 'eip155:8453',
+    marker: 2,
+  },
+  // The pins. Choosing the version is the point of the option, so a pin has to
+  // win over the wire in both SDKs -- including when it contradicts it.
+  {
+    id: 'pin-1-over-caip2',
+    payloadNetwork: 'eip155:8453',
+    requirementsNetwork: 'eip155:8453',
+    pin: 1,
+  },
+  { id: 'pin-2-over-plain', payloadNetwork: 'base', requirementsNetwork: 'base', pin: 2 },
+  // `extra` carries the EIP-712 domain for tokens the facilitator does not know
+  // by address. An SDK that drops it in the conversion makes EURC unpayable.
+  {
+    id: 'eurc-extra',
+    payloadNetwork: 'eip155:8453',
+    requirementsNetwork: 'eip155:8453',
+    extra: { name: 'EURC', version: '2' },
+  },
+  // XRPL has no CAIP-2 form -- its v1 string IS its network id. Auto must leave
+  // it on v1 in both SDKs.
+  { id: 'xrpl-auto', payloadNetwork: 'xrpl-mainnet', requirementsNetwork: 'xrpl-mainnet' },
+  // ...and pinning 2 there asks for a body that cannot be built. Whatever the
+  // two SDKs do about that, they have to do the same thing.
+  {
+    id: 'xrpl-pin-2',
+    payloadNetwork: 'xrpl-mainnet',
+    requirementsNetwork: 'xrpl-mainnet',
+    pin: 2,
+  },
+].map((c) => ({
+  scheme: 'exact',
+  marker: 1,
+  pin: 'auto',
+  payload: ENVELOPE_PAYLOAD,
+  ...c,
+  requirements: { ...ENVELOPE_REQUIREMENTS, ...(c.extra ? { extra: c.extra } : {}) },
+}));
+
+const tsEnvelopes = await ask(NODE, { op: 'build_envelope', cases: ENVELOPE_CASES });
+const pyEnvelopes = await ask(PY, { op: 'build_envelope', cases: ENVELOPE_CASES });
+
+/**
+ * The referee's own rule, deliberately NOT imported from either SDK: the
+ * top-level `x402Version` names the ENVELOPE, so it must equal the version that
+ * was chosen, and the body must carry that version's keys and not the other's.
+ *
+ * A body marked 2 around a `paymentRequirements` is what TypeScript emitted
+ * until 2.79.0. It was served correctly -- the facilitator's envelope enum is
+ * untagged and matches on shape -- but the facilitator ALREADY picks the hint in
+ * its 400 off that marker, so such a body, the day it fails for any other
+ * reason, sends the integrator to fix the wrong shape.
+ */
+function envelopeShapeProblem(body, version) {
+  if (body === undefined || body === null) return 'no body';
+  if (body.x402Version !== version)
+    return `marker ${JSON.stringify(body.x402Version)} on a v${version} envelope`;
+  const hasV1 = Object.prototype.hasOwnProperty.call(body, 'paymentRequirements');
+  const hasV2 =
+    Object.prototype.hasOwnProperty.call(body, 'accepted') &&
+    Object.prototype.hasOwnProperty.call(body, 'resource');
+  if (version === 1 && !(hasV1 && !hasV2)) return 'v1 marker without the v1 shape';
+  if (version === 2 && !(hasV2 && !hasV1)) return 'v2 marker without the v2 shape';
+  return null;
+}
+
+const tsById = Object.fromEntries(tsEnvelopes.results.map((r) => [r.id, r]));
+const pyById = Object.fromEntries(pyEnvelopes.results.map((r) => [r.id, r]));
+
+for (const c of ENVELOPE_CASES) {
+  const a = tsById[c.id];
+  const b = pyById[c.id];
+  const wire = `${c.payloadNetwork} / ${c.requirementsNetwork} marker=${c.marker} pin=${c.pin}`;
+  const label = `${c.id} (${wire})`;
+
+  if (!a || !b) {
+    check(false, `both SDKs answered for ${label}`, `ts=${!!a} py=${!!b}`);
+    continue;
+  }
+
+  // A refusal is a result. Both SDKs must refuse the same wires: one of them
+  // quietly building a body the other calls impossible is a divergence, and the
+  // quiet one is the dangerous half -- it ships that body to the facilitator.
+  check(
+    (a.error === undefined) === (b.error === undefined),
+    `both SDKs either build or refuse ${label}`,
+    `ts=${a.error ? `refused: ${a.error}` : 'built'} py=${b.error ? `refused: ${b.error}` : 'built'}`
+  );
+  if (a.error || b.error) continue;
+
+  check(
+    a.version === b.version,
+    `both chose the same envelope version for ${label}`,
+    `ts=v${a.version} py=v${b.version}`
+  );
+  if (a.version !== b.version) continue;
+
+  check(
+    eq(a.verify, b.verify),
+    `identical /verify body for ${label}`,
+    `ts=${JSON.stringify(a.verify)} py=${JSON.stringify(b.verify)}`
+  );
+  check(
+    eq(a.settle, b.settle),
+    `identical /settle body for ${label}`,
+    `ts=${JSON.stringify(a.settle)} py=${JSON.stringify(b.settle)}`
+  );
+
+  // Byte-identical is not the same as right: both SDKs could agree on a body
+  // that contradicts itself. The referee checks the shape rule separately.
+  for (const [name, result] of [
+    ['typescript', a],
+    ['python', b],
+  ]) {
+    const problem =
+      envelopeShapeProblem(result.verify, result.version) ??
+      envelopeShapeProblem(result.settle, result.version);
+    check(problem === null, `${name}'s body for ${label} says what it is`, problem ?? undefined);
+  }
+}
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('\n────────────────────────────────────────────────────────────');
 if (failures.length) {
@@ -542,9 +739,10 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 5 phases.\n` +
+  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 6 phases.\n` +
     `  ${SIGN_CASES.length} signatures produced live by TypeScript and verified live by Python,\n` +
     `  ${SIGN_CASES.length} produced live by Python and verified live by TypeScript,\n` +
-    `  ${f3_3.verify_cases.length} matrix verdicts compared verifier to verifier.\n` +
+    `  ${f3_3.verify_cases.length} matrix verdicts compared verifier to verifier,\n` +
+    `  ${ENVELOPE_CASES.length} wires whose envelope both SDKs chose and built, compared body to body.\n` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );
