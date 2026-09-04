@@ -21,7 +21,8 @@
  *           {"op":"sign","cases":[{id,method,url,body,nonce,chainId,profile,now}]}
  *           {"op":"verify","cases":[{id,method,url,body,headers,policy,authority,now}]}
  *           {"op":"build_envelope","cases":[{id,marker,scheme,payloadNetwork,
- *                                            requirementsNetwork,pin,payload,requirements}]}
+ *                                            requirementsNetwork,pin,payload,requirements,
+ *                                            payloadV2?}]}
  *   stdout  {"runtime":"typescript", ...}   exit 0
  *           {"error":"…"}                   exit 1
  */
@@ -200,11 +201,17 @@ async function verify(cases) {
  * A throw is a RESULT, not a crash: `pin: 2` on a network with no CAIP-2 form
  * has to fail, and whether the two SDKs fail on the same wires is exactly the
  * kind of divergence this phase exists to catch.
+ *
+ * `payloadV2` is passed through UNTOUCHED when the driver sends one. That shape
+ * -- `{x402Version, resource, accepted, payload}`, with no top-level `network`
+ * at all -- is what a buyer following a v2 402 actually produces, and building
+ * it here out of the flat fields would be this agent inventing the very thing
+ * under test.
  */
 async function buildEnvelope(cases) {
   const results = [];
   for (const c of cases) {
-    const paymentHeader = {
+    const paymentHeader = c.payloadV2 ?? {
       x402Version: c.marker,
       scheme: c.scheme,
       network: c.payloadNetwork,
