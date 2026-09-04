@@ -32,6 +32,23 @@ version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
   Found by the Python SDK's cross-SDK comparison (0.74.0): it was the **only**
   body difference left between the two SDKs on the same wire.
 
+- **`'auto'` no longer throws on a v2 payload — the very shape it exists to
+  route.** `resolveEnvelopeVersion` read only `paymentHeader.network`. A v1
+  header carries one at the top level; a **v2 payload carries none at all**
+  (`PaymentPayloadV2` has no top-level network — v2 moved the chain id into
+  `accepted`). So on a real v2 payload the default threw
+
+      TypeError: Cannot read properties of undefined (reading 'includes')
+
+  before deciding anything. It now reads the network wherever the payload keeps
+  it — top level, else `accepted.network` — and treats a missing one as "no
+  CAIP-2 evidence" rather than as a crash. The parameter widens to
+  `X402Header | PaymentPayloadV2`, which is what it actually receives.
+
+  Measured in runtime against 2.78.0 by MeshRelay, whose turnstile and multibrain
+  pin `x402Version` explicitly to work around it: our own default was the one
+  option nobody could use.
+
 - **A network with no CAIP-2 form now refuses the v2 envelope instead of
   emitting a body the facilitator rejects.** `toPaymentRequirementsV2` returned
   `network: 'xrpl-mainnet'` inside a v2 body: `chainToCAIP2` answers with the
@@ -46,6 +63,19 @@ version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
   run, below.
 
 ### Changed
+
+- **`resolveEnvelopeVersion`'s measured table was out of date and is corrected.**
+  It published three rows as a hard `400` (`unknown variant \`eip155:8453\``),
+  measured 2026-09-03, and built the rule's justification on them: "every CAIP-2
+  combination is already a 400, so upgrading them cannot regress anyone". The
+  facilitator has since taught the v1 envelope to read CAIP-2. Re-measured
+  2026-09-04 against production: all five rows are understood.
+
+  The rule is unchanged — still CAIP-2, still ignoring the marker — but the
+  comment now carries the three reasons that actually hold it up, and the note
+  that with a fabricated signature the HTTP status discriminates nothing
+  (`invalid_request_body` vs `contract_call_failed` is what does). No behaviour
+  change.
 
 - **`VerifyRequest.x402Version` and `SettleRequest.x402Version` are typed `1`,
   not `X402Version`.** These interfaces *are* the v1 envelope
