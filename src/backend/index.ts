@@ -628,8 +628,33 @@ export function buildSettleRequest(
  * CAIP-2 form -- the v1 string IS its network id -- so XRPL stays on v1 here,
  * which is correct.
  */
-function isCaip2Network(network: string): boolean {
-  return network.includes(':');
+function isCaip2Network(network: string | undefined): boolean {
+  return typeof network === 'string' && network.includes(':');
+}
+
+/**
+ * The network a payment payload is speaking, wherever that payload keeps it.
+ *
+ * A **v1** header carries `network` at the top level. A **v2** payload does not
+ * carry one AT ALL -- look at {@link PaymentPayloadV2}: there is no top-level
+ * `network`, because v2 moved the chain id into `accepted`. So reading only
+ * `payload.network` threw
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'includes')
+ *
+ * on exactly the shape {@link resolveEnvelopeVersion} exists to route -- the
+ * default `'auto'` was unusable for any caller holding a real v2 payload.
+ * Measured in runtime against 2.78.0, and it is why MeshRelay's turnstile and
+ * multibrain pin `x402Version` to 1 or 2 rather than use our default.
+ *
+ * Undefined is a legitimate answer (a JS caller can hand over anything), and it
+ * simply means "this payload contributes no CAIP-2 evidence".
+ */
+function networkOfPayload(payload: X402Header | PaymentPayloadV2): string | undefined {
+  const top = (payload as { network?: unknown }).network;
+  if (typeof top === 'string') return top;
+  const accepted = (payload as { accepted?: { network?: unknown } }).accepted;
+  return typeof accepted?.network === 'string' ? accepted.network : undefined;
 }
 
 /**
@@ -723,7 +748,7 @@ export function toPaymentRequirementsV2(
  * cannot regress anyone: it can only turn a failure into a payment.
  */
 export function resolveEnvelopeVersion(
-  paymentHeader: X402Header,
+  paymentHeader: X402Header | PaymentPayloadV2,
   requirements: PaymentRequirements,
   requested: X402Version | 'auto' = 'auto'
 ): X402Version {
@@ -731,7 +756,8 @@ export function resolveEnvelopeVersion(
     return requested;
   }
 
-  return isCaip2Network(paymentHeader.network) || isCaip2Network(requirements.network)
+  return isCaip2Network(networkOfPayload(paymentHeader)) ||
+    isCaip2Network(requirements.network)
     ? 2
     : 1;
 }

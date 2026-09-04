@@ -1367,6 +1367,13 @@ body.x402Version;                 // 1  — the envelope is v1
 body.paymentPayload.x402Version;  // 2  — the payer's marker, untouched
 ```
 
+`resolveEnvelopeVersion` (and therefore the `'auto'` default) accepts a **v2
+payload** as well as a v1 header. A v2 payload has no top-level `network` at all
+— v2 moved the chain id into `accepted` — so `auto` reads it from there. Before
+**2.79.0** it read only the top level and threw
+`Cannot read properties of undefined` on exactly that shape, which is why
+integrators were pinning `x402Version` instead of using the default.
+
 A network with **no CAIP-2 form** cannot travel in a v2 body at all, so pinning
 version 2 on one throws instead of building it — `xrpl-mainnet` is the case: its
 v1 string *is* its network id. `auto` leaves those on v1, where they work, so

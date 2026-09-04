@@ -568,3 +568,111 @@ describe('a network with no CAIP-2 form refuses v2 rather than emitting a 400', 
     }
   });
 });
+
+/**
+ * `auto` has to survive a v2 payload — the very shape it exists to route.
+ *
+ * A v1 header carries `network` at the top level. A **v2 payload does not carry
+ * one at all**: look at `PaymentPayloadV2` — v2 moved the chain id into
+ * `accepted`. `resolveEnvelopeVersion` read only `paymentHeader.network`, so on
+ * a real v2 payload the default threw
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'includes')
+ *
+ * before it could decide anything. The function that exists to choose between
+ * v1 and v2 crashed on v2.
+ *
+ * Measured in runtime against 2.78.0 by MeshRelay, and the consequence is
+ * already in production: their turnstile and multibrain pin `x402Version` to 1
+ * or 2 explicitly rather than use our default. Our own default was the one
+ * option nobody could use.
+ */
+describe('auto survives a v2 payload, which has no top-level network', () => {
+  const CAIP2_REQS = {
+    scheme: 'exact' as const,
+    network: 'eip155:8453',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  };
+  const PLAIN_REQS = { ...CAIP2_REQS, network: 'base' };
+
+  /** A genuine v2 payload: `{x402Version, resource, accepted, payload}` and NO
+   *  top-level network. This is what a buyer following a v2 402 produces. */
+  const V2_PAYLOAD = {
+    x402Version: 2 as const,
+    resource: RESOURCE,
+    accepted: ACCEPTED,
+    payload: PAYLOAD,
+  };
+
+  it('resolves instead of throwing', () => {
+    // RED before the fix: TypeError: Cannot read properties of undefined.
+    expect(() => resolveEnvelopeVersion(V2_PAYLOAD, CAIP2_REQS)).not.toThrow();
+    expect(resolveEnvelopeVersion(V2_PAYLOAD, CAIP2_REQS)).toBe(2);
+  });
+
+  it('reads the chain id out of `accepted`, where v2 keeps it', () => {
+    // The requirements say `base` here, so a 2 can only have come from
+    // accepted.network — this is the check that the fix reads the right place
+    // rather than just swallowing the undefined.
+    expect(resolveEnvelopeVersion(V2_PAYLOAD, PLAIN_REQS)).toBe(2);
+  });
+
+  it('still refuses to upgrade on the marker alone', () => {
+    // A v2-shaped payload whose accepted carries a PLAIN name: the marker says
+    // 2, but v2 cannot carry a plain name, so this stays on v1 — the measured
+    // rule, which the fix must not quietly relax.
+    const plainAccepted = { ...V2_PAYLOAD, accepted: { ...ACCEPTED, network: 'base' } };
+    expect(resolveEnvelopeVersion(plainAccepted, PLAIN_REQS)).toBe(1);
+  });
+
+  it('does not throw when the requirements have no network either', () => {
+    // Both sides missing. The types say `network` is required on both, but a JS
+    // caller can hand over anything, and a crash inside version selection is a
+    // worse answer than "no CAIP-2 evidence, stay on v1".
+    const noNetwork = { ...PLAIN_REQS } as Record<string, unknown>;
+    delete noNetwork.network;
+    const bare = { x402Version: 2 as const, payload: PAYLOAD };
+
+    expect(() =>
+      resolveEnvelopeVersion(bare as never, noNetwork as unknown as typeof PLAIN_REQS)
+    ).not.toThrow();
+    expect(resolveEnvelopeVersion(bare as never, noNetwork as unknown as typeof PLAIN_REQS)).toBe(1);
+  });
+
+  it('builds the v2 body end-to-end through the client', async () => {
+    // The whole point: a v2 payload goes in on the default and a v2 body comes
+    // out, with no pin. This is the call MeshRelay had to work around.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ isValid: true }),
+      text: async () => '{"isValid":true}',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new FacilitatorClient().verify(V2_PAYLOAD as never, CAIP2_REQS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.x402Version).toBe(2);
+    expect(body).toHaveProperty('accepted');
+    expect(body).not.toHaveProperty('paymentRequirements');
+    // The signed material must survive the trip unreshaped.
+    expect(body.paymentPayload.payload).toEqual(PAYLOAD);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('leaves a v1 header reading its own top-level network', () => {
+    // The no-regression guard: green in BOTH states. The fix must not have
+    // started preferring `accepted` over a top-level network that IS there.
+    const v1 = { x402Version: 1 as const, scheme: 'exact' as const, network: 'base', payload: PAYLOAD };
+    expect(resolveEnvelopeVersion(v1, PLAIN_REQS)).toBe(1);
+    expect(resolveEnvelopeVersion({ ...v1, network: 'eip155:8453' }, PLAIN_REQS)).toBe(2);
+  });
+});
