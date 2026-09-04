@@ -4,6 +4,72 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.80.0] - 2026-09-04
+
+### Fixed
+
+- **A `502 settlement_unconfirmed` is no longer retried — retrying it charged
+  the buyer twice.** The facilitator now answers, when a settle is broadcast and
+  no receipt ever arrives:
+
+      502 {"error":"settlement_unconfirmed","transaction":"0x...",
+           "paymentId":"0x...","retryable":false}
+
+  The transaction MAY BE MINED. Retrying signs a **new** authorization with a
+  **fresh nonce**, which the chain accepts as a second, perfectly valid payment
+  for the same purchase — EIP-3009's `authorizationState` does not stop it,
+  because the second authorization is genuinely new.
+
+  The SDK was being reasonable: until now the only `502` on `/settle` was
+  `upstream_rpc_unavailable`, which carries `Retry-After: 30` and where nothing
+  was ever broadcast. Both are `502`. **The status cannot tell them apart, so
+  this SDK now branches on the body.**
+
+  Two places decided retries by status, and both are fixed:
+
+  - `readFacilitatorError` — the source of the `retryable` flag that
+    `failureFields` copies onto every response. From there it reached the
+    Express and Hono middleware, which answered **503 + `Retry-After`**: a
+    literal instruction to the buyer to send the payment again.
+  - `Erc8004LookupError.retryable` — `POST /register` goes through the same EVM
+    `send_transaction_from` as a settle, so a mint can come back unconfirmed
+    too, and re-POSTing one that may already have landed is the sequence that
+    minted five duplicate agents.
+
+  An explicit `retryable: false` in a facilitator body now wins over the status.
+  It only ever **downgrades**: a body claiming `retryable: true` on a `402` will
+  not make this SDK resend a credential the facilitator genuinely refused.
+
+  **The other `502` is untouched** — still retryable, still with its wait
+  clamped to 15s, still answered as `503` + `Retry-After` by the middleware.
+
+### Added
+
+- **`transaction`, `paymentId` and `errorCode` on every facilitator failure.**
+  An error that says "do not retry" and hands back nothing to look up rebuilds
+  the same dead end one layer up. They now travel on `FacilitatorFailureFields`
+  — so on `SettleResponse`, `VerifyResponse`, the gasless escrow calls and every
+  ERC-8004 write — and as getters on `Erc8004LookupError`. The middleware
+  repeats them in its `500`, **without** a `Retry-After`, because "stop" is the
+  correct instruction when the transfer may be mining.
+
+  The hash is passed through **verbatim**: Algorand prints base32 and Solana
+  base58, and reformatting it makes it unpasteable in an explorer — which is the
+  entire remedy on offer. `paymentId` is the same id a successful settle would
+  have printed, so a payment later found confirmed reconciles cleanly.
+
+- **`SETTLEMENT_UNCONFIRMED`, `isSettlementUnconfirmed()` and
+  `parseFacilitatorErrorBody()`**, exported from the package root.
+
+  ```typescript
+  if (!result.success && isSettlementUnconfirmed(result)) {
+    await reconcileOnChain(result.transaction);   // never re-send
+  }
+  ```
+
+  Shapes pinned from x402-rs `SettlementUnconfirmedResponse` (`src/types.rs`),
+  built in the `IntoResponse` of `FacilitatorLocalError` (`src/handlers.rs`).
+
 ## [2.79.0] - 2026-09-04
 
 ### Fixed
