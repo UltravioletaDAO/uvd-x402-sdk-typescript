@@ -730,22 +730,46 @@ export function toPaymentRequirementsV2(
  *
  * **Auto keys off CAIP-2, NOT off `paymentHeader.x402Version`,** and that is a
  * measured decision rather than a stylistic one. The facilitator's envelope enum
- * is untagged: it matches on SHAPE and ignores the version marker. Measured
- * against production on 2026-09-03:
+ * is untagged: it matches on SHAPE and ignores the version marker.
+ *
+ * Re-measured against `https://facilitator.ultravioletadao.xyz/verify` on
+ * **2026-09-04** with a fabricated signature. The signature never verifies, so
+ * every row is an HTTP 400 and the STATUS discriminates nothing -- what does is
+ * the error code. `invalid_request_body` means the facilitator could not
+ * deserialize the body; `contract_call_failed` means it read the body, resolved
+ * the chain and got as far as the on-chain call, i.e. the envelope was fine.
  *
  * | payload network | requirements network | v1 envelope today |
  * |-----------------|----------------------|-------------------|
- * | `base`          | `base`               | **200**           |
- * | `base` (header says `x402Version: 2`) | `base` | **200**  |
- * | `eip155:8453`   | `base`               | 400               |
- * | `base`          | `eip155:8453`        | 400               |
- * | `eip155:8453`   | `eip155:8453`        | 400 (`unknown variant \`eip155:8453\``) |
+ * | `base`          | `base`               | understood        |
+ * | `base` (header says `x402Version: 2`) | `base` | understood |
+ * | `eip155:8453`   | `base`               | understood        |
+ * | `base`          | `eip155:8453`        | understood        |
+ * | `eip155:8453`   | `eip155:8453`        | understood        |
  *
- * So a header that merely *declares* version 2 while carrying plain names is
- * being served correctly today. Upgrading it on the strength of the marker would
- * change a call that works -- the one thing this must not do. Every CAIP-2
- * combination, by contrast, is already a hard 400, so switching those to v2
- * cannot regress anyone: it can only turn a failure into a payment.
+ * **The last three rows used to be a hard 400** (`unknown variant
+ * \`eip155:8453\``) when this function was written on 2026-09-03. The
+ * facilitator has since taught the v1 envelope to read CAIP-2, so the original
+ * argument for this rule -- "every CAIP-2 combination is already a 400, so
+ * upgrading them cannot regress anyone" -- **is no longer true**. The rule is
+ * unchanged; three other reasons hold it up:
+ *
+ * 1. A CAIP-2 network on the wire means the 402 that produced it advertised v2.
+ *    Answering in v2 is speaking the protocol the seller announced.
+ * 2. v2-with-CAIP-2 is the only shape BOTH generations of the facilitator
+ *    accept. v1-with-CAIP-2 is a hard 400 on any build older than 2026-09-04,
+ *    so choosing v1 there is what breaks against a self-hosted or pinned one.
+ * 3. The Python SDK resolves the identical rule, so the same wire produces the
+ *    same body in both SDKs -- pinned by phase 6 of `npm run test:xlang`.
+ *
+ * And the marker still decides nothing: row 2 above is served correctly today,
+ * so upgrading on the strength of it would change a call that works.
+ *
+ * The negative half of that measurement, without which "understood" proves
+ * nothing -- the same run, bodies broken on purpose, all three
+ * `invalid_request_body`: a v2 body carrying a plain network name, one with
+ * `resource` as a bare string, and one with `accepted` removed. A well-formed
+ * v2 body with CAIP-2 reached `contract_call_failed` like the rows above.
  */
 export function resolveEnvelopeVersion(
   paymentHeader: X402Header | PaymentPayloadV2,

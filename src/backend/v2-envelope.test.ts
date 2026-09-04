@@ -185,8 +185,11 @@ describe('FacilitatorClient picks the envelope', () => {
   it('sends the v2 envelope to /verify when the requirements are CAIP-2', async () => {
     // RED before this change: the client emitted
     // {x402Version, paymentPayload, paymentRequirements} with network
-    // "eip155:8453" inside, which production answers
-    // 400 `unknown variant \`eip155:8453\``.
+    // "eip155:8453" inside, which production answered
+    // 400 `unknown variant \`eip155:8453\`` on 2026-09-03. Re-measured
+    // 2026-09-04: that body is UNDERSTOOD now -- the facilitator taught the v1
+    // envelope to read CAIP-2. The rule did not change; see
+    // `resolveEnvelopeVersion` for the three reasons that hold it up today.
     const fetchMock = mockFacilitator();
     await new FacilitatorClient().verify(V1_HEADER, CAIP2_REQS);
 
@@ -208,9 +211,10 @@ describe('FacilitatorClient picks the envelope', () => {
   });
 
   it('upgrades on a CAIP-2 network in the PAYMENT HEADER too', async () => {
-    // Measured 400 today: CAIP-2 in the payload with plain-name requirements.
     // The seller may have built requirements from a v1 config while the buyer
-    // echoed the CAIP-2 id from the 402.
+    // echoed the CAIP-2 id from the 402. This pair was a 400 on 2026-09-03 and
+    // is understood in the v1 envelope as of 2026-09-04 -- it still goes v2,
+    // because v2 is the version the 402 that produced that id advertised.
     const fetchMock = mockFacilitator();
     await new FacilitatorClient().verify(CAIP2_HEADER, PLAIN_REQS);
 
@@ -228,10 +232,11 @@ describe('FacilitatorClient picks the envelope', () => {
   });
 
   it('does NOT upgrade a header that only declares version 2 with plain names', async () => {
-    // The regression guard that decided the auto rule. Measured 200: the v1
-    // envelope carrying {x402Version: 2, network: "base"} is served correctly
-    // today, because the facilitator matches on shape. Upgrading it on the
-    // strength of the marker would change a call that already works.
+    // The regression guard that decided the auto rule. Measured 2026-09-04:
+    // the v1 envelope carrying {x402Version: 2, network: "base"} is understood,
+    // because the facilitator matches on shape and ignores the marker.
+    // Upgrading it on the strength of that marker would change a call that
+    // already works -- and v2 cannot carry a plain network name at all.
     const fetchMock = mockFacilitator();
     await new FacilitatorClient().verify(
       { x402Version: 2, scheme: 'exact', network: 'base', payload: PAYLOAD },
@@ -271,20 +276,27 @@ describe('resolveEnvelopeVersion', () => {
     asset: ACCEPTED.asset,
   });
 
-  // One row per combination measured against production on 2026-09-03. The
-  // expected version is "which envelope does this pair have to travel in",
-  // and every pair mapped to 2 here is a hard 400 in the v1 envelope today.
+  // One row per combination. The expected version is "which envelope does this
+  // pair have to travel in".
+  //
+  // On 2026-09-03 the three CAIP-2 rows were a hard 400 in the v1 envelope, and
+  // that was the argument for the rule. Re-measured 2026-09-04: the facilitator
+  // now understands all four in v1, so the argument is gone and the rule stays
+  // for three other reasons -- see `resolveEnvelopeVersion`. Do not read these
+  // rows as "v1 would fail here"; read them as "v2 is what the 402 that carried
+  // a CAIP-2 id announced, and it is the only shape both facilitator
+  // generations accept".
   it.each([
-    ['plain / plain -> v1 (200 today, must not move)', 'base', 'base', 1],
-    ['CAIP-2 / plain -> v2 (400 today)', 'eip155:8453', 'base', 2],
-    ['plain / CAIP-2 -> v2 (400 today)', 'base', 'eip155:8453', 2],
-    ['CAIP-2 / CAIP-2 -> v2 (400 today)', 'eip155:8453', 'eip155:8453', 2],
+    ['plain / plain -> v1 (must not move)', 'base', 'base', 1],
+    ['CAIP-2 / plain -> v2', 'eip155:8453', 'base', 2],
+    ['plain / CAIP-2 -> v2', 'base', 'eip155:8453', 2],
+    ['CAIP-2 / CAIP-2 -> v2', 'eip155:8453', 'eip155:8453', 2],
   ] as const)('%s', (_label, headerNetwork, reqsNetwork, expected) => {
     expect(resolveEnvelopeVersion(header(headerNetwork), reqs(reqsNetwork))).toBe(expected);
   });
 
   it('ignores the x402Version marker on the header', () => {
-    // Measured 200: a v1-shaped body whose marker says 2 is served fine.
+    // Measured 2026-09-04: a v1-shaped body whose marker says 2 is understood.
     expect(resolveEnvelopeVersion(header('base', 2), reqs('base'))).toBe(1);
   });
 
@@ -407,7 +419,8 @@ describe('the v1 envelope marker is the envelope, not the payer', () => {
   };
 
   /** A payer that declares v2 while carrying plain network names. Legal, and a
-   *  measured 200 in the v1 envelope -- so this must keep travelling as v1. */
+   *  understood in the v1 envelope (measured 2026-09-04) -- so it must keep
+ *  travelling as v1, where v2 could not carry it at all. */
   const DECLARES_V2 = {
     x402Version: 2 as const,
     scheme: 'exact' as const,
