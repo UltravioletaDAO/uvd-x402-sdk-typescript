@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FacilitatorClient,
+  buildSettleRequest,
   buildSettleRequestV2,
   buildVerifyRequest,
+  buildVerifyRequestForVersion,
   buildVerifyRequestV2,
   resolveEnvelopeVersion,
   toPaymentRequirementsV2,
@@ -362,5 +364,130 @@ describe('v1 -> v2 requirements conversion', () => {
     expect(
       toPaymentRequirementsV2(partial as unknown as typeof V1_REQS).maxTimeoutSeconds
     ).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The envelope marker names the ENVELOPE, not the payer.
+ *
+ * Until 2026-09-04 `buildVerifyRequest` / `buildSettleRequest` copied
+ * `paymentHeader.x402Version` into the top level of the **v1** envelope. A
+ * buyer who declared `2` -- which is legal, and which the SDK's own 402 invites
+ * as soon as it advertises CAIP-2 -- therefore got a body that says `2` while
+ * carrying `paymentRequirements`, the v1 shape. Nothing broke, because the
+ * facilitator's envelope enum is untagged and matches on shape.
+ *
+ * What makes it a defect anyway is that the facilitator ALREADY reads that
+ * marker for one thing: choosing the hint in its 400.
+ *
+ *   "This body declares `x402Version: 2`. x402 v2 is a JSON object with
+ *    `paymentPayload`, `resource` and `accepted`..."
+ *
+ * So the first time such a body fails for an unrelated reason, the error tells
+ * the integrator to go fix the wrong shape. Being sent to the fields when the
+ * wrapper is the problem is precisely the inversion that cost two teams a day,
+ * and it is the same class of defect that made the ChatGPT/PayBox purchase of a
+ * MeshRelay deliberation fail.
+ *
+ * Found by the Python SDK's cross-SDK comparison (0xultravioleta/py-sobre-v2,
+ * §5.3): the ONLY body difference left between the two SDKs on the same wire.
+ */
+describe('the v1 envelope marker is the envelope, not the payer', () => {
+  const PLAIN_REQS = {
+    scheme: 'exact' as const,
+    network: 'base',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  };
+
+  /** A payer that declares v2 while carrying plain network names. Legal, and a
+   *  measured 200 in the v1 envelope -- so this must keep travelling as v1. */
+  const DECLARES_V2 = {
+    x402Version: 2 as const,
+    scheme: 'exact' as const,
+    network: 'base',
+    payload: PAYLOAD,
+  };
+  const DECLARES_V1 = { ...DECLARES_V2, x402Version: 1 as const };
+
+  it('emits 1 for a payer that declared 2', () => {
+    // RED before the fix: `2`, inherited from the header.
+    expect(buildVerifyRequest(DECLARES_V2, PLAIN_REQS).x402Version).toBe(1);
+  });
+
+  it('emits 1 on /settle too', () => {
+    expect(buildSettleRequest(DECLARES_V2, PLAIN_REQS).x402Version).toBe(1);
+  });
+
+  it('leaves the payer’s own marker untouched inside paymentPayload', () => {
+    // The fix must not rewrite the payer's header: that marker describes the
+    // payment, and the facilitator reads it there. Only the envelope's own
+    // marker is ours to set. A "fix" that clamped both would be a regression.
+    const body = buildVerifyRequest(DECLARES_V2, PLAIN_REQS);
+    expect(body.paymentPayload.x402Version).toBe(2);
+    expect(body.paymentPayload).toEqual(DECLARES_V2);
+  });
+
+  it('does not move the ordinary v1 payer', () => {
+    // The no-regression guard: green in BOTH states, on purpose.
+    expect(buildVerifyRequest(DECLARES_V1, PLAIN_REQS).x402Version).toBe(1);
+    expect(buildSettleRequest(DECLARES_V1, PLAIN_REQS).x402Version).toBe(1);
+  });
+
+  it('never contradicts itself: the marker and the shape agree, on every wire', () => {
+    // The invariant, rather than a case. Whatever the payer declares and
+    // whatever `resolveEnvelopeVersion` picks, a body marked 2 MUST carry
+    // {resource, accepted} and a body marked 1 MUST carry paymentRequirements.
+    // This is what the facilitator would enforce the day its enum stops being
+    // untagged, and what its 400 hint already assumes today.
+    for (const marker of [1, 2] as const) {
+      for (const network of ['base', 'eip155:8453']) {
+        const header = { x402Version: marker, scheme: 'exact' as const, network, payload: PAYLOAD };
+        const reqs = { ...PLAIN_REQS, network };
+        for (const pin of [undefined, 1, 2] as const) {
+          const version = resolveEnvelopeVersion(header, reqs, pin ?? 'auto');
+          const body = buildVerifyRequestForVersion(header, reqs, version) as Record<
+            string,
+            unknown
+          >;
+          const label = `marker=${marker} network=${network} pin=${pin ?? 'auto'}`;
+
+          expect(body.x402Version, label).toBe(version);
+          if (version === 2) {
+            expect(body, label).toHaveProperty('accepted');
+            expect(body, label).not.toHaveProperty('paymentRequirements');
+          } else {
+            expect(body, label).toHaveProperty('paymentRequirements');
+            expect(body, label).not.toHaveProperty('accepted');
+          }
+        }
+      }
+    }
+  });
+
+  it('sends 1 through the client, on the wire that produced the report', async () => {
+    // End-to-end through FacilitatorClient, which is what every seller
+    // integration actually calls.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ isValid: true }),
+      text: async () => '{"isValid":true}',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new FacilitatorClient().verify(DECLARES_V2, PLAIN_REQS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.x402Version).toBe(1);
+    expect(body).toHaveProperty('paymentRequirements');
+    expect(body.paymentPayload.x402Version).toBe(2);
+
+    vi.unstubAllGlobals();
   });
 });

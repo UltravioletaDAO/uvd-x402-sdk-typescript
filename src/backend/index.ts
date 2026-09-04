@@ -140,19 +140,31 @@ export interface PaymentRequirements {
 }
 
 /**
- * Verify request body for the facilitator /verify endpoint
+ * Verify request body for the facilitator /verify endpoint -- the **v1**
+ * envelope. {@link VerifyRequestV2} is the other one.
  */
 export interface VerifyRequest {
-  x402Version: X402Version;
+  /**
+   * Always `1`: this marker names the ENVELOPE, and this envelope is v1.
+   *
+   * Narrowed from `X402Version` on 2026-09-04. A `VerifyRequest` carrying `2`
+   * was always an uninhabitable value -- a body declaring v2 while shaped as
+   * v1 -- and typing it as `1 | 2` is what let the payer's marker be copied in
+   * here. The payer's version lives in `paymentPayload.x402Version`, which is
+   * still the full union.
+   */
+  x402Version: 1;
   paymentPayload: X402Header;
   paymentRequirements: PaymentRequirements;
 }
 
 /**
- * Settle request body for the facilitator /settle endpoint
+ * Settle request body for the facilitator /settle endpoint -- the **v1**
+ * envelope. {@link SettleRequestV2} is the other one.
  */
 export interface SettleRequest {
-  x402Version: X402Version;
+  /** Always `1` -- see {@link VerifyRequest.x402Version}. */
+  x402Version: 1;
   paymentPayload: X402Header;
   paymentRequirements: PaymentRequirements;
 }
@@ -443,7 +455,23 @@ export function buildVerifyRequest(
   requirements: PaymentRequirements
 ): VerifyRequest {
   return {
-    x402Version: paymentHeader.x402Version,
+    // The literal `1` names THIS ENVELOPE, not the payer's header. Echoing
+    // `paymentHeader.x402Version` here -- what this did until 2026-09-04 --
+    // let a buyer who declared `2` produce a body that says "2" while carrying
+    // `paymentRequirements`, which is the v1 shape. The facilitator serves it
+    // anyway because its envelope enum is untagged and matches on shape, so
+    // nothing broke; but it ALREADY picks the hint in its 400 off this marker:
+    //
+    //   "This body declares `x402Version: 2`. x402 v2 is a JSON object with
+    //    `paymentPayload`, `resource` and `accepted`..."
+    //
+    // So the day that body fails for any other reason, the diagnosis sends the
+    // integrator to document the wrong shape. That inversion -- being told to
+    // fix the fields when the wrapper is what is wrong -- is what cost two
+    // teams a day. The payer's own marker survives untouched inside
+    // `paymentPayload`, where it belongs: it describes the payment, not the
+    // envelope carrying it.
+    x402Version: 1,
     paymentPayload: paymentHeader,
     paymentRequirements: requirements,
   };
@@ -573,7 +601,9 @@ export function buildSettleRequest(
   requirements: PaymentRequirements
 ): SettleRequest {
   return {
-    x402Version: paymentHeader.x402Version,
+    // `1` for the same reason as {@link buildVerifyRequest}: it names the
+    // envelope, and `/settle` takes the same body as `/verify`.
+    x402Version: 1,
     paymentPayload: paymentHeader,
     paymentRequirements: requirements,
   };

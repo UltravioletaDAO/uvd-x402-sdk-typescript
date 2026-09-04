@@ -1351,6 +1351,36 @@ const body = buildVerifyRequestV2(
 > error that names no field. If you see it, check the envelope shape first, not
 > the fields inside it.
 
+### The top-level `x402Version` names the ENVELOPE
+
+`VerifyRequest.x402Version` is typed `1`, not `1 | 2`: it says which of the two
+shapes above the body has, and `VerifyRequest` **is** the v1 shape. The payer's
+own version stays where the payer put it, in `paymentPayload.x402Version`, and
+the SDK never rewrites it.
+
+```typescript
+// A buyer that declares v2 while carrying plain network names — legal, and what
+// a 402 advertising CAIP-2 invites.
+const body = buildVerifyRequest({ x402Version: 2, scheme: 'exact', network: 'base', payload }, reqs);
+
+body.x402Version;                 // 1  — the envelope is v1
+body.paymentPayload.x402Version;  // 2  — the payer's marker, untouched
+```
+
+Until **2.79.0** the top level inherited `paymentHeader.x402Version`, so that
+call emitted a body declaring `2` around a `paymentRequirements` — a v1 shape.
+It was served correctly then and it is served correctly now: the facilitator's
+envelope enum is untagged and matches on shape. But the facilitator already
+reads that marker for one thing — choosing the hint in its `400`:
+
+> `This body declares `x402Version: 2`. x402 v2 is a JSON object with
+> `paymentPayload`, `resource` and `accepted`…`
+
+So the first time such a body failed for an unrelated reason, the diagnosis sent
+you to fix the wrong shape. If you were constructing a `VerifyRequest` by hand
+with a `1 | 2` variable, that no longer type-checks — write `1`, or use
+`buildVerifyRequestForVersion` and let it pick.
+
 ## Metrics and history (`getStats` / `getTransactions`)
 
 ```typescript
