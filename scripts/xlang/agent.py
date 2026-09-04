@@ -21,7 +21,8 @@ Protocol
             {"op":"sign","cases":[{id,method,url,body,nonce,chainId,profile,now}]}
             {"op":"verify","cases":[{id,method,url,body,headers,policy,authority,now}]}
             {"op":"build_envelope","cases":[{id,marker,scheme,payloadNetwork,
-                                             requirementsNetwork,pin,payload,requirements}]}
+                                             requirementsNetwork,pin,payload,requirements,
+                                             payloadV2?}]}
     stdout  {"runtime":"python", ...}   exit 0
             {"error":"…"}               exit 1
 """
@@ -189,6 +190,16 @@ def build_envelope(cases):
     The import is deferred rather than top-level: ``uvd_x402_sdk.envelope`` ships
     from 0.74.0, and a checkout without it must fail HERE, naming the fix, rather
     than taking down the phases that do not need it.
+
+    ``payloadV2``, when the driver sends one, is handed over as the **raw dict**
+    rather than through ``PaymentPayload``. That is not a shortcut: a v2 payload
+    is ``{x402Version, resource, accepted, payload}`` with **no top-level
+    network at all**, and ``PaymentPayload`` requires ``network`` — building one
+    here would put back exactly the field whose absence is under test, and the
+    cable would pass while proving nothing. ``resolve_envelope_version`` takes a
+    ``Mapping`` since 0.75.0 (``PayloadLike``), which is what makes this
+    possible; against 0.74.0 it raises, and that is the correct answer for a
+    checkout that has not got the fix.
     """
     try:
         from uvd_x402_sdk.envelope import (
@@ -210,7 +221,7 @@ def build_envelope(cases):
 
     results = []
     for case in cases:
-        payload = PaymentPayload(
+        payload = case.get("payloadV2") or PaymentPayload(
             x402Version=case["marker"],
             scheme=case["scheme"],
             network=case["payloadNetwork"],

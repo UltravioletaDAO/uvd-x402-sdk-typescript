@@ -640,14 +640,75 @@ const ENVELOPE_CASES = [
     requirementsNetwork: 'xrpl-mainnet',
     pin: 2,
   },
-].map((c) => ({
-  scheme: 'exact',
-  marker: 1,
-  pin: 'auto',
-  payload: ENVELOPE_PAYLOAD,
-  ...c,
-  requirements: { ...ENVELOPE_REQUIREMENTS, ...(c.extra ? { extra: c.extra } : {}) },
-}));
+  // THE V2 PAYLOAD. Everything above sends a v1-shaped payload -- flat, with a
+  // top-level `network`. A buyer following a v2 402 sends this instead:
+  // `{x402Version, resource, accepted, payload}` with **no top-level network at
+  // all**, because v2 moved the chain id into `accepted`.
+  //
+  // Both SDKs threw on it (`Cannot read properties of undefined` in TypeScript,
+  // `AttributeError` / `TypeError` in Python) -- the function that exists to
+  // choose between v1 and v2 crashed on v2, so the `'auto'` default was the one
+  // option no integrator could use. Fixed in TS 2.79.0 and PY 0.75.0, days
+  // apart, which is exactly the pattern that produced the divergence phase 6
+  // was written for. Now the fix itself is pinned in both at once.
+  //
+  // The requirements stay PLAIN here on purpose: a v2 answer can then only have
+  // come from `accepted.network`, which is what separates "reads the right
+  // place" from "swallowed the missing field".
+  {
+    id: 'v2-payload/caip2-accepted',
+    payloadShape: 'v2',
+    payloadNetwork: 'eip155:8453',
+    requirementsNetwork: 'base',
+    marker: 2,
+    expectVersion: 2,
+  },
+  // …and the same shape with a PLAIN network inside `accepted`: tolerating the
+  // missing top-level field must not have relaxed the measured rule. v2 cannot
+  // carry a plain name, so this stays on v1 in both SDKs.
+  {
+    id: 'v2-payload/plain-accepted',
+    payloadShape: 'v2',
+    payloadNetwork: 'base',
+    requirementsNetwork: 'base',
+    marker: 2,
+    expectVersion: 1,
+  },
+].map((c) => {
+  const base = {
+    scheme: 'exact',
+    marker: 1,
+    pin: 'auto',
+    payload: ENVELOPE_PAYLOAD,
+    ...c,
+    requirements: { ...ENVELOPE_REQUIREMENTS, ...(c.extra ? { extra: c.extra } : {}) },
+  };
+  if (c.payloadShape !== 'v2') return base;
+
+  // Assembled HERE, by the referee, and handed to both agents verbatim. If each
+  // agent built this out of the flat fields, the shape under test would be the
+  // one each SDK happens to construct rather than the one a buyer sends.
+  return {
+    ...base,
+    payloadV2: {
+      x402Version: base.marker,
+      resource: {
+        url: ENVELOPE_REQUIREMENTS.resource,
+        description: ENVELOPE_REQUIREMENTS.description,
+        mimeType: ENVELOPE_REQUIREMENTS.mimeType,
+      },
+      accepted: {
+        scheme: ENVELOPE_REQUIREMENTS.scheme,
+        network: c.payloadNetwork,
+        asset: ENVELOPE_REQUIREMENTS.asset,
+        amount: ENVELOPE_REQUIREMENTS.maxAmountRequired,
+        payTo: ENVELOPE_REQUIREMENTS.payTo,
+        maxTimeoutSeconds: ENVELOPE_REQUIREMENTS.maxTimeoutSeconds,
+      },
+      payload: ENVELOPE_PAYLOAD,
+    },
+  };
+});
 
 const tsEnvelopes = await ask(NODE, { op: 'build_envelope', cases: ENVELOPE_CASES });
 const pyEnvelopes = await ask(PY, { op: 'build_envelope', cases: ENVELOPE_CASES });
@@ -682,7 +743,10 @@ const pyById = Object.fromEntries(pyEnvelopes.results.map((r) => [r.id, r]));
 for (const c of ENVELOPE_CASES) {
   const a = tsById[c.id];
   const b = pyById[c.id];
-  const wire = `${c.payloadNetwork} / ${c.requirementsNetwork} marker=${c.marker} pin=${c.pin}`;
+  const wire = c.payloadV2
+    ? `v2 payload, accepted=${c.payloadNetwork} (no top-level network) / ` +
+      `${c.requirementsNetwork} marker=${c.marker} pin=${c.pin}`
+    : `${c.payloadNetwork} / ${c.requirementsNetwork} marker=${c.marker} pin=${c.pin}`;
   const label = `${c.id} (${wire})`;
 
   if (!a || !b) {
@@ -706,6 +770,20 @@ for (const c of ENVELOPE_CASES) {
     `ts=v${a.version} py=v${b.version}`
   );
   if (a.version !== b.version) continue;
+
+  // Agreement is not correctness. Every other cable is graded by comparing the
+  // two SDKs, which catches a DRIFT -- but this phase's newest cable covers a
+  // defect BOTH SDKs had at the same time (v2 payloads crashed version
+  // selection in TypeScript and Python alike, fixed days apart in 2.79.0 and
+  // 0.75.0). Two runtimes regressing together would have agreed, and passed.
+  // So where the right answer is known, it is pinned rather than inferred.
+  if (c.expectVersion !== undefined) {
+    check(
+      a.version === c.expectVersion,
+      `the pinned version v${c.expectVersion} holds for ${label}`,
+      `both runtimes answered v${a.version}`
+    );
+  }
 
   check(
     eq(a.verify, b.verify),
