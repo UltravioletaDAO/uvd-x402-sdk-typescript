@@ -61,6 +61,12 @@
  * wrong: every `502` was retryable, and until `settlement_unconfirmed` existed
  * that was correct. **Branch on the body.**
  *
+ * The general form of that rule — **a 5xx whose body carries a transaction hash
+ * was broadcast, whatever the error is called** — is adopted from the Python
+ * SDK, which has carried it as its anti-double-settle guard
+ * (`uvd_x402_sdk/client.py`, `_is_retryable_settle_error`) while this one had
+ * only the status to go on.
+ *
  * Source of the shape: x402-rs `src/handlers.rs` `writer_lease_unavailable()`
  * and `require_writer_lease()`; `SettlementUnconfirmedResponse` in
  * `src/types.rs`, built in the `IntoResponse` of `FacilitatorLocalError`.
@@ -269,6 +275,33 @@ function stringField(source: Record<string, unknown>, key: string): string | und
 }
 
 /**
+ * Find a broadcast transaction hash anywhere the facilitator spells one.
+ *
+ * All five spellings, because the endpoint and the error path disagree:
+ * `{"transaction": "0x…"}`, `{"transaction": {"hash": "0x…"}}`, `txHash`,
+ * `tx_hash`, `transaction_hash`. `settle()` already read three of them on the
+ * SUCCESS path — after a consumer failed closed on an unreadable receipt and
+ * revoked access to a payment that had settled — and the error path reading
+ * fewer is the same defect with the stakes reversed.
+ *
+ * Ported from the Python SDK's `_extract_tx_hash_from_body`
+ * (`uvd_x402_sdk/client.py`), which had the wider read first.
+ */
+function transactionHashIn(source: Record<string, unknown>): string | undefined {
+  const tx = source.transaction;
+  if (tx && typeof tx === 'object') {
+    const hash = (tx as Record<string, unknown>).hash;
+    if (typeof hash === 'string' && hash !== '') return hash;
+  }
+  if (typeof tx === 'string' && tx !== '') return tx;
+  for (const key of ['txHash', 'tx_hash', 'transaction_hash']) {
+    const value = stringField(source, key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/**
  * Read a JSON error body, tolerating anything that is not one.
  *
  * Exported so {@link FacilitatorErrorInfo} and `Erc8004LookupError` read the
@@ -287,21 +320,37 @@ export function parseFacilitatorErrorBody(body: string): ParsedFacilitatorErrorB
   return {
     errorCode: stringField(parsed, 'error'),
     reason: stringField(parsed, 'reason'),
-    transaction: stringField(parsed, 'transaction'),
+    transaction: transactionHashIn(parsed),
     paymentId: stringField(parsed, 'paymentId'),
     retryable: typeof parsed.retryable === 'boolean' ? parsed.retryable : undefined,
   };
 }
 
 /**
- * The facilitator said this refusal must not be retried.
+ * The facilitator said, or showed, that this refusal must not be retried.
  *
- * Two independent signals, because the consequence of missing it is a second
- * payment: the named code, and an explicit `retryable: false`. Either alone is
- * enough.
+ * THREE independent signals, because the cost of missing one is a second
+ * payment for the same purchase:
+ *
+ * 1. an explicit `retryable: false` — the facilitator answering the question;
+ * 2. the named code {@link SETTLEMENT_UNCONFIRMED};
+ * 3. **any 5xx body that carries a transaction hash at all.** A hash in a
+ *    failure means the facilitator got as far as BROADCASTING before it failed,
+ *    whatever it decided to call the error. This one is the general rule and it
+ *    holds for codes that do not exist yet.
+ *
+ * Signal 3 is adopted from the Python SDK, whose `_is_retryable_settle_error`
+ * has carried it as the anti-double-settle guard while this SDK had only the
+ * status to go on (`uvd_x402_sdk/client.py`). It is deliberately kept ALONGSIDE
+ * the first two rather than replacing them: a facilitator that answers
+ * `retryable: false` with no hash must still be obeyed.
  */
 function isDeclaredUnretryable(parsed: ParsedFacilitatorErrorBody): boolean {
-  return parsed.retryable === false || parsed.errorCode === SETTLEMENT_UNCONFIRMED;
+  return (
+    parsed.retryable === false ||
+    parsed.errorCode === SETTLEMENT_UNCONFIRMED ||
+    parsed.transaction !== undefined
+  );
 }
 
 /**

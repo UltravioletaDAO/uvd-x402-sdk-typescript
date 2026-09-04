@@ -58,6 +58,22 @@ version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
   entire remedy on offer. `paymentId` is the same id a successful settle would
   have printed, so a payment later found confirmed reconciles cleanly.
 
+- **Adopted from the Python SDK: any 5xx carrying a transaction hash is not
+  retryable.** `uvd-x402-sdk` (PyPI) has had this as its anti-double-settle
+  guard in `_is_retryable_settle_error` — *"a 5xx whose body already contains a
+  transaction hash is NOT retryable"* — while this SDK had only the status to go
+  on. It is the general form of the rule above: a hash in a **failure** body
+  means the facilitator got as far as broadcasting, whatever it called the
+  error, so it holds for codes that do not exist yet.
+
+  It is kept **alongside** the named code and the explicit flag rather than
+  replacing them — a facilitator that answers `retryable: false` with no hash
+  must still be obeyed — giving three independent reasons to stop.
+
+  The error path also now reads all five spellings the facilitator uses for a
+  hash (`transaction`, `transaction.hash`, `txHash`, `tx_hash`,
+  `transaction_hash`), matching what `settle()` already did on the success path.
+
 - **`SETTLEMENT_UNCONFIRMED`, `isSettlementUnconfirmed()` and
   `parseFacilitatorErrorBody()`**, exported from the package root.
 

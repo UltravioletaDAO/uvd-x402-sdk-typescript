@@ -984,6 +984,15 @@ escrow call. An explicit `retryable: false` in a facilitator body always wins
 over the status — but only ever **downgrades**: a body claiming `retryable: true`
 on a `402` will not make this SDK resend a genuinely refused credential.
 
+Three independent signals stop a retry, because the cost of missing one is a
+second payment: the explicit `retryable: false`, the named
+`settlement_unconfirmed`, and — the general rule — **any 5xx body carrying a
+transaction hash at all**, under any of `transaction`, `transaction.hash`,
+`txHash`, `tx_hash` or `transaction_hash`. A hash in a *failure* means the
+facilitator got as far as broadcasting, whatever it called the error, so that
+last rule holds for codes that do not exist yet. It is the Python SDK's
+anti-double-settle guard, adopted here.
+
 ### Middleware
 
 `createPaymentMiddleware` and `createHonoMiddleware` answer **503 with a

@@ -170,6 +170,44 @@ describe('readFacilitatorError tells the two 502s apart', () => {
     expect(info.retryable).toBe(false);
   });
 
+  it('stops on ANY 5xx that carries a hash, whatever the code is called', async () => {
+    // The general rule, adopted from the Python SDK's anti-double-settle guard
+    // (`_is_retryable_settle_error`): a hash in a FAILURE body means the
+    // facilitator got as far as broadcasting before it failed. That holds for
+    // error codes that do not exist yet, which the other two signals cannot.
+    // Status 502 and 503 on purpose: those ARE retryable by status, so only
+    // the hash can flip them. A 500 would pass this test without the guard,
+    // since 500 was never retryable to begin with.
+    for (const body of [
+      JSON.stringify({ error: 'some_future_code', transaction: TX }),
+      JSON.stringify({ error: 'some_future_code', transaction: { hash: TX } }),
+      JSON.stringify({ error: 'some_future_code', txHash: TX }),
+      JSON.stringify({ error: 'some_future_code', tx_hash: TX }),
+      JSON.stringify({ error: 'some_future_code', transaction_hash: TX }),
+    ]) {
+      const info = await readFacilitatorError({
+        status: 503,
+        headers: { get: () => null },
+        text: async () => body,
+      } as never);
+
+      expect(info.retryable, body).toBe(false);
+      expect(info.transaction, body).toBe(TX);
+    }
+  });
+
+  it('CONTROL: a 5xx with no hash anywhere is still retryable', async () => {
+    // The guard must key on the hash, not on "the body was JSON".
+    const info = await readFacilitatorError({
+      status: 503,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ error: 'busy', reason: 'holder_unknown' }),
+    } as never);
+
+    expect(info.retryable).toBe(true);
+    expect(info.safeToReplay).toBe(true);
+  });
+
   it('carries a non-hex hash verbatim', async () => {
     // Algorand prints base32, Solana base58. A client that assumes `0x` makes
     // the hash unpasteable in an explorer, and pasting it is the whole remedy.
