@@ -1367,6 +1367,13 @@ body.x402Version;                 // 1  — the envelope is v1
 body.paymentPayload.x402Version;  // 2  — the payer's marker, untouched
 ```
 
+A network with **no CAIP-2 form** cannot travel in a v2 body at all, so pinning
+version 2 on one throws instead of building it — `xrpl-mainnet` is the case: its
+v1 string *is* its network id. `auto` leaves those on v1, where they work, so
+you only reach the throw by pinning. It names the network and the escape, which
+the facilitator's `400` (`data did not match any variant of untagged enum`) does
+not.
+
 Until **2.79.0** the top level inherited `paymentHeader.x402Version`, so that
 call emitted a body declaring `2` around a `paymentRequirements` — a v1 shape.
 It was served correctly then and it is served correctly now: the facilitator's

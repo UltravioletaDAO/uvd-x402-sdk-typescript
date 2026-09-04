@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FacilitatorClient,
   buildSettleRequest,
+  buildSettleRequestForVersion,
   buildSettleRequestV2,
   buildVerifyRequest,
   buildVerifyRequestForVersion,
@@ -489,5 +490,81 @@ describe('the v1 envelope marker is the envelope, not the payer', () => {
     expect(body.paymentPayload.x402Version).toBe(2);
 
     vi.unstubAllGlobals();
+  });
+});
+
+/**
+ * A network with no CAIP-2 form cannot travel in a v2 body, and saying so is
+ * better than sending one.
+ *
+ * `chainToCAIP2` answers with the name unchanged when it does not know a chain,
+ * and XRPL maps to ITSELF on purpose — `xrpl-mainnet` has no CAIP-2 form, its
+ * v1 string IS its network id. So `toPaymentRequirementsV2` used to hand back
+ * `network: 'xrpl-mainnet'` inside a v2 envelope: a plain name in a v2 body,
+ * which is a measured 400 (`data did not match any variant of untagged enum`,
+ * naming no field). The SDK knew the rule — the doc comment right above it says
+ * "a plain name inside a v2 body is a 400" — and shipped the body anyway.
+ *
+ * Only reachable by PINNING 2 on such a network: `auto` leaves them on v1,
+ * where they work. Found by phase 6 of the cross-language conformance run,
+ * which is the whole reason that phase exists: the Python SDK refuses this wire
+ * with the fix in the message, TypeScript quietly built the 400.
+ */
+describe('a network with no CAIP-2 form refuses v2 rather than emitting a 400', () => {
+  const XRPL_REQS = {
+    scheme: 'exact' as const,
+    network: 'xrpl-mainnet',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe',
+    maxTimeoutSeconds: 300,
+    asset: 'XRP',
+  };
+  const XRPL_HEADER = {
+    x402Version: 1 as const,
+    scheme: 'exact' as const,
+    network: 'xrpl-mainnet',
+    payload: PAYLOAD,
+  };
+
+  it('throws, naming the network and the escape', () => {
+    // RED before the fix: returned { network: 'xrpl-mainnet' } inside a v2 body.
+    expect(() => toPaymentRequirementsV2(XRPL_REQS)).toThrow(/no CAIP-2 form/);
+    expect(() => toPaymentRequirementsV2(XRPL_REQS)).toThrow(/xrpl-mainnet/);
+    expect(() => toPaymentRequirementsV2(XRPL_REQS)).toThrow(/x402Version: 1/);
+  });
+
+  it('throws through the builders, on both endpoints', () => {
+    expect(() => buildVerifyRequestForVersion(XRPL_HEADER, XRPL_REQS, 2)).toThrow(
+      /no CAIP-2 form/
+    );
+    expect(() => buildSettleRequestForVersion(XRPL_HEADER, XRPL_REQS, 2)).toThrow(
+      /no CAIP-2 form/
+    );
+  });
+
+  it('never fires on auto — XRPL stays on v1, where it works', () => {
+    // The no-regression guard: green in BOTH states. `auto` must not have
+    // become a way to break XRPL, which is the live path.
+    const version = resolveEnvelopeVersion(XRPL_HEADER, XRPL_REQS);
+    expect(version).toBe(1);
+    expect(buildVerifyRequestForVersion(XRPL_HEADER, XRPL_REQS, version)).toHaveProperty(
+      'paymentRequirements'
+    );
+  });
+
+  it('leaves every network that HAS a CAIP-2 form alone', () => {
+    // The other half of the guard: the throw must be about the missing form,
+    // not about non-EVM chains. Solana and Stellar have CAIP-2 ids and pass.
+    for (const [network, expected] of [
+      ['base', 'eip155:8453'],
+      ['avalanche', 'eip155:43114'],
+      ['solana', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+      ['stellar', 'stellar:pubnet'],
+    ] as const) {
+      expect(toPaymentRequirementsV2({ ...XRPL_REQS, network }).network).toBe(expected);
+    }
   });
 });

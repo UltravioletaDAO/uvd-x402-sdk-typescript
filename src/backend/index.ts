@@ -663,15 +663,31 @@ export function toResourceInfoV2(requirements: PaymentRequirements): ResourceInf
  * `extra` is carried through when present -- it is where the EIP-712 domain
  * `name`/`version` live for tokens the facilitator does not know by address, so
  * dropping it breaks EURC and the bridged USDCs.
+ *
+ * @throws If `requirements.network` has NO CAIP-2 form. `chainToCAIP2` answers
+ * with the name unchanged when it does not know a chain, and XRPL maps to
+ * itself on purpose -- its v1 string IS its network id. Passing that through
+ * would put a plain name inside a v2 body, which is a measured 400 (the same
+ * `no variant matched` that names no field). Only reachable by PINNING version
+ * 2 on such a network; `auto` leaves them on v1, where they work. Failing here
+ * names the network and the fix, which a 400 from the facilitator does not.
  */
 export function toPaymentRequirementsV2(
   requirements: PaymentRequirements
 ): PaymentRequirementsV2 {
+  const network = isCaip2Network(requirements.network)
+    ? requirements.network
+    : chainToCAIP2(requirements.network);
+  if (!isCaip2Network(network)) {
+    throw new Error(
+      `Network '${requirements.network}' has no CAIP-2 form, so it cannot travel in ` +
+        'the x402 v2 envelope. Use x402Version: 1 for this network.'
+    );
+  }
+
   return {
     scheme: requirements.scheme,
-    network: isCaip2Network(requirements.network)
-      ? requirements.network
-      : chainToCAIP2(requirements.network),
+    network,
     asset: requirements.asset,
     amount: requirements.maxAmountRequired,
     payTo: requirements.payTo,
