@@ -4,6 +4,100 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.79.0] - 2026-09-04
+
+### Fixed
+
+- **The top-level `x402Version` now names the ENVELOPE, not the payer.**
+  `buildVerifyRequest` / `buildSettleRequest` copied
+  `paymentHeader.x402Version` into the top level of the **v1** envelope, so a
+  buyer who declared `2` -- legal, and what this SDK's own 402 invites as soon
+  as it advertises CAIP-2 -- produced a body saying `2` around a
+  `paymentRequirements`, which is the v1 shape.
+
+  It was served correctly then and still is: the facilitator's envelope enum is
+  untagged and matches on shape. But the facilitator already reads that marker
+  for one thing -- picking the hint in its `400`:
+
+  > `This body declares \`x402Version: 2\`. x402 v2 is a JSON object with
+  > \`paymentPayload\`, \`resource\` and \`accepted\`...`
+
+  So the first time such a body failed for an unrelated reason, the diagnosis
+  sent the integrator to fix the wrong shape. Being sent to the fields when the
+  wrapper is what is wrong is the inversion that cost two teams a day.
+
+  The payer's own marker is untouched: it stays in `paymentPayload.x402Version`,
+  where it describes the payment rather than the envelope carrying it.
+
+  Found by the Python SDK's cross-SDK comparison (0.74.0): it was the **only**
+  body difference left between the two SDKs on the same wire.
+
+- **`'auto'` no longer throws on a v2 payload — the very shape it exists to
+  route.** `resolveEnvelopeVersion` read only `paymentHeader.network`. A v1
+  header carries one at the top level; a **v2 payload carries none at all**
+  (`PaymentPayloadV2` has no top-level network — v2 moved the chain id into
+  `accepted`). So on a real v2 payload the default threw
+
+      TypeError: Cannot read properties of undefined (reading 'includes')
+
+  before deciding anything. It now reads the network wherever the payload keeps
+  it — top level, else `accepted.network` — and treats a missing one as "no
+  CAIP-2 evidence" rather than as a crash. The parameter widens to
+  `X402Header | PaymentPayloadV2`, which is what it actually receives.
+
+  Measured in runtime against 2.78.0 by MeshRelay, whose turnstile and multibrain
+  pin `x402Version` explicitly to work around it: our own default was the one
+  option nobody could use.
+
+- **A network with no CAIP-2 form now refuses the v2 envelope instead of
+  emitting a body the facilitator rejects.** `toPaymentRequirementsV2` returned
+  `network: 'xrpl-mainnet'` inside a v2 body: `chainToCAIP2` answers with the
+  name unchanged for a chain it does not know, and XRPL maps to *itself* on
+  purpose -- its v1 string IS its network id. A plain name inside a v2 body is a
+  measured `400`, and the doc comment three lines above said so. It now throws,
+  naming the network and the escape (`x402Version: 1`), which the facilitator's
+  `data did not match any variant of untagged enum` does not.
+
+  Only reachable by **pinning** version 2 on such a network; `auto` leaves them
+  on v1, where they work. Found by phase 6 of the cross-language conformance
+  run, below.
+
+### Changed
+
+- **`resolveEnvelopeVersion`'s measured table was out of date and is corrected.**
+  It published three rows as a hard `400` (`unknown variant \`eip155:8453\``),
+  measured 2026-09-03, and built the rule's justification on them: "every CAIP-2
+  combination is already a 400, so upgrading them cannot regress anyone". The
+  facilitator has since taught the v1 envelope to read CAIP-2. Re-measured
+  2026-09-04 against production: all five rows are understood.
+
+  The rule is unchanged — still CAIP-2, still ignoring the marker — but the
+  comment now carries the three reasons that actually hold it up, and the note
+  that with a fabricated signature the HTTP status discriminates nothing
+  (`invalid_request_body` vs `contract_call_failed` is what does). No behaviour
+  change.
+
+- **`VerifyRequest.x402Version` and `SettleRequest.x402Version` are typed `1`,
+  not `X402Version`.** These interfaces *are* the v1 envelope
+  (`VerifyRequestV2` is the other one), so a `2` there was always an
+  uninhabitable value -- and typing it `1 | 2` is what let the payer's marker be
+  copied in. If you were building one of these by hand from a `1 | 2` variable,
+  write `1`, or call `buildVerifyRequestForVersion` and let it choose.
+
+### Added
+
+- **Phase 6 of the cross-language conformance run (`npm run test:xlang`): the
+  request envelope.** The run that exists to keep the two SDKs from diverging
+  passed with 266 checks while never mentioning the envelope in any of its three
+  files -- and the envelope is where they actually diverged. Both SDKs now
+  choose and build the `/verify` and `/settle` bodies for 12 wires, and the
+  driver compares the chosen version and both bodies key for key, plus a shape
+  rule of its own so that two SDKs agreeing on a self-contradictory body still
+  fails. 266 -> 333 checks.
+
+  Requires the Python SDK at **0.74.0+** (`uvd_x402_sdk.envelope`); an older
+  checkout fails with the fix named rather than skipping.
+
 ## [2.78.0] - 2026-09-03
 
 ### Added

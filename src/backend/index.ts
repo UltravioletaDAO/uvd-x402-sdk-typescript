@@ -140,19 +140,31 @@ export interface PaymentRequirements {
 }
 
 /**
- * Verify request body for the facilitator /verify endpoint
+ * Verify request body for the facilitator /verify endpoint -- the **v1**
+ * envelope. {@link VerifyRequestV2} is the other one.
  */
 export interface VerifyRequest {
-  x402Version: X402Version;
+  /**
+   * Always `1`: this marker names the ENVELOPE, and this envelope is v1.
+   *
+   * Narrowed from `X402Version` on 2026-09-04. A `VerifyRequest` carrying `2`
+   * was always an uninhabitable value -- a body declaring v2 while shaped as
+   * v1 -- and typing it as `1 | 2` is what let the payer's marker be copied in
+   * here. The payer's version lives in `paymentPayload.x402Version`, which is
+   * still the full union.
+   */
+  x402Version: 1;
   paymentPayload: X402Header;
   paymentRequirements: PaymentRequirements;
 }
 
 /**
- * Settle request body for the facilitator /settle endpoint
+ * Settle request body for the facilitator /settle endpoint -- the **v1**
+ * envelope. {@link SettleRequestV2} is the other one.
  */
 export interface SettleRequest {
-  x402Version: X402Version;
+  /** Always `1` -- see {@link VerifyRequest.x402Version}. */
+  x402Version: 1;
   paymentPayload: X402Header;
   paymentRequirements: PaymentRequirements;
 }
@@ -443,7 +455,23 @@ export function buildVerifyRequest(
   requirements: PaymentRequirements
 ): VerifyRequest {
   return {
-    x402Version: paymentHeader.x402Version,
+    // The literal `1` names THIS ENVELOPE, not the payer's header. Echoing
+    // `paymentHeader.x402Version` here -- what this did until 2026-09-04 --
+    // let a buyer who declared `2` produce a body that says "2" while carrying
+    // `paymentRequirements`, which is the v1 shape. The facilitator serves it
+    // anyway because its envelope enum is untagged and matches on shape, so
+    // nothing broke; but it ALREADY picks the hint in its 400 off this marker:
+    //
+    //   "This body declares `x402Version: 2`. x402 v2 is a JSON object with
+    //    `paymentPayload`, `resource` and `accepted`..."
+    //
+    // So the day that body fails for any other reason, the diagnosis sends the
+    // integrator to document the wrong shape. That inversion -- being told to
+    // fix the fields when the wrapper is what is wrong -- is what cost two
+    // teams a day. The payer's own marker survives untouched inside
+    // `paymentPayload`, where it belongs: it describes the payment, not the
+    // envelope carrying it.
+    x402Version: 1,
     paymentPayload: paymentHeader,
     paymentRequirements: requirements,
   };
@@ -573,7 +601,9 @@ export function buildSettleRequest(
   requirements: PaymentRequirements
 ): SettleRequest {
   return {
-    x402Version: paymentHeader.x402Version,
+    // `1` for the same reason as {@link buildVerifyRequest}: it names the
+    // envelope, and `/settle` takes the same body as `/verify`.
+    x402Version: 1,
     paymentPayload: paymentHeader,
     paymentRequirements: requirements,
   };
@@ -598,8 +628,33 @@ export function buildSettleRequest(
  * CAIP-2 form -- the v1 string IS its network id -- so XRPL stays on v1 here,
  * which is correct.
  */
-function isCaip2Network(network: string): boolean {
-  return network.includes(':');
+function isCaip2Network(network: string | undefined): boolean {
+  return typeof network === 'string' && network.includes(':');
+}
+
+/**
+ * The network a payment payload is speaking, wherever that payload keeps it.
+ *
+ * A **v1** header carries `network` at the top level. A **v2** payload does not
+ * carry one AT ALL -- look at {@link PaymentPayloadV2}: there is no top-level
+ * `network`, because v2 moved the chain id into `accepted`. So reading only
+ * `payload.network` threw
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'includes')
+ *
+ * on exactly the shape {@link resolveEnvelopeVersion} exists to route -- the
+ * default `'auto'` was unusable for any caller holding a real v2 payload.
+ * Measured in runtime against 2.78.0, and it is why MeshRelay's turnstile and
+ * multibrain pin `x402Version` to 1 or 2 rather than use our default.
+ *
+ * Undefined is a legitimate answer (a JS caller can hand over anything), and it
+ * simply means "this payload contributes no CAIP-2 evidence".
+ */
+function networkOfPayload(payload: X402Header | PaymentPayloadV2): string | undefined {
+  const top = (payload as { network?: unknown }).network;
+  if (typeof top === 'string') return top;
+  const accepted = (payload as { accepted?: { network?: unknown } }).accepted;
+  return typeof accepted?.network === 'string' ? accepted.network : undefined;
 }
 
 /**
@@ -633,15 +688,31 @@ export function toResourceInfoV2(requirements: PaymentRequirements): ResourceInf
  * `extra` is carried through when present -- it is where the EIP-712 domain
  * `name`/`version` live for tokens the facilitator does not know by address, so
  * dropping it breaks EURC and the bridged USDCs.
+ *
+ * @throws If `requirements.network` has NO CAIP-2 form. `chainToCAIP2` answers
+ * with the name unchanged when it does not know a chain, and XRPL maps to
+ * itself on purpose -- its v1 string IS its network id. Passing that through
+ * would put a plain name inside a v2 body, which is a measured 400 (the same
+ * `no variant matched` that names no field). Only reachable by PINNING version
+ * 2 on such a network; `auto` leaves them on v1, where they work. Failing here
+ * names the network and the fix, which a 400 from the facilitator does not.
  */
 export function toPaymentRequirementsV2(
   requirements: PaymentRequirements
 ): PaymentRequirementsV2 {
+  const network = isCaip2Network(requirements.network)
+    ? requirements.network
+    : chainToCAIP2(requirements.network);
+  if (!isCaip2Network(network)) {
+    throw new Error(
+      `Network '${requirements.network}' has no CAIP-2 form, so it cannot travel in ` +
+        'the x402 v2 envelope. Use x402Version: 1 for this network.'
+    );
+  }
+
   return {
     scheme: requirements.scheme,
-    network: isCaip2Network(requirements.network)
-      ? requirements.network
-      : chainToCAIP2(requirements.network),
+    network,
     asset: requirements.asset,
     amount: requirements.maxAmountRequired,
     payTo: requirements.payTo,
@@ -659,25 +730,49 @@ export function toPaymentRequirementsV2(
  *
  * **Auto keys off CAIP-2, NOT off `paymentHeader.x402Version`,** and that is a
  * measured decision rather than a stylistic one. The facilitator's envelope enum
- * is untagged: it matches on SHAPE and ignores the version marker. Measured
- * against production on 2026-09-03:
+ * is untagged: it matches on SHAPE and ignores the version marker.
+ *
+ * Re-measured against `https://facilitator.ultravioletadao.xyz/verify` on
+ * **2026-09-04** with a fabricated signature. The signature never verifies, so
+ * every row is an HTTP 400 and the STATUS discriminates nothing -- what does is
+ * the error code. `invalid_request_body` means the facilitator could not
+ * deserialize the body; `contract_call_failed` means it read the body, resolved
+ * the chain and got as far as the on-chain call, i.e. the envelope was fine.
  *
  * | payload network | requirements network | v1 envelope today |
  * |-----------------|----------------------|-------------------|
- * | `base`          | `base`               | **200**           |
- * | `base` (header says `x402Version: 2`) | `base` | **200**  |
- * | `eip155:8453`   | `base`               | 400               |
- * | `base`          | `eip155:8453`        | 400               |
- * | `eip155:8453`   | `eip155:8453`        | 400 (`unknown variant \`eip155:8453\``) |
+ * | `base`          | `base`               | understood        |
+ * | `base` (header says `x402Version: 2`) | `base` | understood |
+ * | `eip155:8453`   | `base`               | understood        |
+ * | `base`          | `eip155:8453`        | understood        |
+ * | `eip155:8453`   | `eip155:8453`        | understood        |
  *
- * So a header that merely *declares* version 2 while carrying plain names is
- * being served correctly today. Upgrading it on the strength of the marker would
- * change a call that works -- the one thing this must not do. Every CAIP-2
- * combination, by contrast, is already a hard 400, so switching those to v2
- * cannot regress anyone: it can only turn a failure into a payment.
+ * **The last three rows used to be a hard 400** (`unknown variant
+ * \`eip155:8453\``) when this function was written on 2026-09-03. The
+ * facilitator has since taught the v1 envelope to read CAIP-2, so the original
+ * argument for this rule -- "every CAIP-2 combination is already a 400, so
+ * upgrading them cannot regress anyone" -- **is no longer true**. The rule is
+ * unchanged; three other reasons hold it up:
+ *
+ * 1. A CAIP-2 network on the wire means the 402 that produced it advertised v2.
+ *    Answering in v2 is speaking the protocol the seller announced.
+ * 2. v2-with-CAIP-2 is the only shape BOTH generations of the facilitator
+ *    accept. v1-with-CAIP-2 is a hard 400 on any build older than 2026-09-04,
+ *    so choosing v1 there is what breaks against a self-hosted or pinned one.
+ * 3. The Python SDK resolves the identical rule, so the same wire produces the
+ *    same body in both SDKs -- pinned by phase 6 of `npm run test:xlang`.
+ *
+ * And the marker still decides nothing: row 2 above is served correctly today,
+ * so upgrading on the strength of it would change a call that works.
+ *
+ * The negative half of that measurement, without which "understood" proves
+ * nothing -- the same run, bodies broken on purpose, all three
+ * `invalid_request_body`: a v2 body carrying a plain network name, one with
+ * `resource` as a bare string, and one with `accepted` removed. A well-formed
+ * v2 body with CAIP-2 reached `contract_call_failed` like the rows above.
  */
 export function resolveEnvelopeVersion(
-  paymentHeader: X402Header,
+  paymentHeader: X402Header | PaymentPayloadV2,
   requirements: PaymentRequirements,
   requested: X402Version | 'auto' = 'auto'
 ): X402Version {
@@ -685,7 +780,8 @@ export function resolveEnvelopeVersion(
     return requested;
   }
 
-  return isCaip2Network(paymentHeader.network) || isCaip2Network(requirements.network)
+  return isCaip2Network(networkOfPayload(paymentHeader)) ||
+    isCaip2Network(requirements.network)
     ? 2
     : 1;
 }

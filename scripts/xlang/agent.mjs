@@ -20,6 +20,8 @@
  *   stdin   {"op":"describe"}
  *           {"op":"sign","cases":[{id,method,url,body,nonce,chainId,profile,now}]}
  *           {"op":"verify","cases":[{id,method,url,body,headers,policy,authority,now}]}
+ *           {"op":"build_envelope","cases":[{id,marker,scheme,payloadNetwork,
+ *                                            requirementsNetwork,pin,payload,requirements}]}
  *   stdout  {"runtime":"typescript", ...}   exit 0
  *           {"error":"…"}                   exit 1
  */
@@ -32,21 +34,32 @@ import { pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = join(HERE, '..', '..', 'dist', 'erc8128', 'index.mjs');
+// The envelope builders live in the package ROOT, not in the erc8128 subpath.
+const ROOT_DIST = join(HERE, '..', '..', 'dist', 'index.mjs');
 
 function die(message) {
   process.stdout.write(JSON.stringify({ error: message }));
   process.exit(1);
 }
 
-if (!existsSync(DIST)) {
-  die(
-    `the TypeScript SDK is not built: ${DIST} does not exist. ` +
-      'Run `npm run build` in uvd-x402-sdk-typescript. ' +
-      'This agent does NOT fall back to src/ and does NOT skip.'
-  );
+for (const artefact of [DIST, ROOT_DIST]) {
+  if (!existsSync(artefact)) {
+    die(
+      `the TypeScript SDK is not built: ${artefact} does not exist. ` +
+        'Run `npm run build` in uvd-x402-sdk-typescript. ' +
+        'This agent does NOT fall back to src/ and does NOT skip.'
+    );
+  }
 }
 
 const sdk = await import(pathToFileURL(DIST).href);
+const root = await import(pathToFileURL(ROOT_DIST).href);
+
+const {
+  buildSettleRequestForVersion,
+  buildVerifyRequestForVersion,
+  resolveEnvelopeVersion,
+} = root;
 
 const {
   CONFORMANCE_SHA256,
@@ -176,12 +189,50 @@ async function verify(cases) {
   return { runtime: 'typescript', results };
 }
 
+/**
+ * Build the /verify and /settle bodies this wire has to travel in.
+ *
+ * The driver supplies EVERY field -- payload, requirements, the two networks,
+ * the payer's marker, the pin -- so neither SDK gets to fall back on a default
+ * the other one does not share. All this agent does is call the public
+ * selection API and hand back what came out.
+ *
+ * A throw is a RESULT, not a crash: `pin: 2` on a network with no CAIP-2 form
+ * has to fail, and whether the two SDKs fail on the same wires is exactly the
+ * kind of divergence this phase exists to catch.
+ */
+async function buildEnvelope(cases) {
+  const results = [];
+  for (const c of cases) {
+    const paymentHeader = {
+      x402Version: c.marker,
+      scheme: c.scheme,
+      network: c.payloadNetwork,
+      payload: c.payload,
+    };
+    const requirements = { ...c.requirements, network: c.requirementsNetwork };
+    try {
+      const version = resolveEnvelopeVersion(paymentHeader, requirements, c.pin ?? 'auto');
+      results.push({
+        id: c.id,
+        version,
+        verify: buildVerifyRequestForVersion(paymentHeader, requirements, version),
+        settle: buildSettleRequestForVersion(paymentHeader, requirements, version),
+      });
+    } catch (error) {
+      results.push({ id: c.id, error: String(error?.message ?? error) });
+    }
+  }
+  return { runtime: 'typescript', results };
+}
+
 try {
   const request = JSON.parse(await readStdin());
   let response;
   if (request.op === 'describe') response = await describe();
   else if (request.op === 'sign') response = await sign(request.cases);
   else if (request.op === 'verify') response = await verify(request.cases);
+  else if (request.op === 'build_envelope') response = await buildEnvelope(request.cases);
   else die(`unknown op: ${JSON.stringify(request.op)}`);
   process.stdout.write(JSON.stringify(response));
 } catch (error) {

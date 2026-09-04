@@ -1351,6 +1351,50 @@ const body = buildVerifyRequestV2(
 > error that names no field. If you see it, check the envelope shape first, not
 > the fields inside it.
 
+### The top-level `x402Version` names the ENVELOPE
+
+`VerifyRequest.x402Version` is typed `1`, not `1 | 2`: it says which of the two
+shapes above the body has, and `VerifyRequest` **is** the v1 shape. The payer's
+own version stays where the payer put it, in `paymentPayload.x402Version`, and
+the SDK never rewrites it.
+
+```typescript
+// A buyer that declares v2 while carrying plain network names — legal, and what
+// a 402 advertising CAIP-2 invites.
+const body = buildVerifyRequest({ x402Version: 2, scheme: 'exact', network: 'base', payload }, reqs);
+
+body.x402Version;                 // 1  — the envelope is v1
+body.paymentPayload.x402Version;  // 2  — the payer's marker, untouched
+```
+
+`resolveEnvelopeVersion` (and therefore the `'auto'` default) accepts a **v2
+payload** as well as a v1 header. A v2 payload has no top-level `network` at all
+— v2 moved the chain id into `accepted` — so `auto` reads it from there. Before
+**2.79.0** it read only the top level and threw
+`Cannot read properties of undefined` on exactly that shape, which is why
+integrators were pinning `x402Version` instead of using the default.
+
+A network with **no CAIP-2 form** cannot travel in a v2 body at all, so pinning
+version 2 on one throws instead of building it — `xrpl-mainnet` is the case: its
+v1 string *is* its network id. `auto` leaves those on v1, where they work, so
+you only reach the throw by pinning. It names the network and the escape, which
+the facilitator's `400` (`data did not match any variant of untagged enum`) does
+not.
+
+Until **2.79.0** the top level inherited `paymentHeader.x402Version`, so that
+call emitted a body declaring `2` around a `paymentRequirements` — a v1 shape.
+It was served correctly then and it is served correctly now: the facilitator's
+envelope enum is untagged and matches on shape. But the facilitator already
+reads that marker for one thing — choosing the hint in its `400`:
+
+> `This body declares `x402Version: 2`. x402 v2 is a JSON object with
+> `paymentPayload`, `resource` and `accepted`…`
+
+So the first time such a body failed for an unrelated reason, the diagnosis sent
+you to fix the wrong shape. If you were constructing a `VerifyRequest` by hand
+with a `1 | 2` variable, that no longer type-checks — write `1`, or use
+`buildVerifyRequestForVersion` and let it pick.
+
 ## Metrics and history (`getStats` / `getTransactions`)
 
 ```typescript

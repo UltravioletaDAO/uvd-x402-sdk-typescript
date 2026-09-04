@@ -20,6 +20,8 @@ Protocol
     stdin   {"op":"describe"}
             {"op":"sign","cases":[{id,method,url,body,nonce,chainId,profile,now}]}
             {"op":"verify","cases":[{id,method,url,body,headers,policy,authority,now}]}
+            {"op":"build_envelope","cases":[{id,marker,scheme,payloadNetwork,
+                                             requirementsNetwork,pin,payload,requirements}]}
     stdout  {"runtime":"python", ...}   exit 0
             {"error":"…"}               exit 1
 """
@@ -173,6 +175,65 @@ def verify(cases):
     return {"runtime": "python", "results": asyncio.run(run())}
 
 
+def build_envelope(cases):
+    """Build the ``/verify`` and ``/settle`` bodies this wire has to travel in.
+
+    The driver supplies **every** field — payload, requirements, both networks,
+    the payer's marker, the pin — so neither SDK falls back on a default the
+    other one does not share. This agent only calls the public selection API.
+
+    A raise is a RESULT, not a crash: ``pin=2`` on a network with no CAIP-2 form
+    has to fail, and whether the two SDKs fail on the same wires is exactly the
+    kind of divergence this phase exists to catch.
+
+    The import is deferred rather than top-level: ``uvd_x402_sdk.envelope`` ships
+    from 0.74.0, and a checkout without it must fail HERE, naming the fix, rather
+    than taking down the phases that do not need it.
+    """
+    try:
+        from uvd_x402_sdk.envelope import (
+            build_settle_request_for_version,
+            build_verify_request_for_version,
+            resolve_envelope_version,
+        )
+        from uvd_x402_sdk.models import PaymentPayload, PaymentRequirements
+    except Exception as exc:  # noqa: BLE001 - the message IS the product here
+        die(
+            "the Python SDK has no envelope selection: "
+            f"{type(exc).__name__}: {exc}. "
+            "`uvd_x402_sdk.envelope` ships from 0.74.0 — update the checkout at "
+            "UVD_X402_PY_ROOT. This agent does NOT skip: without it the two "
+            "SDKs' envelopes are unchecked against each other, which is the "
+            "whole point of this phase."
+        )
+        return None
+
+    results = []
+    for case in cases:
+        payload = PaymentPayload(
+            x402Version=case["marker"],
+            scheme=case["scheme"],
+            network=case["payloadNetwork"],
+            payload=case["payload"],
+        )
+        requirements = PaymentRequirements(
+            **{**case["requirements"], "network": case["requirementsNetwork"]}
+        )
+        try:
+            version = resolve_envelope_version(payload, requirements, case.get("pin", "auto"))
+            results.append(
+                {
+                    "id": case["id"],
+                    "version": version,
+                    "verify": build_verify_request_for_version(payload, requirements, version),
+                    "settle": build_settle_request_for_version(payload, requirements, version),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - a refusal is a comparable result
+            results.append({"id": case["id"], "error": f"{exc}"})
+    return {"runtime": "python", "results": results}
+
+
 def main() -> None:
     try:
         request = json.loads(sys.stdin.read())
@@ -183,6 +244,8 @@ def main() -> None:
             response = sign(request["cases"])
         elif op == "verify":
             response = verify(request["cases"])
+        elif op == "build_envelope":
+            response = build_envelope(request["cases"])
         else:
             die(f"unknown op: {op!r}")
             return

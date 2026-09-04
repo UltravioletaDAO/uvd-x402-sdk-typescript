@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   FacilitatorClient,
+  buildSettleRequest,
+  buildSettleRequestForVersion,
   buildSettleRequestV2,
   buildVerifyRequest,
+  buildVerifyRequestForVersion,
   buildVerifyRequestV2,
   resolveEnvelopeVersion,
   toPaymentRequirementsV2,
@@ -182,8 +185,11 @@ describe('FacilitatorClient picks the envelope', () => {
   it('sends the v2 envelope to /verify when the requirements are CAIP-2', async () => {
     // RED before this change: the client emitted
     // {x402Version, paymentPayload, paymentRequirements} with network
-    // "eip155:8453" inside, which production answers
-    // 400 `unknown variant \`eip155:8453\``.
+    // "eip155:8453" inside, which production answered
+    // 400 `unknown variant \`eip155:8453\`` on 2026-09-03. Re-measured
+    // 2026-09-04: that body is UNDERSTOOD now -- the facilitator taught the v1
+    // envelope to read CAIP-2. The rule did not change; see
+    // `resolveEnvelopeVersion` for the three reasons that hold it up today.
     const fetchMock = mockFacilitator();
     await new FacilitatorClient().verify(V1_HEADER, CAIP2_REQS);
 
@@ -205,9 +211,10 @@ describe('FacilitatorClient picks the envelope', () => {
   });
 
   it('upgrades on a CAIP-2 network in the PAYMENT HEADER too', async () => {
-    // Measured 400 today: CAIP-2 in the payload with plain-name requirements.
     // The seller may have built requirements from a v1 config while the buyer
-    // echoed the CAIP-2 id from the 402.
+    // echoed the CAIP-2 id from the 402. This pair was a 400 on 2026-09-03 and
+    // is understood in the v1 envelope as of 2026-09-04 -- it still goes v2,
+    // because v2 is the version the 402 that produced that id advertised.
     const fetchMock = mockFacilitator();
     await new FacilitatorClient().verify(CAIP2_HEADER, PLAIN_REQS);
 
@@ -225,10 +232,11 @@ describe('FacilitatorClient picks the envelope', () => {
   });
 
   it('does NOT upgrade a header that only declares version 2 with plain names', async () => {
-    // The regression guard that decided the auto rule. Measured 200: the v1
-    // envelope carrying {x402Version: 2, network: "base"} is served correctly
-    // today, because the facilitator matches on shape. Upgrading it on the
-    // strength of the marker would change a call that already works.
+    // The regression guard that decided the auto rule. Measured 2026-09-04:
+    // the v1 envelope carrying {x402Version: 2, network: "base"} is understood,
+    // because the facilitator matches on shape and ignores the marker.
+    // Upgrading it on the strength of that marker would change a call that
+    // already works -- and v2 cannot carry a plain network name at all.
     const fetchMock = mockFacilitator();
     await new FacilitatorClient().verify(
       { x402Version: 2, scheme: 'exact', network: 'base', payload: PAYLOAD },
@@ -268,20 +276,27 @@ describe('resolveEnvelopeVersion', () => {
     asset: ACCEPTED.asset,
   });
 
-  // One row per combination measured against production on 2026-09-03. The
-  // expected version is "which envelope does this pair have to travel in",
-  // and every pair mapped to 2 here is a hard 400 in the v1 envelope today.
+  // One row per combination. The expected version is "which envelope does this
+  // pair have to travel in".
+  //
+  // On 2026-09-03 the three CAIP-2 rows were a hard 400 in the v1 envelope, and
+  // that was the argument for the rule. Re-measured 2026-09-04: the facilitator
+  // now understands all four in v1, so the argument is gone and the rule stays
+  // for three other reasons -- see `resolveEnvelopeVersion`. Do not read these
+  // rows as "v1 would fail here"; read them as "v2 is what the 402 that carried
+  // a CAIP-2 id announced, and it is the only shape both facilitator
+  // generations accept".
   it.each([
-    ['plain / plain -> v1 (200 today, must not move)', 'base', 'base', 1],
-    ['CAIP-2 / plain -> v2 (400 today)', 'eip155:8453', 'base', 2],
-    ['plain / CAIP-2 -> v2 (400 today)', 'base', 'eip155:8453', 2],
-    ['CAIP-2 / CAIP-2 -> v2 (400 today)', 'eip155:8453', 'eip155:8453', 2],
+    ['plain / plain -> v1 (must not move)', 'base', 'base', 1],
+    ['CAIP-2 / plain -> v2', 'eip155:8453', 'base', 2],
+    ['plain / CAIP-2 -> v2', 'base', 'eip155:8453', 2],
+    ['CAIP-2 / CAIP-2 -> v2', 'eip155:8453', 'eip155:8453', 2],
   ] as const)('%s', (_label, headerNetwork, reqsNetwork, expected) => {
     expect(resolveEnvelopeVersion(header(headerNetwork), reqs(reqsNetwork))).toBe(expected);
   });
 
   it('ignores the x402Version marker on the header', () => {
-    // Measured 200: a v1-shaped body whose marker says 2 is served fine.
+    // Measured 2026-09-04: a v1-shaped body whose marker says 2 is understood.
     expect(resolveEnvelopeVersion(header('base', 2), reqs('base'))).toBe(1);
   });
 
@@ -362,5 +377,315 @@ describe('v1 -> v2 requirements conversion', () => {
     expect(
       toPaymentRequirementsV2(partial as unknown as typeof V1_REQS).maxTimeoutSeconds
     ).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The envelope marker names the ENVELOPE, not the payer.
+ *
+ * Until 2026-09-04 `buildVerifyRequest` / `buildSettleRequest` copied
+ * `paymentHeader.x402Version` into the top level of the **v1** envelope. A
+ * buyer who declared `2` -- which is legal, and which the SDK's own 402 invites
+ * as soon as it advertises CAIP-2 -- therefore got a body that says `2` while
+ * carrying `paymentRequirements`, the v1 shape. Nothing broke, because the
+ * facilitator's envelope enum is untagged and matches on shape.
+ *
+ * What makes it a defect anyway is that the facilitator ALREADY reads that
+ * marker for one thing: choosing the hint in its 400.
+ *
+ *   "This body declares `x402Version: 2`. x402 v2 is a JSON object with
+ *    `paymentPayload`, `resource` and `accepted`..."
+ *
+ * So the first time such a body fails for an unrelated reason, the error tells
+ * the integrator to go fix the wrong shape. Being sent to the fields when the
+ * wrapper is the problem is precisely the inversion that cost two teams a day,
+ * and it is the same class of defect that made the ChatGPT/PayBox purchase of a
+ * MeshRelay deliberation fail.
+ *
+ * Found by the Python SDK's cross-SDK comparison (0xultravioleta/py-sobre-v2,
+ * §5.3): the ONLY body difference left between the two SDKs on the same wire.
+ */
+describe('the v1 envelope marker is the envelope, not the payer', () => {
+  const PLAIN_REQS = {
+    scheme: 'exact' as const,
+    network: 'base',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  };
+
+  /** A payer that declares v2 while carrying plain network names. Legal, and a
+   *  understood in the v1 envelope (measured 2026-09-04) -- so it must keep
+ *  travelling as v1, where v2 could not carry it at all. */
+  const DECLARES_V2 = {
+    x402Version: 2 as const,
+    scheme: 'exact' as const,
+    network: 'base',
+    payload: PAYLOAD,
+  };
+  const DECLARES_V1 = { ...DECLARES_V2, x402Version: 1 as const };
+
+  it('emits 1 for a payer that declared 2', () => {
+    // RED before the fix: `2`, inherited from the header.
+    expect(buildVerifyRequest(DECLARES_V2, PLAIN_REQS).x402Version).toBe(1);
+  });
+
+  it('emits 1 on /settle too', () => {
+    expect(buildSettleRequest(DECLARES_V2, PLAIN_REQS).x402Version).toBe(1);
+  });
+
+  it('leaves the payer’s own marker untouched inside paymentPayload', () => {
+    // The fix must not rewrite the payer's header: that marker describes the
+    // payment, and the facilitator reads it there. Only the envelope's own
+    // marker is ours to set. A "fix" that clamped both would be a regression.
+    const body = buildVerifyRequest(DECLARES_V2, PLAIN_REQS);
+    expect(body.paymentPayload.x402Version).toBe(2);
+    expect(body.paymentPayload).toEqual(DECLARES_V2);
+  });
+
+  it('does not move the ordinary v1 payer', () => {
+    // The no-regression guard: green in BOTH states, on purpose.
+    expect(buildVerifyRequest(DECLARES_V1, PLAIN_REQS).x402Version).toBe(1);
+    expect(buildSettleRequest(DECLARES_V1, PLAIN_REQS).x402Version).toBe(1);
+  });
+
+  it('never contradicts itself: the marker and the shape agree, on every wire', () => {
+    // The invariant, rather than a case. Whatever the payer declares and
+    // whatever `resolveEnvelopeVersion` picks, a body marked 2 MUST carry
+    // {resource, accepted} and a body marked 1 MUST carry paymentRequirements.
+    // This is what the facilitator would enforce the day its enum stops being
+    // untagged, and what its 400 hint already assumes today.
+    for (const marker of [1, 2] as const) {
+      for (const network of ['base', 'eip155:8453']) {
+        const header = { x402Version: marker, scheme: 'exact' as const, network, payload: PAYLOAD };
+        const reqs = { ...PLAIN_REQS, network };
+        for (const pin of [undefined, 1, 2] as const) {
+          const version = resolveEnvelopeVersion(header, reqs, pin ?? 'auto');
+          const body = buildVerifyRequestForVersion(header, reqs, version) as Record<
+            string,
+            unknown
+          >;
+          const label = `marker=${marker} network=${network} pin=${pin ?? 'auto'}`;
+
+          expect(body.x402Version, label).toBe(version);
+          if (version === 2) {
+            expect(body, label).toHaveProperty('accepted');
+            expect(body, label).not.toHaveProperty('paymentRequirements');
+          } else {
+            expect(body, label).toHaveProperty('paymentRequirements');
+            expect(body, label).not.toHaveProperty('accepted');
+          }
+        }
+      }
+    }
+  });
+
+  it('sends 1 through the client, on the wire that produced the report', async () => {
+    // End-to-end through FacilitatorClient, which is what every seller
+    // integration actually calls.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ isValid: true }),
+      text: async () => '{"isValid":true}',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new FacilitatorClient().verify(DECLARES_V2, PLAIN_REQS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.x402Version).toBe(1);
+    expect(body).toHaveProperty('paymentRequirements');
+    expect(body.paymentPayload.x402Version).toBe(2);
+
+    vi.unstubAllGlobals();
+  });
+});
+
+/**
+ * A network with no CAIP-2 form cannot travel in a v2 body, and saying so is
+ * better than sending one.
+ *
+ * `chainToCAIP2` answers with the name unchanged when it does not know a chain,
+ * and XRPL maps to ITSELF on purpose — `xrpl-mainnet` has no CAIP-2 form, its
+ * v1 string IS its network id. So `toPaymentRequirementsV2` used to hand back
+ * `network: 'xrpl-mainnet'` inside a v2 envelope: a plain name in a v2 body,
+ * which is a measured 400 (`data did not match any variant of untagged enum`,
+ * naming no field). The SDK knew the rule — the doc comment right above it says
+ * "a plain name inside a v2 body is a 400" — and shipped the body anyway.
+ *
+ * Only reachable by PINNING 2 on such a network: `auto` leaves them on v1,
+ * where they work. Found by phase 6 of the cross-language conformance run,
+ * which is the whole reason that phase exists: the Python SDK refuses this wire
+ * with the fix in the message, TypeScript quietly built the 400.
+ */
+describe('a network with no CAIP-2 form refuses v2 rather than emitting a 400', () => {
+  const XRPL_REQS = {
+    scheme: 'exact' as const,
+    network: 'xrpl-mainnet',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe',
+    maxTimeoutSeconds: 300,
+    asset: 'XRP',
+  };
+  const XRPL_HEADER = {
+    x402Version: 1 as const,
+    scheme: 'exact' as const,
+    network: 'xrpl-mainnet',
+    payload: PAYLOAD,
+  };
+
+  it('throws, naming the network and the escape', () => {
+    // RED before the fix: returned { network: 'xrpl-mainnet' } inside a v2 body.
+    expect(() => toPaymentRequirementsV2(XRPL_REQS)).toThrow(/no CAIP-2 form/);
+    expect(() => toPaymentRequirementsV2(XRPL_REQS)).toThrow(/xrpl-mainnet/);
+    expect(() => toPaymentRequirementsV2(XRPL_REQS)).toThrow(/x402Version: 1/);
+  });
+
+  it('throws through the builders, on both endpoints', () => {
+    expect(() => buildVerifyRequestForVersion(XRPL_HEADER, XRPL_REQS, 2)).toThrow(
+      /no CAIP-2 form/
+    );
+    expect(() => buildSettleRequestForVersion(XRPL_HEADER, XRPL_REQS, 2)).toThrow(
+      /no CAIP-2 form/
+    );
+  });
+
+  it('never fires on auto — XRPL stays on v1, where it works', () => {
+    // The no-regression guard: green in BOTH states. `auto` must not have
+    // become a way to break XRPL, which is the live path.
+    const version = resolveEnvelopeVersion(XRPL_HEADER, XRPL_REQS);
+    expect(version).toBe(1);
+    expect(buildVerifyRequestForVersion(XRPL_HEADER, XRPL_REQS, version)).toHaveProperty(
+      'paymentRequirements'
+    );
+  });
+
+  it('leaves every network that HAS a CAIP-2 form alone', () => {
+    // The other half of the guard: the throw must be about the missing form,
+    // not about non-EVM chains. Solana and Stellar have CAIP-2 ids and pass.
+    for (const [network, expected] of [
+      ['base', 'eip155:8453'],
+      ['avalanche', 'eip155:43114'],
+      ['solana', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'],
+      ['stellar', 'stellar:pubnet'],
+    ] as const) {
+      expect(toPaymentRequirementsV2({ ...XRPL_REQS, network }).network).toBe(expected);
+    }
+  });
+});
+
+/**
+ * `auto` has to survive a v2 payload — the very shape it exists to route.
+ *
+ * A v1 header carries `network` at the top level. A **v2 payload does not carry
+ * one at all**: look at `PaymentPayloadV2` — v2 moved the chain id into
+ * `accepted`. `resolveEnvelopeVersion` read only `paymentHeader.network`, so on
+ * a real v2 payload the default threw
+ *
+ *     TypeError: Cannot read properties of undefined (reading 'includes')
+ *
+ * before it could decide anything. The function that exists to choose between
+ * v1 and v2 crashed on v2.
+ *
+ * Measured in runtime against 2.78.0 by MeshRelay, and the consequence is
+ * already in production: their turnstile and multibrain pin `x402Version` to 1
+ * or 2 explicitly rather than use our default. Our own default was the one
+ * option nobody could use.
+ */
+describe('auto survives a v2 payload, which has no top-level network', () => {
+  const CAIP2_REQS = {
+    scheme: 'exact' as const,
+    network: 'eip155:8453',
+    maxAmountRequired: '100000',
+    resource: RESOURCE.url,
+    description: RESOURCE.description,
+    mimeType: RESOURCE.mimeType,
+    payTo: ACCEPTED.payTo,
+    maxTimeoutSeconds: 300,
+    asset: ACCEPTED.asset,
+  };
+  const PLAIN_REQS = { ...CAIP2_REQS, network: 'base' };
+
+  /** A genuine v2 payload: `{x402Version, resource, accepted, payload}` and NO
+   *  top-level network. This is what a buyer following a v2 402 produces. */
+  const V2_PAYLOAD = {
+    x402Version: 2 as const,
+    resource: RESOURCE,
+    accepted: ACCEPTED,
+    payload: PAYLOAD,
+  };
+
+  it('resolves instead of throwing', () => {
+    // RED before the fix: TypeError: Cannot read properties of undefined.
+    expect(() => resolveEnvelopeVersion(V2_PAYLOAD, CAIP2_REQS)).not.toThrow();
+    expect(resolveEnvelopeVersion(V2_PAYLOAD, CAIP2_REQS)).toBe(2);
+  });
+
+  it('reads the chain id out of `accepted`, where v2 keeps it', () => {
+    // The requirements say `base` here, so a 2 can only have come from
+    // accepted.network — this is the check that the fix reads the right place
+    // rather than just swallowing the undefined.
+    expect(resolveEnvelopeVersion(V2_PAYLOAD, PLAIN_REQS)).toBe(2);
+  });
+
+  it('still refuses to upgrade on the marker alone', () => {
+    // A v2-shaped payload whose accepted carries a PLAIN name: the marker says
+    // 2, but v2 cannot carry a plain name, so this stays on v1 — the measured
+    // rule, which the fix must not quietly relax.
+    const plainAccepted = { ...V2_PAYLOAD, accepted: { ...ACCEPTED, network: 'base' } };
+    expect(resolveEnvelopeVersion(plainAccepted, PLAIN_REQS)).toBe(1);
+  });
+
+  it('does not throw when the requirements have no network either', () => {
+    // Both sides missing. The types say `network` is required on both, but a JS
+    // caller can hand over anything, and a crash inside version selection is a
+    // worse answer than "no CAIP-2 evidence, stay on v1".
+    const noNetwork = { ...PLAIN_REQS } as Record<string, unknown>;
+    delete noNetwork.network;
+    const bare = { x402Version: 2 as const, payload: PAYLOAD };
+
+    expect(() =>
+      resolveEnvelopeVersion(bare as never, noNetwork as unknown as typeof PLAIN_REQS)
+    ).not.toThrow();
+    expect(resolveEnvelopeVersion(bare as never, noNetwork as unknown as typeof PLAIN_REQS)).toBe(1);
+  });
+
+  it('builds the v2 body end-to-end through the client', async () => {
+    // The whole point: a v2 payload goes in on the default and a v2 body comes
+    // out, with no pin. This is the call MeshRelay had to work around.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ isValid: true }),
+      text: async () => '{"isValid":true}',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new FacilitatorClient().verify(V2_PAYLOAD as never, CAIP2_REQS);
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.x402Version).toBe(2);
+    expect(body).toHaveProperty('accepted');
+    expect(body).not.toHaveProperty('paymentRequirements');
+    // The signed material must survive the trip unreshaped.
+    expect(body.paymentPayload.payload).toEqual(PAYLOAD);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('leaves a v1 header reading its own top-level network', () => {
+    // The no-regression guard: green in BOTH states. The fix must not have
+    // started preferring `accepted` over a top-level network that IS there.
+    const v1 = { x402Version: 1 as const, scheme: 'exact' as const, network: 'base', payload: PAYLOAD };
+    expect(resolveEnvelopeVersion(v1, PLAIN_REQS)).toBe(1);
+    expect(resolveEnvelopeVersion({ ...v1, network: 'eip155:8453' }, PLAIN_REQS)).toBe(2);
   });
 });
