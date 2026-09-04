@@ -877,6 +877,8 @@ try {
 |---|---|---|
 | **402** | the payment was **rejected** | sign a **new** authorization |
 | **503** | **no verdict was reached** | resend the **same** credential |
+| **502** `upstream_rpc_unavailable` | the node never answered; nothing was broadcast | resend the **same** credential |
+| **502** `settlement_unconfirmed` | broadcast, **and it may be mined** | **send nothing** — look up the hash |
 
 Charging a `503` as a `402` makes the buyer sign and broadcast a second payment
 for money that was never refused — and the first authorization is still
@@ -893,6 +895,11 @@ if (!result.success) {
     // result.reason            -> 'holder_unknown' | 'forward_failed' | ...
     // result.retryAfterSeconds -> already clamped, never an hour
     // result.safeToReplay      -> true only if the facilitator proved nothing ran
+  } else if (isSettlementUnconfirmed(result)) {
+    // NOT a refusal: the transfer was broadcast and may already be mined.
+    // Reconcile — never re-send.
+    // result.transaction -> the hash, in that chain's own encoding
+    // result.paymentId   -> the same id a successful settle would have printed
   } else {
     // A real refusal. result.errorReason says why.
   }
@@ -935,11 +942,58 @@ new FacilitatorClient({ retries: 0 });   // never replay; default is 2 extra att
 misconfigured facilitator answering `Retry-After: 3600` would otherwise hang the
 request for an hour.
 
+### The two `502`s mean opposite things — branch on the body, not the status
+
+`POST /settle` answers `502` for two situations that call for opposite moves:
+
+| body `error` | `Retry-After` | did the money move? | retry? |
+|---|---|---|---|
+| `upstream_rpc_unavailable` | `30` | no, nothing was broadcast | **yes** |
+| `settlement_unconfirmed` | **absent** | **maybe — it may be mined** | **never** |
+
+`settlement_unconfirmed` is emitted when the transaction went out and no receipt
+ever came back. Retrying it re-signs a **new** authorization with a **fresh
+nonce**, which the chain accepts as a second, perfectly valid payment for the
+same purchase — the buyer pays twice, in exactly the case the facilitator emits
+this error to prevent. `authorizationState` does not stop it: the second
+authorization is genuinely new.
+
+So the status alone cannot decide. This SDK reads the body:
+
+```typescript
+import { isSettlementUnconfirmed, SETTLEMENT_UNCONFIRMED } from 'uvd-x402-sdk';
+
+const result = await client.settle(payment, requirements);
+
+if (!result.success && isSettlementUnconfirmed(result)) {
+  // result.retryable  -> false. Do not resend, and do not ask for a signature.
+  // result.transaction -> what to look up on chain
+  // result.paymentId   -> matches the id a successful settle prints, so a
+  //                       payment later found confirmed reconciles cleanly
+  await reconcileOnChain(result.transaction);
+}
+```
+
+`result.transaction` is **not always `0x`-prefixed** — Algorand prints base32 and
+Solana base58. Pass it through verbatim; reformatting it makes it unpasteable in
+an explorer, and pasting it is the entire remedy on offer.
+
+The same reading applies to `Erc8004LookupError` (`POST /register` goes through
+the same EVM path, so a mint can come back unconfirmed too) and to every gasless
+escrow call. An explicit `retryable: false` in a facilitator body always wins
+over the status — but only ever **downgrades**: a body claiming `retryable: true`
+on a `402` will not make this SDK resend a genuinely refused credential.
+
 ### Middleware
 
 `createPaymentMiddleware` and `createHonoMiddleware` answer **503 with a
 `Retry-After` header** — not `402`, not `500` — whenever the facilitator reached
 no verdict, and keep answering `402` for genuine rejections.
+
+An unconfirmed settlement is the one 5xx that goes out as **`500`, with no
+`Retry-After`**: "stop" is the correct instruction when the transfer may already
+be mining. The body carries `transaction`, `paymentId` and `retryable: false`, so
+the buyer's client can reconcile instead of paying again.
 
 ## ERC-8004 Trustless Agents
 

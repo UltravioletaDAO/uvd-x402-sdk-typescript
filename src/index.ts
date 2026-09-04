@@ -399,6 +399,11 @@ export {
   parseRetryAfterSeconds,
   readFacilitatorError,
   facilitatorFetch,
+  // The 502 that must NOT be retried: the transfer was broadcast and may be
+  // mined, so the hash is the answer and a retry is a second payment.
+  SETTLEMENT_UNCONFIRMED,
+  isSettlementUnconfirmed,
+  parseFacilitatorErrorBody,
 } from './backend';
 export type {
   ResourceInfoV2,
@@ -414,5 +419,6 @@ export type {
   FacilitatorErrorInfo,
   FacilitatorFailureFields,
   FacilitatorFetchOptions,
+  ParsedFacilitatorErrorBody,
   WriterLeaseReason,
 } from './backend';

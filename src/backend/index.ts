@@ -75,10 +75,12 @@ import { REVIEW_WINDOW_SEC, REFUND_WINDOW_SEC } from '../escrow-preauth';
 import { getChainByName } from '../chains';
 import {
   DEFAULT_RETRY_AFTER_SECONDS,
+  SETTLEMENT_UNCONFIRMED,
   carryFailureFields,
   isReplayableLeaseReason,
   facilitatorFetch,
   failureFields,
+  parseFacilitatorErrorBody,
   readFacilitatorError,
 } from './facilitator-error';
 import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitator-error';
@@ -92,11 +94,14 @@ export {
   DEFAULT_RETRY_AFTER_SECONDS,
   MAX_RETRY_AFTER_SECONDS,
   REPLAYABLE_LEASE_REASONS,
+  SETTLEMENT_UNCONFIRMED,
   WRITER_LEASE_REASONS,
   carryFailureFields,
   facilitatorFetch,
   isAmbiguousLeaseReason,
   isReplayableLeaseReason,
+  isSettlementUnconfirmed,
+  parseFacilitatorErrorBody,
   parseRetryAfterSeconds,
   readFacilitatorError,
 } from './facilitator-error';
@@ -104,6 +109,7 @@ export type {
   FacilitatorErrorInfo,
   FacilitatorFailureFields,
   FacilitatorFetchOptions,
+  ParsedFacilitatorErrorBody,
   WriterLeaseReason,
 } from './facilitator-error';
 
@@ -1882,14 +1888,15 @@ export function createPaymentMiddleware(
         // Same distinction on the settle side. A 500 tells a client its request
         // is broken and to stop; a settle that reached no verdict is the one
         // case where retrying the identical request is correct.
+        //
+        // `settlement_unconfirmed` deliberately lands in the 500 branch: its
+        // transaction is already broadcast, so "stop" is the right instruction
+        // and 503 + Retry-After would be an instruction to pay twice.
         if (settleResult.retryable) {
           respondUnavailable(res, 'Payment settlement unavailable', settleResult);
           return;
         }
-        res.status(500).json({
-          error: 'Payment settlement failed',
-          reason: settleResult.error || 'Unknown settlement error',
-        });
+        res.status(500).json(settlementFailureBody(settleResult, 'Unknown settlement error'));
         return;
       }
     }
@@ -1945,6 +1952,32 @@ export interface HonoMiddlewareOptions extends PaymentMiddlewareOptions {
  * });
  * ```
  */
+/**
+ * The body for a settle failure the caller must NOT retry.
+ *
+ * When the facilitator answered `settlement_unconfirmed` the transaction was
+ * broadcast and may be mined, and the hash plus `paymentId` are the only way
+ * anyone downstream can find out which. Dropping them at this hop rebuilds, one
+ * layer up, exactly the dead end the facilitator change removed: "something
+ * went wrong, and here is nothing you can look up".
+ *
+ * `retryable: false` is stated rather than implied — the buyer's client reads
+ * JSON, and a bare `500` is only a convention.
+ */
+function settlementFailureBody(
+  failure: FacilitatorFailureFields & { error?: string },
+  fallbackReason: string,
+): Record<string, unknown> {
+  return {
+    error: 'Payment settlement failed',
+    reason: failure.error || fallbackReason,
+    retryable: false,
+    ...(failure.errorCode !== undefined ? { errorCode: failure.errorCode } : {}),
+    ...(failure.transaction !== undefined ? { transaction: failure.transaction } : {}),
+    ...(failure.paymentId !== undefined ? { paymentId: failure.paymentId } : {}),
+  };
+}
+
 /** {@link respondUnavailable} for a Hono context. */
 function honoUnavailable(
   c: {
@@ -2048,10 +2081,9 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
         if (settleResult.retryable) {
           return honoUnavailable(c, 'Payment settlement unavailable', settleResult);
         }
-        return c.json({
-          error: 'Payment settlement failed',
-          reason: settleResult.error || 'Unknown error',
-        }, 500);
+        // See the Express branch: `settlement_unconfirmed` belongs here, with
+        // its hash, and not behind a Retry-After.
+        return c.json(settlementFailureBody(settleResult, 'Unknown error'), 500);
       }
     }
 
@@ -3966,8 +3998,19 @@ export class Erc8004LookupError extends Error {
    * `502` and `504` join `503` and `429` here: a gateway that answered on the
    * facilitator's behalf is exactly as silent about the agent's existence, and
    * reading either as absence has the same consequence -- a duplicate mint.
+   *
+   * **Except when the body says otherwise.** `POST /register` goes through the
+   * same EVM `send_transaction_from` as a settle, so it can answer
+   * `settlement_unconfirmed`: the mint was broadcast and may be mined. That is
+   * a `502` where retrying is precisely the thing that mints the duplicate this
+   * class exists to prevent, so an explicit `retryable: false` wins over the
+   * status. See {@link SETTLEMENT_UNCONFIRMED}.
    */
   get retryable(): boolean {
+    const parsed = parseFacilitatorErrorBody(this.body);
+    if (parsed.retryable === false || parsed.errorCode === SETTLEMENT_UNCONFIRMED) {
+      return false;
+    }
     return (
       this.status === 429 ||
       this.status === 502 ||
@@ -3983,15 +4026,28 @@ export class Erc8004LookupError extends Error {
    * request may be re-sent; see {@link isReplayableLeaseReason}.
    */
   get reason(): string | undefined {
-    try {
-      const parsed = JSON.parse(this.body) as { reason?: unknown };
-      if (parsed && typeof parsed === 'object' && typeof parsed.reason === 'string') {
-        return parsed.reason;
-      }
-    } catch {
-      /* a non-JSON body is still a status */
-    }
-    return undefined;
+    return parseFacilitatorErrorBody(this.body).reason;
+  }
+
+  /** The facilitator's machine-readable `error` code, when the body carried one. */
+  get errorCode(): string | undefined {
+    return parseFacilitatorErrorBody(this.body).errorCode;
+  }
+
+  /**
+   * A transaction that WAS broadcast and could not be confirmed.
+   *
+   * Present on `settlement_unconfirmed`. This is what to do INSTEAD of
+   * retrying: look it up on chain. An error that carries "do not retry" and no
+   * hash leaves the caller with nothing to act on.
+   */
+  get transaction(): string | undefined {
+    return parseFacilitatorErrorBody(this.body).transaction;
+  }
+
+  /** The payment id for {@link transaction}, identical to a successful settle's. */
+  get paymentId(): string | undefined {
+    return parseFacilitatorErrorBody(this.body).paymentId;
   }
 
   /**
@@ -4002,7 +4058,12 @@ export class Erc8004LookupError extends Error {
    * this is false is the sequence that minted five duplicate agents.
    */
   get safeToReplay(): boolean {
-    return this.status === 429 || (this.status === 503 && isReplayableLeaseReason(this.reason));
+    // Gated on `retryable` so the two can never disagree: an error this SDK
+    // will not retry at all must never be described as safe to replay.
+    return (
+      this.retryable &&
+      (this.status === 429 || (this.status === 503 && isReplayableLeaseReason(this.reason)))
+    );
   }
 
   /** Seconds to wait before retrying, clamped. Absent when not retryable. */
