@@ -42,8 +42,34 @@
  * sequence that once minted five duplicate agents — reconcile with
  * `GET /identity/{network}/owner/{recipient}` or `getRegisterStatus` instead.
  *
+ * # The two `502`s of `/settle`, which mean opposite things
+ *
+ * | body `error`               | `Retry-After` | did the money move? | retry?    |
+ * |----------------------------|---------------|---------------------|-----------|
+ * | `upstream_rpc_unavailable` | `30`          | no, never broadcast | **yes**   |
+ * | `settlement_unconfirmed`   | **absent**    | **maybe — mined?**  | **NEVER** |
+ *
+ * `settlement_unconfirmed` is answered after the transaction was broadcast and
+ * no receipt ever arrived, so it MAY be mined. Retrying re-signs a new
+ * authorization with a fresh nonce, which the chain accepts as a second,
+ * perfectly valid payment for the same purchase — the buyer pays twice, in
+ * exactly the case the facilitator emits it to prevent. The `transaction` hash
+ * and `paymentId` travel in the body so the caller can LOOK AT THE CHAIN; they
+ * are not an invitation to send it again.
+ *
+ * The status cannot tell the two apart, which is why this file used to get it
+ * wrong: every `502` was retryable, and until `settlement_unconfirmed` existed
+ * that was correct. **Branch on the body.**
+ *
+ * The general form of that rule — **a 5xx whose body carries a transaction hash
+ * was broadcast, whatever the error is called** — is adopted from the Python
+ * SDK, which has carried it as its anti-double-settle guard
+ * (`uvd_x402_sdk/client.py`, `_is_retryable_settle_error`) while this one had
+ * only the status to go on.
+ *
  * Source of the shape: x402-rs `src/handlers.rs` `writer_lease_unavailable()`
- * and `require_writer_lease()`.
+ * and `require_writer_lease()`; `SettlementUnconfirmedResponse` in
+ * `src/types.rs`, built in the `IntoResponse` of `FacilitatorLocalError`.
  */
 
 /**
@@ -91,6 +117,14 @@ export const REPLAYABLE_LEASE_REASONS: readonly WriterLeaseReason[] = [
 export const AMBIGUOUS_LEASE_REASONS: readonly WriterLeaseReason[] = ['forward_failed'];
 
 /**
+ * The facilitator's `error` code for a settle it broadcast and could not confirm.
+ *
+ * The transaction may be mined. This is the one upstream failure that must
+ * never be retried; reconcile with `transaction` / `paymentId` instead.
+ */
+export const SETTLEMENT_UNCONFIRMED = 'settlement_unconfirmed';
+
+/**
  * Ceiling, in seconds, on how long an automatic retry will wait.
  *
  * `Retry-After` is a hint from a server that may be misconfigured. Honouring a
@@ -120,6 +154,24 @@ export interface FacilitatorErrorInfo {
   /** The facilitator's own `reason`, when the body carried one. */
   reason?: string;
   /**
+   * The facilitator's machine-readable `error` code, verbatim.
+   *
+   * Some codes carry a `(ref: <uuid>)` suffix, so compare with care —
+   * {@link SETTLEMENT_UNCONFIRMED} is emitted bare. Branch on this rather than
+   * on the status: `/settle` has two `502`s that mean opposite things.
+   */
+  errorCode?: string;
+  /**
+   * The hash of a transaction that WAS broadcast, in that chain's own encoding.
+   *
+   * Present on {@link SETTLEMENT_UNCONFIRMED}. Not always `0x`-prefixed:
+   * Algorand prints base32 and Solana base58, and reformatting it makes it
+   * unpasteable in an explorer — which is the entire remedy on offer.
+   */
+  transaction?: string;
+  /** `keccak256(caip2 ‖ txHash)`, the same id a successful settle would print. */
+  paymentId?: string;
+  /**
    * Seconds to wait before retrying, already clamped to
    * {@link MAX_RETRY_AFTER_SECONDS}. Absent when the answer is not retryable.
    */
@@ -148,6 +200,15 @@ export interface FacilitatorFailureFields {
   status?: number;
   /** The facilitator's `reason` for the refusal (see {@link WriterLeaseReason}). */
   reason?: string;
+  /** The facilitator's machine-readable `error` code (see {@link FacilitatorErrorInfo.errorCode}). */
+  errorCode?: string;
+  /**
+   * A transaction that WAS broadcast and could not be confirmed. Look it up on
+   * chain; do NOT send the payment again. See {@link SETTLEMENT_UNCONFIRMED}.
+   */
+  transaction?: string;
+  /** The payment id for that transaction, identical to the one a settle prints. */
+  paymentId?: string;
   /** True when the same request may be sent again without re-signing anything. */
   retryable?: boolean;
   /** Seconds to wait before retrying, clamped to {@link MAX_RETRY_AFTER_SECONDS}. */
@@ -188,17 +249,120 @@ export function parseRetryAfterSeconds(response: {
   return Math.min(seconds, MAX_RETRY_AFTER_SECONDS);
 }
 
-/** Pull `reason` out of a JSON error body, if there is one and it is a string. */
-function reasonFrom(body: string): string | undefined {
-  try {
-    const parsed = JSON.parse(body) as { reason?: unknown };
-    if (parsed && typeof parsed === 'object' && typeof parsed.reason === 'string') {
-      return parsed.reason;
-    }
-  } catch {
-    /* an HTML 503 from a load balancer is still a 503 */
+/** Everything this SDK reads out of a facilitator error body. */
+export interface ParsedFacilitatorErrorBody {
+  /** The `error` code, verbatim. */
+  errorCode?: string;
+  /** The writer-lease `reason`. */
+  reason?: string;
+  /** A broadcast transaction hash, in its own chain's encoding. */
+  transaction?: string;
+  /** The payment id for that hash. */
+  paymentId?: string;
+  /**
+   * The facilitator's OWN retry verdict, when it stated one.
+   *
+   * `undefined` on every body that does not carry the field — which is most of
+   * them, so absence means "the facilitator did not say", never "no".
+   */
+  retryable?: boolean;
+}
+
+/** A body field is only usable when it is a non-empty string. */
+function stringField(source: Record<string, unknown>, key: string): string | undefined {
+  const value = source[key];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * Find a broadcast transaction hash anywhere the facilitator spells one.
+ *
+ * All five spellings, because the endpoint and the error path disagree:
+ * `{"transaction": "0x…"}`, `{"transaction": {"hash": "0x…"}}`, `txHash`,
+ * `tx_hash`, `transaction_hash`. `settle()` already read three of them on the
+ * SUCCESS path — after a consumer failed closed on an unreadable receipt and
+ * revoked access to a payment that had settled — and the error path reading
+ * fewer is the same defect with the stakes reversed.
+ *
+ * Ported from the Python SDK's `_extract_tx_hash_from_body`
+ * (`uvd_x402_sdk/client.py`), which had the wider read first.
+ */
+function transactionHashIn(source: Record<string, unknown>): string | undefined {
+  const tx = source.transaction;
+  if (tx && typeof tx === 'object') {
+    const hash = (tx as Record<string, unknown>).hash;
+    if (typeof hash === 'string' && hash !== '') return hash;
+  }
+  if (typeof tx === 'string' && tx !== '') return tx;
+  for (const key of ['txHash', 'tx_hash', 'transaction_hash']) {
+    const value = stringField(source, key);
+    if (value !== undefined) return value;
   }
   return undefined;
+}
+
+/**
+ * Read a JSON error body, tolerating anything that is not one.
+ *
+ * Exported so {@link FacilitatorErrorInfo} and `Erc8004LookupError` read the
+ * SAME fields the same way. Two subtly different parses of the same body is how
+ * one code path stops honouring a `retryable: false` the other one honours.
+ */
+export function parseFacilitatorErrorBody(body: string): ParsedFacilitatorErrorBody {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    /* an HTML 503 from a load balancer is still a 503 */
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object') return {};
+  return {
+    errorCode: stringField(parsed, 'error'),
+    reason: stringField(parsed, 'reason'),
+    transaction: transactionHashIn(parsed),
+    paymentId: stringField(parsed, 'paymentId'),
+    retryable: typeof parsed.retryable === 'boolean' ? parsed.retryable : undefined,
+  };
+}
+
+/**
+ * The facilitator said, or showed, that this refusal must not be retried.
+ *
+ * THREE independent signals, because the cost of missing one is a second
+ * payment for the same purchase:
+ *
+ * 1. an explicit `retryable: false` — the facilitator answering the question;
+ * 2. the named code {@link SETTLEMENT_UNCONFIRMED};
+ * 3. **any 5xx body that carries a transaction hash at all.** A hash in a
+ *    failure means the facilitator got as far as BROADCASTING before it failed,
+ *    whatever it decided to call the error. This one is the general rule and it
+ *    holds for codes that do not exist yet.
+ *
+ * Signal 3 is adopted from the Python SDK, whose `_is_retryable_settle_error`
+ * has carried it as the anti-double-settle guard while this SDK had only the
+ * status to go on (`uvd_x402_sdk/client.py`). It is deliberately kept ALONGSIDE
+ * the first two rather than replacing them: a facilitator that answers
+ * `retryable: false` with no hash must still be obeyed.
+ */
+function isDeclaredUnretryable(parsed: ParsedFacilitatorErrorBody): boolean {
+  return (
+    parsed.retryable === false ||
+    parsed.errorCode === SETTLEMENT_UNCONFIRMED ||
+    parsed.transaction !== undefined
+  );
+}
+
+/**
+ * This refusal reports a transaction that may already be mined.
+ *
+ * The caller's move is to look up `transaction` / `paymentId` on chain. Sending
+ * the payment again is the double-charge.
+ */
+export function isSettlementUnconfirmed(failure: {
+  errorCode?: string;
+}): boolean {
+  return failure.errorCode === SETTLEMENT_UNCONFIRMED;
 }
 
 /**
@@ -219,10 +383,21 @@ export async function readFacilitatorError(response: {
     body = '';
   }
   const status = response.status;
-  const reason = reasonFrom(body);
+  const parsed = parseFacilitatorErrorBody(body);
+  const reason = parsed.reason;
   // 429 is admission control and 502/503/504 are "no verdict". None of them is
   // a rejection of the payment, so none of them may be reported as one.
-  const retryable = status === 429 || status === 502 || status === 503 || status === 504;
+  const transportRetryable =
+    status === 429 || status === 502 || status === 503 || status === 504;
+  // ...unless the facilitator SAID otherwise in the body. `settlement_unconfirmed`
+  // is a 502 whose transaction was already broadcast and may be mined: retrying
+  // signs a second authorization, with a fresh nonce, that the chain will
+  // happily accept as another payment for the same purchase.
+  //
+  // Only ever DOWNGRADES. A body claiming `retryable: true` on a 402 must not
+  // make this SDK resend a credential the facilitator genuinely refused, so the
+  // status stays the ceiling and the body is only allowed to lower it.
+  const retryable = transportRetryable && !isDeclaredUnretryable(parsed);
   const retryAfterSeconds = retryable
     ? (parseRetryAfterSeconds(response) ?? DEFAULT_RETRY_AFTER_SECONDS)
     : undefined;
@@ -234,12 +409,19 @@ export async function readFacilitatorError(response: {
   // load balancer, a 502, a 504, `forward_failed` — is merely retryable: the
   // caller may resend after reconciling, but this SDK will not do it for them,
   // because "a proxy answered" is not evidence that nothing ran.
-  const safeToReplay = status === 429 || (status === 503 && isReplayableLeaseReason(reason));
+  //
+  // Gated on `retryable` so the two can never disagree: a refusal this SDK will
+  // not even retry must never be described as safe to replay automatically.
+  const safeToReplay =
+    retryable && (status === 429 || (status === 503 && isReplayableLeaseReason(reason)));
 
   return {
     error: `Facilitator error: ${status} - ${body}`,
     status,
     reason,
+    errorCode: parsed.errorCode,
+    transaction: parsed.transaction,
+    paymentId: parsed.paymentId,
     retryAfterSeconds,
     retryable,
     safeToReplay,
@@ -257,6 +439,11 @@ export function failureFields(info: FacilitatorErrorInfo): Required<
     retryable: info.retryable,
     safeToReplay: info.safeToReplay,
     ...(info.reason !== undefined ? { reason: info.reason } : {}),
+    ...(info.errorCode !== undefined ? { errorCode: info.errorCode } : {}),
+    // Without these the caller is told "do not retry" and given nothing to do
+    // instead — an error that swallows the hash is the same defect one layer up.
+    ...(info.transaction !== undefined ? { transaction: info.transaction } : {}),
+    ...(info.paymentId !== undefined ? { paymentId: info.paymentId } : {}),
     ...(info.retryAfterSeconds !== undefined
       ? { retryAfterSeconds: info.retryAfterSeconds }
       : {}),
@@ -276,6 +463,9 @@ export function carryFailureFields(
   return {
     ...(source.status !== undefined ? { status: source.status } : {}),
     ...(source.reason !== undefined ? { reason: source.reason } : {}),
+    ...(source.errorCode !== undefined ? { errorCode: source.errorCode } : {}),
+    ...(source.transaction !== undefined ? { transaction: source.transaction } : {}),
+    ...(source.paymentId !== undefined ? { paymentId: source.paymentId } : {}),
     ...(source.retryable !== undefined ? { retryable: source.retryable } : {}),
     ...(source.retryAfterSeconds !== undefined
       ? { retryAfterSeconds: source.retryAfterSeconds }
