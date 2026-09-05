@@ -13,9 +13,10 @@ import type {
   X402PaymentOption,
   X402Version,
   ChainConfig,
+  TokenType,
 } from '../types';
 import { CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from '../types';
-import { getChainByName } from '../chains';
+import { getChainByName, getTokenConfig } from '../chains';
 import { decodeBase64Utf8, encodeBase64Json } from './base64';
 
 /**
@@ -255,31 +256,66 @@ export function createX402Header(
 /**
  * Generate payment options array for multi-network support
  *
+ * One entry per (chain, token) pair. By default the token is USDC on every
+ * chain, which is exactly what this emitted before `tokens` existed.
+ *
+ * **`tokens` is opt-in on purpose, and the reason is money.** The chain
+ * registry knows more stablecoins than USDC (Base also has EURC), and it is
+ * tempting to just emit all of them. But this array becomes the `accepts` of a
+ * `402`, so every entry is a currency the seller has publicly agreed to be paid
+ * in -- at `amount` units of it. Emitting EURC for a seller who priced in
+ * dollars would quietly sell at a 1:1 EUR/USD rate nobody agreed to. So the
+ * caller names the tokens it actually accepts, and `amount` is read as units of
+ * each named token, NOT converted between them.
+ *
+ * A token a chain does not have is skipped: an option is only emitted for pairs
+ * the registry can actually price.
+ *
  * @param chainConfigs - Array of chain configurations
- * @param amount - Amount in USDC (e.g., "10.00")
+ * @param amount - Amount in units of each token (e.g., "10.00")
  * @param facilitator - Optional facilitator URL override
+ * @param tokens - Tokens to offer per chain (default: `['usdc']`)
  * @returns Array of x402 v2 payment options
+ *
+ * @example
+ * ```ts
+ * // Dollars only -- the default, and what every existing caller gets.
+ * generatePaymentOptions([base], '5.00');
+ *
+ * // Dollars or euros, priced separately and both genuinely accepted.
+ * generatePaymentOptions([base], '5.00', undefined, ['usdc', 'eurc']);
+ * ```
  */
 export function generatePaymentOptions(
   chainConfigs: ChainConfig[],
   amount: string,
-  facilitator?: string
+  facilitator?: string,
+  tokens: TokenType[] = ['usdc']
 ): X402PaymentOption[] {
-  // Convert amount to atomic units for each chain
-  return chainConfigs
-    .filter(chain => chain.x402.enabled)
-    .map(chain => {
+  const options: X402PaymentOption[] = [];
+
+  for (const chain of chainConfigs) {
+    if (!chain.x402.enabled) continue;
+
+    for (const tokenType of tokens) {
+      const token = getTokenConfig(chain.name, tokenType);
+      if (!token) continue;
+
+      // Atomic units in THIS token's decimals -- BSC USDC has 18, not 6.
       const atomicAmount = Math.floor(
-        parseFloat(amount) * Math.pow(10, chain.usdc.decimals)
+        parseFloat(amount) * Math.pow(10, token.decimals)
       ).toString();
 
-      return {
+      options.push({
         network: chainToCAIP2(chain.name),
-        asset: chain.usdc.address,
+        asset: token.address,
         amount: atomicAmount,
         facilitator: facilitator || chain.x402.facilitatorUrl,
-      };
-    });
+      });
+    }
+  }
+
+  return options;
 }
 
 /**

@@ -231,6 +231,63 @@ export interface PaymentInfo {
   network?: string;
   /** Supported chain IDs */
   supportedChains?: number[];
+  /**
+   * Envelope version the resource asked for, as read off its own 402.
+   *
+   * This is what makes the client's `x402Version: 'auto'` mean something: the
+   * buyer loop reads the version out of the challenge and hands it down here,
+   * so the header is built in the shape the server said it accepts. Left
+   * undefined by callers who build a payment by hand -- then the client config
+   * decides, exactly as before.
+   */
+  x402Version?: X402Version;
+}
+
+/**
+ * One payment option read off a resource's `402`, normalised.
+ *
+ * The 402 body speaks two dialects -- v1 spells the price `maxAmountRequired`
+ * and names the chain `base`, v2 spells it `amount` and names it `eip155:8453`
+ * -- and a buyer that only learned one of them silently ignores half the
+ * offers. This is the shape after both have been read.
+ */
+export interface X402PaymentOffer {
+  /** Network exactly as the 402 wrote it (plain name or CAIP-2). */
+  network: string;
+  /** SDK chain name the network resolved to, or null when unknown. */
+  chainName: string | null;
+  /** Token contract address the resource wants paid, when it named one. */
+  asset?: string;
+  /** Price in the token's own atomic units. */
+  amount: string;
+  /** Decimals used to read `amount`. */
+  decimals: number;
+  /** Recipient of the payment. */
+  payTo: string;
+  /** The accept object verbatim -- echoed back for v2. */
+  raw: Record<string, unknown>;
+}
+
+/**
+ * Options for {@link X402Client.fetch} -- the buyer loop.
+ */
+export interface X402FetchOptions {
+  /** HTTP method for both the probe and the paid retry (default `GET`). */
+  method?: string;
+  /**
+   * Hard ceiling in token units (e.g. `'0.05'`). A 402 that asks for more
+   * throws instead of signing. Undefined = no ceiling, which means paying
+   * whatever an untrusted resource asks: discouraged.
+   */
+  maxAmount?: string;
+  /** Token to pay with (default `usdc`). */
+  tokenType?: TokenType;
+  /** Override the default cheapest-offer selection. */
+  select?: (offers: X402PaymentOffer[]) => X402PaymentOffer | null | undefined;
+  /** Passed through to both requests (`headers`, `body`, `signal`, ...). */
+  init?: RequestInit;
+  /** Injectable `fetch` (tests, or a runtime without a global one). */
+  fetchImpl?: typeof globalThis.fetch;
 }
 
 /**
@@ -837,6 +894,8 @@ export type X402ErrorCode =
   | 'INVALID_CONFIG'
   | 'INVALID_AMOUNT'
   | 'INVALID_RECIPIENT'
+  | 'PAYMENT_EXCEEDS_MAX'
+  | 'NO_ACCEPTABLE_PAYMENT'
   | 'UNKNOWN_ERROR';
 
 /**

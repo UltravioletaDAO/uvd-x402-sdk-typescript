@@ -243,6 +243,8 @@ export type {
   PaymentInfo,
   PaymentRequest,
   PaymentResult,
+  X402PaymentOffer,
+  X402FetchOptions,
   PaymentHeaders,
   PaymentPayload,
   EVMPaymentPayload,
