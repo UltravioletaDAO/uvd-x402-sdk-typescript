@@ -12,6 +12,7 @@ export default defineConfig({
     'providers/xrpl/index': 'src/providers/xrpl/index.ts',
     'utils/index': 'src/utils/index.ts',
     'react/index': 'src/react/index.tsx',
+    'react/picker/index': 'src/react/picker.ts',
     'adapters/index': 'src/adapters/index.ts',
     'backend/index': 'src/backend/index.ts',
     'erc8128/index': 'src/erc8128/index.ts',

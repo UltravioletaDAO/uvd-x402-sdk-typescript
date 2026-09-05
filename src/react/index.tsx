@@ -415,3 +415,13 @@ export function useNetworkBalances() {
 
 // Re-export types for convenience
 export type { WalletState, PaymentInfo, PaymentResult, ChainConfig, NetworkBalance };
+
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+export { NetworkPicker, buildNetworkOptions, resolveChain, SIGNABLE_IN_BROWSER, FAMILY_LABEL } from './NetworkPicker';
+export type { NetworkPickerProps, NetworkOption } from './NetworkPicker';
+
+export { PaymentMethodPicker } from './PaymentMethodPicker';
+export type { PaymentMethodPickerProps, PaymentAccept } from './PaymentMethodPicker';
