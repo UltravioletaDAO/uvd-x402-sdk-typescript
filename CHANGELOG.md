@@ -94,6 +94,13 @@ version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
   codes, and `PaymentInfo.x402Version`. All additive; no existing call changes
   shape.
 
+## [2.81.0] - 2026-09-05
+
+### Reconstructed
+
+- `9a4c9f8` feat(react): NetworkPicker y PaymentMethodPicker, con entrypoint sin firma (2.81.0)
+- `8d0d56a` docs(react): disenar un carrusel de pago compartido para todo el stack
+
 ## [2.80.0] - 2026-09-04
 
 ### Fixed
@@ -350,6 +357,12 @@ version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
   broken every TypeScript consumer for no gain; the version-aware builders are
   additive instead.
 
+## [2.77.0] - 2026-09-01
+
+### Reconstructed
+
+- `5e68152` docs(dx402): el backend que devuelve el facilitador es el medido, no el declarado
+
 ## [2.76.0] - 2026-08-31
 
 ### Fixed
@@ -477,6 +490,25 @@ Two behaviours did move, deliberately:
   `MAX_RETRY_AFTER_SECONDS` (15) — a misconfigured `Retry-After: 3600` would
   otherwise hang the caller for an hour inside a function documented as
   returning promptly. Pass `retries: 0` for the old timing.
+
+## [2.75.0] - 2026-08-28
+
+### Reconstructed
+
+- `68542f0` chore: bump version to 2.75.0
+- 133 commits reach this tag from `v2.74.0`, which is not its ancestor. Read the range with `git log --oneline v2.74.0..v2.75.0`.
+
+## [2.74.0] - 2026-08-25
+
+### Reconstructed
+
+- `e5805a2` feat(erc8004): rail de respuestas con autoria real (v2.74.0)
+
+## [2.73.0] - 2026-08-25
+
+### Reconstructed
+
+- `83b3949` feat(erc8004): typedData para delegates v4 (v2.73.0)
 
 ## [2.72.0] - 2026-08-25
 
@@ -617,6 +649,19 @@ affected and need no change.
 Requires facilitator v1.93.0 or later for the mainnet networks; base-sepolia has
 served this rail since v1.74.0.
 
+## [2.69.0] - 2026-08-22
+
+### Reconstructed
+
+- `bd22a5a` fix(escrow): paridad con Python — el ultimo recurso del settle nombra algo (v2.69.0)
+
+## [2.68.0] - 2026-08-21
+
+### Reconstructed
+
+- `9273275` feat(erc8004): scroll, el ValidationRegistry de mainnet, y 'base-mainnet' que el facilitador nunca acepto (v2.68.0)
+- `b16f3b7` fix(settle): el veredicto lo da el facilitador, no el codigo HTTP (v2.67.0)
+
 ## [2.67.0] - 2026-08-20
 
 ### Fixed
@@ -656,6 +701,82 @@ served this rail since v1.74.0.
   `errorReason` is what separates a reverted transfer from a rejected
   authorization without parsing prose. It is distinct from `error`: `error` is
   this client failing to ask, `errorReason` is the facilitator answering no.
+
+## [2.66.0] - 2026-08-20
+
+### Reconstructed
+
+- `320411c` fix(x402): paymentRequirements es la grafia v1 de accepts, y no la reconociamos
+
+## [2.65.0] - 2026-08-20
+
+### Reconstructed
+
+- `b00ffef` feat(x402): paymentChallengeFrom, y detectX402Version deja de mentir con un header
+
+## [2.64.0] - 2026-08-20
+
+### Reconstructed
+
+- `b27006f` docs(dx402): el README no mencionaba DX402 ni una vez
+- `b049ba2` feat(dx402): elegir donde se guarda, y preguntar que ofrece el facilitador
+
+## [2.63.0] - 2026-08-19
+
+### Reconstructed
+
+- `94c37ed` fix(escrow): la ventana de release tiene que sobrevivir a la REVISION, no solo al tier
+
+## [2.62.0] - 2026-08-19
+
+### Reconstructed
+
+- `24fb3ba` feat(dx402): poder mandar proofOfPayment, y un header que sobreviva al no-ASCII
+
+## [2.61.0] - 2026-08-19
+
+### Reconstructed
+
+- `a617cde` chore: 2.61.0 -- hex estricto y forma del digest por curva
+- `5f34add` fix(dx402): no adivinar la forma del digest -- las testnets firmaban la equivocada
+- `69581e3` fix(dx402): hex estricto -- parseInt convertia basura en bytes de clave plausibles
+
+## [2.60.0] - 2026-08-19
+
+### Reconstructed
+
+- `724465e` fix(dx402): cortar por el sobre SELLADO, conservar el diagnostico, y no volar el stack
+
+## [2.59.0] - 2026-08-19
+
+### Reconstructed
+
+- `ae55657` fix(dx402): elegir la forma del digest por la curva del PAYEE — un payee EVM no podia firmar
+
+## [2.58.0] - 2026-08-18
+
+### Reconstructed
+
+- `1d5b6f9` feat(dx402): paridad completa con Python -- v2, Solana y una sola llamada (v2.58.0)
+
+## [2.57.0] - 2026-08-18
+
+### Reconstructed
+
+- `d5fb331` feat(dx402): helper para firmar el anchor y probar que es tuyo (v2.57.0)
+
+## [2.56.0] - 2026-08-17
+
+### Reconstructed
+
+- `d46f8ca` feat(dx402): leer envelopes multi-destinatario (v2.56.0)
+
+## [2.55.0] - 2026-08-17
+
+### Reconstructed
+
+- `2976cf4` feat(dx402): lado VENDEDOR -- sellar desde TypeScript (v2.55.0)
+- `0786cb6` feat(dx402): recuperar una respuesta pagada despues de la sesion (v2.54.0)
 
 ## [2.53.0] - 2026-08-09
 
