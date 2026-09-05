@@ -19,6 +19,9 @@ import type {
   EVMPaymentPayload,
   TokenType,
   X402EVMPayload,
+  X402Version,
+  X402PaymentOffer,
+  X402FetchOptions,
 } from '../types';
 import { X402Error, DEFAULT_CONFIG } from '../types';
 import {
@@ -31,6 +34,7 @@ import {
 import {
   validateRecipient,
   chainToCAIP2,
+  caip2ToChain,
   encodeBase64Json,
   buildTokenMetadata,
 } from '../utils';
@@ -288,6 +292,232 @@ export class X402Client {
       this.emit('paymentFailed', { error: x402Error.message, code: x402Error.code });
       throw x402Error;
     }
+  }
+
+
+  // ============================================================================
+  // PUBLIC API - Buyer loop
+  // ============================================================================
+
+  /**
+   * Fetch a resource, paying its `402 Payment Required` challenge if it has one.
+   *
+   * The BUYER side of x402, and the half this client was missing: it could sign
+   * a payment ({@link createPayment}) but never ask for one, so every consumer
+   * hand-rolled the same loop -- probe, read `accepts`, pick, sign, retry --
+   * and each one picked its own answer to "how much is too much".
+   *
+   * Safe by default: `maxAmount` is a hard ceiling. A 402 that asks for more
+   * throws `PAYMENT_EXCEEDS_MAX` instead of quietly signing it. A response that
+   * is not a 402 -- a first-try 200 included -- comes back untouched; this pays
+   * only when payment is what was asked for.
+   *
+   * @param url - Resource URL.
+   * @param options - See {@link X402FetchOptions}.
+   * @returns The paid response after a 402, or the original response.
+   *
+   * @example
+   * ```ts
+   * await client.connectWithPrivateKey(key, 'base');
+   * const res = await client.fetch('https://api.example.com/data', {
+   *   maxAmount: '0.05',
+   * });
+   * const data = await res.json();
+   * ```
+   */
+  async fetch(url: string, options: X402FetchOptions = {}): Promise<Response> {
+    if (!this.connectedAddress) {
+      throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
+    }
+
+    const method = options.method || 'GET';
+    const doFetch = options.fetchImpl || globalThis.fetch;
+    if (typeof doFetch !== 'function') {
+      throw new X402Error(
+        'No fetch implementation available; pass options.fetchImpl',
+        'NETWORK_ERROR'
+      );
+    }
+
+    const probe = await doFetch(url, { ...options.init, method });
+    if (probe.status !== 402) {
+      return probe;
+    }
+
+    let body: unknown;
+    try {
+      body = await probe.json();
+    } catch (error) {
+      throw new X402Error(
+        `402 response body is not JSON: ${error instanceof Error ? error.message : 'unknown'}`,
+        'PAYMENT_FAILED',
+        error
+      );
+    }
+
+    const tokenType: TokenType = options.tokenType || 'usdc';
+    const { version, offers } = this.parse402(body, tokenType);
+    if (offers.length === 0) {
+      throw new X402Error(
+        '402 response offered no usable payment options',
+        'NO_ACCEPTABLE_PAYMENT'
+      );
+    }
+
+    // The ceiling is deliberately NOT applied while selecting: if even the
+    // cheapest offer is over budget the caller wants to be told the price, not
+    // handed a vague "nothing acceptable".
+    const chosen = options.select
+      ? options.select(offers)
+      : X402Client.cheapestOffer(offers);
+    if (!chosen) {
+      throw new X402Error(
+        'No payment option selected for the 402 challenge',
+        'NO_ACCEPTABLE_PAYMENT'
+      );
+    }
+
+    if (options.maxAmount !== undefined) {
+      const ceiling = ethers.parseUnits(options.maxAmount, chosen.decimals);
+      if (BigInt(chosen.amount) > ceiling) {
+        throw new X402Error(
+          `Payment of ${ethers.formatUnits(chosen.amount, chosen.decimals)} exceeds ` +
+            `maxAmount ${options.maxAmount} for ${url}`,
+          'PAYMENT_EXCEEDS_MAX',
+          {
+            amount: chosen.amount,
+            decimals: chosen.decimals,
+            maxAmount: options.maxAmount,
+          }
+        );
+      }
+    }
+
+    if (!chosen.chainName) {
+      throw new X402Error(
+        `402 asked for payment on unknown network '${chosen.network}'`,
+        'CHAIN_NOT_SUPPORTED'
+      );
+    }
+
+    if (chosen.chainName !== this.currentChainName) {
+      await this.switchChain(chosen.chainName);
+    }
+
+    const payment = await this.createPayment({
+      recipient: chosen.payTo,
+      amount: ethers.formatUnits(chosen.amount, chosen.decimals),
+      tokenType,
+      network: chosen.chainName,
+      x402Version: version,
+    });
+
+    // v1 servers read `X-PAYMENT`; v2 ones read `PAYMENT-SIGNATURE`. Both carry
+    // the identical base64 payload, so sending both on a v2 retry costs nothing
+    // and spares the caller from guessing which name the resource implemented.
+    const paidHeaders: Record<string, string> = {
+      ...X402Client.headersToRecord(options.init?.headers),
+      'X-PAYMENT': payment.paymentHeader,
+    };
+    if (version === 2) {
+      paidHeaders['PAYMENT-SIGNATURE'] = payment.paymentHeader;
+    }
+
+    return doFetch(url, { ...options.init, method, headers: paidHeaders });
+  }
+
+  /**
+   * Normalise a 402 body into its envelope version and its payment offers.
+   *
+   * Reads both spec shapes -- `{x402Version, accepts: [...]}` and the non-spec
+   * one where a lone requirement sits at the top level -- and both dialects of
+   * the price field (`maxAmountRequired` in v1, `amount` in v2).
+   */
+  private parse402(
+    body: unknown,
+    tokenType: TokenType
+  ): { version: X402Version; offers: X402PaymentOffer[] } {
+    const doc = (body ?? {}) as Record<string, unknown>;
+    const version: X402Version = Number(doc.x402Version) === 2 ? 2 : 1;
+
+    const rawAccepts = Array.isArray(doc.accepts)
+      ? doc.accepts
+      : doc.payTo
+        ? [doc]
+        : [];
+
+    const offers: X402PaymentOffer[] = [];
+    for (const entry of rawAccepts) {
+      if (!entry || typeof entry !== 'object') continue;
+      const accept = entry as Record<string, unknown>;
+
+      const amount = accept.amount ?? accept.maxAmountRequired;
+      const payTo = accept.payTo;
+      const network = accept.network;
+      if (amount === undefined || amount === null) continue;
+      if (typeof payTo !== 'string' || !payTo) continue;
+      if (typeof network !== 'string' || !network) continue;
+
+      const chainName = getChainByName(network) ? network : caip2ToChain(network);
+
+      offers.push({
+        network,
+        chainName,
+        asset: typeof accept.asset === 'string' ? accept.asset : undefined,
+        amount: String(amount),
+        decimals: X402Client.offerDecimals(chainName, tokenType),
+        payTo,
+        raw: accept,
+      });
+    }
+
+    return { version, offers };
+  }
+
+  /**
+   * Decimals to read an offer's atomic `amount` with.
+   *
+   * Not cosmetic: BSC USDC has 18 and everyone else's has 6, so reading every
+   * price at 6 makes one chain look 10^12 times cheaper than it is and the
+   * cheapest offer gets chosen wrong. Falls back to 6 only when the chain is
+   * unknown -- and an unknown chain cannot be paid anyway.
+   */
+  private static offerDecimals(chainName: string | null, tokenType: TokenType): number {
+    if (!chainName) return 6;
+    const token = getTokenConfig(chainName, tokenType);
+    if (token) return token.decimals;
+    return getChainByName(chainName)?.usdc.decimals ?? 6;
+  }
+
+  /** Cheapest offer, compared across chains at a common scale. */
+  private static cheapestOffer(offers: X402PaymentOffer[]): X402PaymentOffer {
+    return offers.reduce((best, offer) =>
+      X402Client.scaled(offer) < X402Client.scaled(best) ? offer : best
+    );
+  }
+
+  /** An offer's price scaled to 18 decimals, so BigInt comparison is exact. */
+  private static scaled(offer: X402PaymentOffer): bigint {
+    const exponent = 18 - offer.decimals;
+    const value = BigInt(offer.amount);
+    return exponent >= 0
+      ? value * 10n ** BigInt(exponent)
+      : value / 10n ** BigInt(-exponent);
+  }
+
+  /** Flatten whatever `HeadersInit` shape the caller passed into a record. */
+  private static headersToRecord(init?: HeadersInit): Record<string, string> {
+    if (!init) return {};
+    if (Array.isArray(init)) return Object.fromEntries(init);
+    const maybeHeaders = init as Headers;
+    if (typeof maybeHeaders.forEach === 'function') {
+      const out: Record<string, string> = {};
+      maybeHeaders.forEach((value, key) => {
+        out[key] = value;
+      });
+      return out;
+    }
+    return { ...(init as Record<string, string>) };
   }
 
   /**
@@ -637,8 +867,13 @@ export class X402Client {
       token: token.address,
     };
 
-    // Encode as X-PAYMENT header
-    const paymentHeader = this.encodeEVMPaymentHeader(payload, chain);
+    // Encode as X-PAYMENT header. The 402 wins over the config when it spoke:
+    // `x402Version: 'auto'` means "whatever the resource asked for".
+    const paymentHeader = this.encodeEVMPaymentHeader(
+      payload,
+      chain,
+      paymentInfo.x402Version
+    );
 
     this.emit('paymentSigned', { paymentHeader });
 
@@ -659,12 +894,17 @@ export class X402Client {
     return result;
   }
 
-  private encodeEVMPaymentHeader(payload: EVMPaymentPayload, chain: ChainConfig): string {
+  private encodeEVMPaymentHeader(
+    payload: EVMPaymentPayload,
+    chain: ChainConfig,
+    versionHint?: X402Version
+  ): string {
     // Reconstruct full signature from v, r, s
     const fullSignature = payload.r + payload.s.slice(2) + payload.v.toString(16).padStart(2, '0');
 
-    // Determine version to use (default to v1 for backward compatibility)
-    const version = this.config.x402Version === 2 ? 2 : 1;
+    // Determine version to use. A hint read off the resource's own 402 wins;
+    // with no hint we fall back to the config (default v1 for compatibility).
+    const version = versionHint ?? (this.config.x402Version === 2 ? 2 : 1);
 
     // Build the payload data
     const payloadData: X402EVMPayload = {

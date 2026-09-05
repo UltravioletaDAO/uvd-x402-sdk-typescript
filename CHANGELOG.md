@@ -4,6 +4,61 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.82.0] - 2026-09-05
+
+### Added
+
+- **`X402Client.fetch()` — the buyer loop.** This client could sign a payment
+  and never ask for one. The half that was missing is the one every consumer
+  in the stack wrote by hand: probe the URL, read the `402`, pick an offer,
+  sign, retry with the header. Python shipped it first (`client.fetch`); this
+  is the TypeScript side of that parity.
+
+  ```ts
+  await client.connectWithPrivateKey(key, 'base');
+  const res = await client.fetch('https://api.example.com/data', {
+    maxAmount: '0.05',
+  });
+  ```
+
+  **`maxAmount` is a hard ceiling, and that is the point.** Each hand-rolled
+  copy of this loop invented its own answer to "how much is too much", and the
+  cheapest answer to write is *none*. A `402` asking for more than the ceiling
+  throws `PAYMENT_EXCEEDS_MAX` and signs nothing — the probe happened, the
+  paid retry did not. Omitting `maxAmount` means paying whatever is asked,
+  which is only safe for a resource you already trust.
+
+  What the loop handles:
+
+  - **Both `402` dialects.** v1 spells the price `maxAmountRequired` and names
+    the chain `base`; v2 spells it `amount` and names it `eip155:8453`. A buyer
+    that learned one dialect silently ignores half the offers. The non-spec
+    shape, where a lone requirement sits at the top level with no `accepts`
+    array, is read too.
+  - **The version the resource asked for.** `x402Version: 'auto'` was the
+    documented default and detected nothing — every header came out v1. The
+    version is now read off the challenge and carried down through
+    `PaymentInfo.x402Version`, so a v2 resource gets a v2 envelope. A v2 retry
+    carries the payload under **both** `X-PAYMENT` and `PAYMENT-SIGNATURE`
+    (identical base64), so the caller never has to guess which name the
+    resource implemented.
+  - **Decimals per chain when comparing offers.** BSC USDC has 18 decimals and
+    everyone else's has 6. Reading every atomic price at 6 makes a BSC offer
+    look 10^12 times cheaper than it is, and the "cheapest" offer is chosen
+    wrong. Each offer is read at its own token's decimals and compared at a
+    common scale with `BigInt`, so the comparison is exact rather than
+    floating-point.
+  - **Chain switching.** The chosen offer's chain is switched to before signing.
+  - **Passthrough.** A non-`402` response — a first-try `200`, a `500`, a `404`
+    — is returned untouched and unsigned. This pays only when payment is what
+    was asked for.
+
+  New: `X402FetchOptions` (with `select` to override the cheapest-offer
+  default, and `fetchImpl` to inject a `fetch`), `X402PaymentOffer` (a
+  normalised offer), the `PaymentExceedsMax` / `NoAcceptablePayment` error
+  codes, and `PaymentInfo.x402Version`. All additive; no existing call changes
+  shape.
+
 ## [2.80.0] - 2026-09-04
 
 ### Fixed
