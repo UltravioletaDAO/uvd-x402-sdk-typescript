@@ -68,13 +68,65 @@ export const ESCROW_DEPOSIT_LIMIT_USD = 100;
 
 /**
  * StaticFeeCalculator: canonical 13% flat fee. The signed maxFeeBps MUST
- * cover it or the on-chain release reverts.
+ * cover it or the on-chain authorize reverts (`FeeBoundsIncompatible`) — the
+ * guard runs on the way IN, so a bound that is too low never opens the escrow
+ * at all. It is not a way to pay less.
+ *
+ * This is a CEILING TO PLAN AGAINST, not a reading of any one deployment. The
+ * operator fee is an immutable of each PaymentOperator instance, chosen from
+ * `OperatorConfig.feeCalculator` when the factory deploys it, so two operators
+ * on the same chain can charge differently and neither is knowable from here.
+ *
+ * Measured 2026-09-05: every `operator` address in {@link ESCROW_CONTRACTS} that
+ * answered is the PaymentOperatorFactory, not a deployed operator — it exposes
+ * `ESCROW()` and `operators(bytes32)` and reverts on `FEE_CALCULATOR()`,
+ * `FEE_RECIPIENT()` and `release(...)`. Confirmed on Base mainnet, Base Sepolia
+ * and Arbitrum, and matched by x402-rs `docs/X402R_MULTICHAIN_DEPLOYMENT.md`,
+ * which labels those same addresses "PaymentOperatorFactory".
+ *
+ *   cast call 0x3D0837fF8Ea36F417261577b9BA568400A840260 \
+ *     "ESCROW()(address)" --rpc-url https://mainnet.base.org
+ *   # 0xb9488351E48b23D798f24e8174514F28B741Eb4f   (factory immutable)
+ *   cast call 0x3D0837fF8Ea36F417261577b9BA568400A840260 \
+ *     "FEE_CALCULATOR()(address)" --rpc-url https://mainnet.base.org
+ *   # execution reverted                            (operator-only getter)
+ *
+ * So read the fee off the operator you were actually given — the marketplace
+ * publishes it in {@link EscrowNetworkConfig} — and pass `max_fee_bps` when it
+ * differs. This constant is only the default bound.
  */
 export const OPERATOR_FEE_BPS = 1300;
 
-/** Fee-bound defaults for optional config keys only — never for the domain. */
-const DEFAULT_MIN_FEE_BPS = 0;
-const DEFAULT_MAX_FEE_BPS = 1800;
+/**
+ * Hard cap the shared ProtocolFeeConfig puts on the PROTOCOL's slice, mirrored
+ * from `ProtocolFeeConfig.MAX_PROTOCOL_FEE_BPS` (x402-rs
+ * `contracts/src/plugins/fees/ProtocolFeeConfig.sol`). `getProtocolFeeBps`
+ * clamps to it, so no deployment can ever charge more than this on top of the
+ * operator's own fee.
+ *
+ * Measured on Base mainnet 2026-09-05 against the ProtocolFeeConfig the SDK
+ * ships for chain 8453 (`0x59314674BAbb1a24Eb2704468a9cCdD50668a1C6`):
+ *
+ *   cast call 0x59314674BAbb1a24Eb2704468a9cCdD50668a1C6 \
+ *     "MAX_PROTOCOL_FEE_BPS()(uint256)" --rpc-url https://mainnet.base.org
+ *   # 500
+ *   cast call 0x59314674BAbb1a24Eb2704468a9cCdD50668a1C6 \
+ *     "calculator()(address)" --rpc-url https://mainnet.base.org
+ *   # 0x0000000000000000000000000000000000000000  -> protocol fee is 0 today
+ */
+export const MAX_PROTOCOL_FEE_BPS = 500;
+
+/**
+ * Fee-bound defaults for optional config keys only — never for the domain.
+ *
+ * `PaymentOperator` charges `protocolFee + operatorFee` and compares that SUM
+ * against the signed `maxFeeBps` (`_calculateFees`, then the guard in
+ * `authorize`/`charge`). So the only bound guaranteed never to revert is the
+ * canonical operator fee plus the protocol's hard cap — derived here rather
+ * than re-typed, so the two can never drift apart.
+ */
+export const DEFAULT_MIN_FEE_BPS = 0;
+export const DEFAULT_MAX_FEE_BPS = OPERATOR_FEE_BPS + MAX_PROTOCOL_FEE_BPS;
 
 /**
  * EIP-712 type for the escrow flow. The token collector pulls the funds, so
