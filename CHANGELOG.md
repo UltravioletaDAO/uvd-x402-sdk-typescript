@@ -4,6 +4,41 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.83.0] - 2026-09-05
+
+### Added
+
+- **`generatePaymentOptions()` can offer more than one stablecoin per chain.**
+  It emitted `chain.usdc` and nothing else, so a chain the registry knows two
+  stablecoins for still produced exactly one option — measured against the
+  published 2.81.0 build, `generatePaymentOptions([base], '5')` returned 1
+  entry while `base.tokens` listed `['usdc', 'eurc']`. tumblrfi calls it from
+  `tokens.ts` and `x402.ts` believing it is multi-token; it never was.
+
+  ```ts
+  // Dollars only — the default, and byte-for-byte what it did before.
+  generatePaymentOptions([base], '5.00');
+
+  // Dollars or euros, both genuinely accepted.
+  generatePaymentOptions([base], '5.00', undefined, ['usdc', 'eurc']);
+  ```
+
+  **The new `tokens` parameter is opt-in, and that is a money decision.** The
+  obvious fix — emit every token the registry knows — is a regression, not a
+  fix: this array becomes the `accepts` of a `402`, so every entry is a
+  currency the seller has publicly agreed to be paid in, at `amount` units of
+  it. A seller who priced in dollars and silently started accepting `5` EURC
+  would be selling at a 1:1 EUR/USD rate nobody agreed to. So the caller names
+  the tokens it accepts, `amount` is read as units of each named token with no
+  conversion between them, and the default stays `['usdc']`.
+
+  Each token is priced in **its own** decimals rather than the chain's USDC
+  decimals — the same distinction that matters on BSC, where USDC has 18.
+  A named token a chain does not have is skipped rather than invented.
+
+  Verified unchanged for existing callers: over the 25 x402-enabled chains the
+  default still returns 25 options, all USDC.
+
 ## [2.82.0] - 2026-09-05
 
 ### Added
