@@ -22,6 +22,7 @@ import type {
   X402Version,
   X402PaymentOffer,
   X402FetchOptions,
+  WalletAdapter,
 } from '../types';
 import { X402Error, DEFAULT_CONFIG } from '../types';
 import {
@@ -71,6 +72,12 @@ export class X402Client {
   private currentChainId: number | null = null;
   private currentNetwork: NetworkType | null = null;
   private currentChainName: string | null = null;
+  /**
+   * Non-EVM wallet, when one is connected. EVM keeps using `provider`/`signer`
+   * because those are ethers-typed; every other network type talks through the
+   * {@link WalletAdapter} contract instead.
+   */
+  private walletAdapter: WalletAdapter | null = null;
 
   // Event emitter
   private eventHandlers: Map<X402Event, Set<X402EventHandler<X402Event>>> = new Map();
@@ -127,11 +134,12 @@ export class X402Client {
     switch (chain.networkType) {
       case 'evm':
         return this.connectEVMWallet(chain);
-      case 'solana':
-        throw new X402Error(
-          'Solana support requires importing from "uvd-x402-sdk/solana"',
-          'CHAIN_NOT_SUPPORTED'
-        );
+      case 'svm':
+        // The registry says 'svm' for Solana and Fogo; this used to read
+        // `case 'solana'`, which no chain has ever carried, so every SVM
+        // caller fell through to `default:`. `NetworkType` allows both
+        // spellings, so the compiler never caught it.
+        return this.connectSVMWallet(chain);
       case 'stellar':
         throw new X402Error(
           'Stellar support requires importing from "uvd-x402-sdk/stellar"',
@@ -194,6 +202,14 @@ export class X402Client {
    * Disconnect the current wallet
    */
   async disconnect(): Promise<void> {
+    if (this.walletAdapter) {
+      try {
+        await this.walletAdapter.disconnect();
+      } catch {
+        // A wallet that is already gone must not block local teardown.
+      }
+      this.walletAdapter = null;
+    }
     this.provider = null;
     this.signer = null;
     this.connectedAddress = null;
@@ -275,6 +291,9 @@ export class X402Client {
         case 'evm':
           return await this.createEVMPayment(paymentInfo, chain);
         default:
+          if (this.walletAdapter?.networkType === chain.networkType) {
+            return await this.createAdapterPayment(paymentInfo, chain);
+          }
           throw new X402Error(
             `Payment creation for ${chain.networkType} requires the appropriate provider`,
             'CHAIN_NOT_SUPPORTED'
@@ -537,6 +556,9 @@ export class X402Client {
       case 'evm':
         return this.getEVMBalance(chain);
       default:
+        if (this.walletAdapter?.networkType === chain.networkType) {
+          return this.walletAdapter.getBalance(chain);
+        }
         throw new X402Error(
           `Balance check for ${chain.networkType} requires the appropriate provider`,
           'CHAIN_NOT_SUPPORTED'
@@ -640,6 +662,37 @@ export class X402Client {
   // ============================================================================
   // PRIVATE - EVM Wallet Connection
   // ============================================================================
+
+  /**
+   * Connect an SVM chain (Solana, Fogo) through the Phantom-backed provider.
+   *
+   * The provider is imported lazily: `@solana/web3.js` and `@solana/spl-token`
+   * are OPTIONAL peer dependencies, so an EVM-only consumer must never pay for
+   * them at module load. They are resolved only once someone actually asks for
+   * an SVM chain.
+   */
+  private async connectSVMWallet(chain: ChainConfig): Promise<string> {
+    const { SVMProvider } = await import('../providers/solana');
+    const adapter = new SVMProvider();
+
+    // SVMProvider.connect() takes no chain: one Phantom session serves every
+    // SVM chain, and the chain is passed per call via chainConfig.
+    const address = await adapter.connect();
+
+    this.walletAdapter = adapter;
+    this.provider = null;
+    this.signer = null;
+    this.connectedAddress = address;
+    this.currentChainId = chain.chainId;
+    this.currentNetwork = chain.networkType;
+    this.currentChainName = chain.name;
+
+    const state = this.getState();
+    this.emit('connect', state);
+    this.log('SVM wallet connected', { address, chain: chain.name });
+
+    return address;
+  }
 
   private async connectEVMWallet(chain: ChainConfig): Promise<string> {
     // Check for injected provider
@@ -890,6 +943,55 @@ export class X402Client {
 
     this.emit('paymentCompleted', result);
     this.log('Payment created successfully', { network: chain.name, from });
+
+    return result;
+  }
+
+  /**
+   * Build a payment through a non-EVM {@link WalletAdapter}.
+   *
+   * The adapter signs and returns its own payload; encoding that payload into
+   * the X-PAYMENT header is network-specific, so it stays with the provider
+   * that produced it. Version resolution matches the EVM path exactly: a hint
+   * read off the resource's own 402 wins over the client config.
+   */
+  private async createAdapterPayment(
+    paymentInfo: PaymentInfo,
+    chain: ChainConfig
+  ): Promise<PaymentResult> {
+    const adapter = this.walletAdapter;
+    if (!adapter) {
+      throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');
+    }
+
+    const encode = (adapter as { encodePaymentHeader?: (p: string, c: ChainConfig, v: X402Version) => string })
+      .encodePaymentHeader;
+    if (typeof encode !== 'function') {
+      throw new X402Error(
+        `The ${adapter.name} adapter cannot encode an X-PAYMENT header`,
+        'CHAIN_NOT_SUPPORTED'
+      );
+    }
+
+    const signed = await adapter.signPayment(paymentInfo, chain);
+    const version = paymentInfo.x402Version ?? (this.config.x402Version === 2 ? 2 : 1);
+    const paymentHeader = encode.call(adapter, signed, chain, version);
+
+    this.emit('paymentSigned', { paymentHeader });
+
+    const result: PaymentResult = {
+      success: true,
+      paymentHeader,
+      headers: {
+        'X-PAYMENT': paymentHeader,
+        'PAYMENT-SIGNATURE': paymentHeader,
+      },
+      network: chain.name,
+      payer: adapter.getAddress() ?? undefined,
+    };
+
+    this.emit('paymentCompleted', result);
+    this.log('Payment created successfully', { network: chain.name, adapter: adapter.name });
 
     return result;
   }

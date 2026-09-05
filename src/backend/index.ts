@@ -71,7 +71,13 @@ import type {
   X402Version,
 } from '../types';
 import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
-import { REVIEW_WINDOW_SEC, REFUND_WINDOW_SEC } from '../escrow-preauth';
+import {
+  REVIEW_WINDOW_SEC,
+  REFUND_WINDOW_SEC,
+  DEFAULT_MIN_FEE_BPS,
+  DEFAULT_MAX_FEE_BPS,
+  OPERATOR_FEE_BPS,
+} from '../escrow-preauth';
 import { getChainByName } from '../chains';
 import {
   DEFAULT_RETRY_AFTER_SECONDS,
@@ -1768,12 +1774,95 @@ function createVerifiedPaymentState(
   };
 }
 
+/** The body of a no-verdict refusal. See {@link buildUnavailableResponse}. */
+export interface UnavailableBody {
+  /** Human-readable summary. Never says the payment was rejected. */
+  error: string;
+  /** The facilitator's own reason, under whichever field it populated. */
+  reason?: string;
+  /** Always `true` — this response exists to say "no verdict", not "refused". */
+  retryable: true;
+  /** Whole seconds to wait, mirroring the `Retry-After` header. */
+  retryAfterSeconds: number;
+  /**
+   * `false` for `forward_failed` and for a bare timeout: the write may already
+   * have landed, so the caller must reconcile before resending.
+   */
+  safeToReplay: boolean;
+}
+
+/** A framework-agnostic HTTP response. See {@link buildUnavailableResponse}. */
+export interface UnavailableResponse {
+  /** Always 503. */
+  status: 503;
+  /** `Retry-After`, ready to spread onto any framework's header setter. */
+  headers: Record<string, string>;
+  body: UnavailableBody;
+  /** Same value as the header, already clamped to a whole second >= 1. */
+  retryAfterSeconds: number;
+}
+
+/**
+ * Build the answer to a facilitator refusal that reached NO VERDICT.
+ *
+ * `verify` returns invalid for two different things: a payment that was
+ * REJECTED, and a facilitator that never reached a verdict (`retryable`).
+ * Answering `402` in the second case tells the buyer to sign a NEW
+ * authorization while the first one is still live and still spendable by the
+ * facilitator — so the buyer pays twice. The correct answer is `503` plus
+ * `Retry-After`, which asks for the SAME credential again.
+ *
+ * This returns plain data — status, headers, body — so a handler written
+ * without Express (Lambda, Hono, a Next route, Fastify, a bare `Response`) can
+ * answer correctly without re-deriving the rule. The Express and Hono
+ * middlewares in this SDK both build their reply from it.
+ *
+ * @param message - Summary for the `error` field, e.g. `'Payment verification unavailable'`
+ * @param failure - The facilitator result. Only its failure fields are read.
+ *
+ * @example Lambda / any framework
+ * ```ts
+ * const verifyResult = await client.verify(payment, requirements);
+ * if (!verifyResult.isValid && verifyResult.retryable) {
+ *   const r = buildUnavailableResponse('Payment verification unavailable', verifyResult);
+ *   return { statusCode: r.status, headers: r.headers, body: JSON.stringify(r.body) };
+ * }
+ * ```
+ *
+ * @example Web `Response`
+ * ```ts
+ * const r = buildUnavailableResponse('Payment settlement unavailable', settleResult);
+ * return Response.json(r.body, { status: r.status, headers: r.headers });
+ * ```
+ */
+export function buildUnavailableResponse(
+  message: string,
+  failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
+): UnavailableResponse {
+  const seconds = Math.max(1, Math.ceil(failure.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS));
+  return {
+    status: 503,
+    headers: { 'Retry-After': String(seconds) },
+    body: {
+      error: message,
+      reason: failure.reason ?? failure.invalidReason ?? failure.error,
+      retryable: true,
+      retryAfterSeconds: seconds,
+      safeToReplay: failure.safeToReplay === true,
+    },
+    retryAfterSeconds: seconds,
+  };
+}
+
 /**
  * Answer a no-verdict facilitator refusal as 503 + `Retry-After`.
  *
  * The body repeats the facilitator's own `reason` and a `retryable` flag so a
  * client that only reads JSON still learns the payment was not rejected. The
  * header is a whole-second integer, as RFC 9110 requires.
+ *
+ * Express-shaped wrapper over {@link buildUnavailableResponse}, which is the
+ * public, framework-agnostic form of the same decision.
  */
 function respondUnavailable(
   res: {
@@ -1785,19 +1874,10 @@ function respondUnavailable(
   message: string,
   failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
 ): void {
-  const seconds = Math.max(1, Math.ceil(failure.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS));
-  const body = {
-    error: message,
-    reason: failure.reason ?? failure.invalidReason ?? failure.error,
-    retryable: true,
-    retryAfterSeconds: seconds,
-    // False for `forward_failed` and for a bare timeout: the write may already
-    // have landed, so the caller must reconcile before resending.
-    safeToReplay: failure.safeToReplay === true,
-  };
-  const staged = res.status(503);
+  const { status, headers, body } = buildUnavailableResponse(message, failure);
+  const staged = res.status(status);
   if (typeof staged.set === 'function') {
-    staged.set({ 'Retry-After': String(seconds) }).json(body);
+    staged.set(headers).json(body);
     return;
   }
   staged.json(body);
@@ -1987,18 +2067,11 @@ function honoUnavailable(
   message: string,
   failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
 ): unknown {
-  const seconds = Math.max(1, Math.ceil(failure.retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS));
-  c.header?.('Retry-After', String(seconds));
-  return c.json(
-    {
-      error: message,
-      reason: failure.reason ?? failure.invalidReason ?? failure.error,
-      retryable: true,
-      retryAfterSeconds: seconds,
-      safeToReplay: failure.safeToReplay === true,
-    },
-    503,
-  );
+  const { status, headers, body } = buildUnavailableResponse(message, failure);
+  for (const [name, value] of Object.entries(headers)) {
+    c.header?.(name, value);
+  }
+  return c.json(body, status);
 }
 
 export function createHonoMiddleware(options: HonoMiddlewareOptions) {
@@ -5429,6 +5502,15 @@ export const DEPOSIT_LIMIT_USDC = '100000000'; // $100 in atomic units (6 decima
  * Default facilitator request timeout per chain in milliseconds.
  * Ethereum L1 (~12s blocks) needs much longer than L2s (~2s blocks).
  * Timeout chain: Client > SDK > Facilitator. The facilitator uses 900s for Ethereum L1.
+ *
+ * These are correct, and they are also a PRODUCT constraint worth reading before
+ * you offer a network in a checkout: Ethereum L1 is 960s against 90s for every
+ * L2 here. A buyer waiting in a browser will not wait sixteen minutes, so a
+ * human-facing flow should offer the L2s and leave L1 to agent-to-agent or
+ * batch callers that can tolerate the wait. Do not shorten this to make a
+ * checkout feel faster — the value tracks L1 block time and the facilitator's
+ * own 900s TxWatcher, and cutting it just times out a payment that was going
+ * to land.
  */
 export const ESCROW_TIMEOUT_MS: Record<number, number> = {
   1: 960_000,         // Ethereum L1: 960s (facilitator uses 900s TxWatcher)
@@ -5466,6 +5548,21 @@ export const USDC_DOMAIN_NAME: Record<number, string> = {
 /**
  * Multi-chain escrow contract addresses for the Advanced Escrow system.
  * Keyed by EVM chain ID. Source: x402r-sdk A1igator/multichain-config deployment.
+ */
+/**
+ * Per-chain escrow contract addresses.
+ *
+ * KNOWN GAP, measured 2026-09-05: the `operator` entries are
+ * PaymentOperatorFactory addresses, not deployed PaymentOperator instances.
+ * Verified on Base mainnet, Base Sepolia and Arbitrum — they answer
+ * `ESCROW()` and `operators(bytes32)` and revert on `FEE_CALCULATOR()`,
+ * `FEE_RECIPIENT()` and `release(...)` — and x402-rs
+ * `docs/X402R_MULTICHAIN_DEPLOYMENT.md` labels the same addresses
+ * "PaymentOperatorFactory". A factory has no `release`/`charge`, so the direct
+ * on-chain paths below cannot execute against these addresses as written;
+ * resolve the real operator from the marketplace's own escrow config
+ * ({@link EscrowNetworkConfig}) and pass it via `options.contracts`.
+ * See {@link OPERATOR_FEE_BPS} for the commands.
  */
 export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
   // Base Sepolia (testnet, chain 84532)
@@ -5924,7 +6021,19 @@ export class AdvancedEscrowClient {
     amount: string,
     tier: AdvancedEscrowTaskTier = 'standard',
     salt?: string,
-    opts?: { deadline?: number; reviewWindowSec?: number },
+    opts?: {
+      deadline?: number;
+      reviewWindowSec?: number;
+      /**
+       * Fee bounds to sign, in basis points. Default
+       * {@link DEFAULT_MIN_FEE_BPS} / {@link DEFAULT_MAX_FEE_BPS}. Override
+       * only against an operator whose fee you have actually read on-chain —
+       * `maxFeeBps` is a CEILING, so a value under the operator's own fee does
+       * not shave the fee, it reverts the deposit.
+       */
+      minFeeBps?: number;
+      maxFeeBps?: number;
+    },
   ): AdvancedPaymentInfo {
     const now = Math.floor(Date.now() / 1000);
     const t = TIER_TIMINGS[tier];
@@ -5964,6 +6073,28 @@ export class AdvancedEscrowClient {
       generatedSalt = '0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
+    // Fee bounds come from ONE place — the same constants `buildEscrowPreAuth`
+    // signs — because both build the same struct for the same contracts. This
+    // path used to hardcode `maxFeeBps: 800`, below the SDK's own canonical
+    // OPERATOR_FEE_BPS (1300). That is not a cheaper fee: `PaymentOperator`
+    // compares protocolFee + operatorFee against this ceiling and reverts with
+    // `FeeBoundsIncompatible` when it does not fit, so the deposit never opens
+    // and nobody is paid.
+    const minFeeBps = opts?.minFeeBps ?? DEFAULT_MIN_FEE_BPS;
+    const maxFeeBps = opts?.maxFeeBps ?? DEFAULT_MAX_FEE_BPS;
+    if (maxFeeBps < minFeeBps) {
+      throw new Error(`maxFeeBps=${maxFeeBps} is below minFeeBps=${minFeeBps}`);
+    }
+    if (maxFeeBps < OPERATOR_FEE_BPS) {
+      // Fail here, where the caller can still choose, rather than on-chain
+      // after the payer has signed. Same guard buildEscrowPreAuth applies.
+      throw new Error(
+        `maxFeeBps=${maxFeeBps} cannot cover the operator's ${OPERATOR_FEE_BPS} ` +
+          `bps fee — the on-chain authorize would revert with FeeBoundsIncompatible. ` +
+          `Read the fee off your operator before overriding it.`,
+      );
+    }
+
     return {
       operator: this.contracts.operator,
       receiver,
@@ -5972,8 +6103,8 @@ export class AdvancedEscrowClient {
       preApprovalExpiry: now + t.pre,
       authorizationExpiry,
       refundExpiry,
-      minFeeBps: 0,
-      maxFeeBps: 800,
+      minFeeBps,
+      maxFeeBps,
       feeReceiver: this.contracts.operator,
       salt: generatedSalt,
     };

@@ -343,6 +343,9 @@ export {
   ESCROW_TIER_WINDOWS,
   ESCROW_DEPOSIT_LIMIT_USD,
   OPERATOR_FEE_BPS,
+  MAX_PROTOCOL_FEE_BPS,
+  DEFAULT_MIN_FEE_BPS,
+  DEFAULT_MAX_FEE_BPS,
 } from './escrow-preauth';
 export type {
   EscrowNetworkConfig,

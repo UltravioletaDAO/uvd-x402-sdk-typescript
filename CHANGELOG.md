@@ -4,6 +4,111 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.84.0] - 2026-09-05
+
+Three defects found by the first real client audit of this SDK before it picked
+a rail (a limousine company integrating x402). All three are upstream-first:
+the project reported them, the SDK fixes them, and only then does the project
+consume the fix.
+
+### Added
+
+- **`buildUnavailableResponse()` — the no-verdict refusal, without a framework.**
+  `verify` returns invalid for two different things: a payment that was
+  REJECTED, and a facilitator that never reached a verdict (`retryable`).
+  Answering `402` in the second case tells the buyer to sign a NEW
+  authorization while the first one is still live and still spendable — **the
+  buyer pays twice.** The correct answer is `503` + `Retry-After`, which asks
+  for the SAME credential again.
+
+  The SDK already got this right, but only inside two private functions, one
+  per framework (`respondUnavailable` for Express, `honoUnavailable` for Hono).
+  An integrator writing the handler by hand — Lambda, a Next route, Fastify, a
+  bare `Response` — could reach neither, so they re-derived the rule, and
+  re-derived it wrong. It is now public, framework-agnostic data, and **both
+  built-in middlewares build their reply from it**, so the two can no longer
+  drift apart.
+
+  ```ts
+  const verifyResult = await client.verify(payment, requirements);
+  if (!verifyResult.isValid && verifyResult.retryable) {
+    const r = buildUnavailableResponse('Payment verification unavailable', verifyResult);
+    return { statusCode: r.status, headers: r.headers, body: JSON.stringify(r.body) };
+  }
+  ```
+
+  Also exported: the `UnavailableResponse` and `UnavailableBody` types.
+
+- **`X402Client.connect()` now routes SVM chains to the Phantom provider.**
+  The registry declares Solana and Fogo as `networkType: 'svm'`, but `connect()`
+  switched on `case 'solana'` — a value no chain has ever carried. The branch was
+  dead, so Solana fell through to `default:` and the caller got
+  `"Unknown network type for chain solana"`, not even that branch's own message.
+  `NetworkType` lists **both** `'svm'` and `'solana'`, which is why the compiler
+  never flagged it. The provider it should have reached, `SVMProvider`, with
+  Phantom detection and gasless USDC transfers, was in the SDK the whole time.
+
+  `disconnect()`, `getBalance()` and `createPayment()` route through the adapter
+  too, so a connected SVM wallet is not a dead end. `@solana/web3.js` and
+  `@solana/spl-token` stay OPTIONAL peer dependencies: the provider is imported
+  lazily, only once an SVM chain is actually requested, so EVM-only consumers
+  pay nothing.
+
+- **`MAX_PROTOCOL_FEE_BPS`, `DEFAULT_MIN_FEE_BPS`, `DEFAULT_MAX_FEE_BPS`** are
+  exported, and `buildPaymentInfo` accepts `minFeeBps` / `maxFeeBps` overrides.
+
+### Fixed
+
+- **The escrow fee bound had two sources that disagreed, and one of them could
+  not open a deposit.** `escrow-preauth.ts` declares `OPERATOR_FEE_BPS = 1300`
+  and refuses to sign a bound that cannot cover it; `AdvancedEscrowClient`
+  hardcoded `maxFeeBps: 800`. That is not a cheaper fee — `PaymentOperator`
+  compares `protocolFee + operatorFee` against the signed ceiling and reverts
+  with `FeeBoundsIncompatible` **on the way in**, so against an operator
+  charging 13% the escrow never opens and nobody is paid.
+
+  There is now one source, and it is **derived rather than typed**:
+
+  ```ts
+  DEFAULT_MAX_FEE_BPS = OPERATOR_FEE_BPS + MAX_PROTOCOL_FEE_BPS  // 1300 + 500
+  ```
+
+  500 is `ProtocolFeeConfig.MAX_PROTOCOL_FEE_BPS`, the on-chain hard cap on the
+  protocol's slice, read live on Base mainnet. Because the contract compares the
+  SUM, that sum is the only bound guaranteed never to revert. `buildPaymentInfo`
+  now also throws when an override cannot cover the operator fee — where the
+  caller can still react, instead of on-chain after the payer signed.
+
+  **This changes a signed value: `AdvancedEscrowClient`'s default `maxFeeBps`
+  goes 800 → 1800.** `maxFeeBps` is a ceiling, so this widens what the payer
+  accepts. It is the value this SDK already called canonical, and 800 could not
+  transact at all against a 13% operator, but it is a money-path change and is
+  called out here on purpose.
+
+### Documented
+
+- **The `operator` addresses in `ESCROW_CONTRACTS` are factories, not
+  operators.** Measured 2026-09-05 on Base mainnet, Base Sepolia and Arbitrum:
+  they answer `ESCROW()` and `operators(bytes32)` and revert on
+  `FEE_CALCULATOR()`, `FEE_RECIPIENT()` and `release(...)` — the exact shape of
+  `PaymentOperatorFactory`, which x402-rs `docs/X402R_MULTICHAIN_DEPLOYMENT.md`
+  labels them as. A factory has no `release`/`charge`, so the direct on-chain
+  paths cannot execute against these addresses as written. Resolve the real
+  operator from the marketplace's escrow config and pass it via
+  `options.contracts`. **Documented, not fixed** — changing how the operator is
+  resolved is a money-path redesign, not a defect fix.
+
+- **The protocol fee is 0 bps today.** Base mainnet `ProtocolFeeConfig`
+  `calculator()` is the zero address and no change is queued, so
+  `getProtocolFeeBps` returns 0. The operator fee remains per-instance and
+  unknowable from the SDK: it is an immutable chosen from
+  `OperatorConfig.feeCalculator` when the factory deploys an operator.
+
+- **Ethereum L1's 960s escrow timeout is a product constraint**, not just a
+  number: 960s against 90s for every L2. A buyer will not wait sixteen minutes
+  in a browser, so human-facing checkouts should offer the L2s. Noted at the
+  definition of `ESCROW_TIMEOUT_MS`, where the network is chosen.
+
 ## [2.83.0] - 2026-09-05
 
 ### Added
