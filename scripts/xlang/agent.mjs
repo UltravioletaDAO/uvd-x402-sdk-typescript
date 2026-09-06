@@ -24,6 +24,8 @@
  *                                            requirementsNetwork,pin,payload,requirements,
  *                                            payloadV2?}]}
  *           {"op":"price_network","cases":[{id,network,amount,payTo}]}
+ *           {"op":"sign_lifecycle","cases":[{id,action,paymentInfo,payer,amount,
+ *                                            chainId,deadline,nonce,privateKey}]}
  *   stdout  {"runtime":"typescript", ...}   exit 0
  *           {"error":"…"}                   exit 1
  */
@@ -58,6 +60,7 @@ const sdk = await import(pathToFileURL(DIST).href);
 const root = await import(pathToFileURL(ROOT_DIST).href);
 
 const {
+  buildLifecycleAuth,
   buildPaymentRequirements,
   buildSettleRequestForVersion,
   buildVerifyRequestForVersion,
@@ -271,6 +274,51 @@ async function priceNetwork(cases) {
   return { runtime: 'typescript', results };
 }
 
+/**
+ * Sign an escrow lifecycle order (`release` / `refundInEscrow`).
+ *
+ * Phases 1-7 are all ERC-8128 and pricing: not one of them touches escrow, so
+ * a TypeScript that signed a DIFFERENT `LifecycleOrder` than Python would have
+ * left every check here green. The order decides who may move money that is
+ * already deposited, so "the two SDKs agree" has to be measured, not assumed.
+ *
+ * The key comes from the driver and is the synthetic 0x11*32 test key; it has
+ * never held funds.
+ */
+async function signLifecycle(cases) {
+  const { Wallet } = await import('ethers');
+  const results = [];
+  for (const c of cases) {
+    try {
+      const wallet = new Wallet(c.privateKey);
+      const signer = {
+        getAddress: () => wallet.address,
+        async signTypedData(typedData) {
+          const { domain, types, message } = JSON.parse(typedData);
+          const clean = { ...types };
+          delete clean['EIP712Domain'];
+          return { signature: await wallet.signTypedData(domain, clean, message) };
+        },
+      };
+      const auth = await buildLifecycleAuth({
+        action: c.action,
+        paymentInfo: c.paymentInfo,
+        payer: c.payer,
+        amount: c.amount,
+        chainId: c.chainId,
+        wallet: signer,
+        deadline: c.deadline,
+        nonce: c.nonce,
+        now: c.now,
+      });
+      results.push({ id: c.id, ...auth });
+    } catch (error) {
+      results.push({ id: c.id, error: String(error?.message ?? error) });
+    }
+  }
+  return { runtime: 'typescript', results };
+}
+
 try {
   const request = JSON.parse(await readStdin());
   let response;
@@ -279,6 +327,7 @@ try {
   else if (request.op === 'verify') response = await verify(request.cases);
   else if (request.op === 'build_envelope') response = await buildEnvelope(request.cases);
   else if (request.op === 'price_network') response = await priceNetwork(request.cases);
+  else if (request.op === 'sign_lifecycle') response = await signLifecycle(request.cases);
   else die(`unknown op: ${JSON.stringify(request.op)}`);
   process.stdout.write(JSON.stringify(response));
 } catch (error) {
