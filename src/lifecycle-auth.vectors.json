@@ -1,0 +1,28 @@
+{
+  "_comment": "Deterministic vector for the signed escrow lifecycle order (LifecycleOrder). Byte-parity anchor between the TypeScript SDK (src/lifecycle-auth.ts), the Python SDK (uvd_x402_sdk.escrow_signing.build_lifecycle_auth, 0.78.0, test_vector_fijado_para_el_gemelo_typescript) and the facilitator (x402-rs src/payment_operator/lifecycle_auth.rs, PR #21, which is the source of truth). The key is 32 bytes of 0x11 -- a synthetic test key that never held funds and never will.",
+  "privateKey": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "signer": "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+  "action": "release",
+  "chainId": 8453,
+  "amount": "1000000",
+  "deadline": 1757000600,
+  "nonce": "0x0101010101010101010101010101010101010101010101010101010101010101",
+  "payer": "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A",
+  "paymentInfo": {
+    "operator": "0x271f9fa7f8907aCf178CCFB470076D9129D8F0Eb",
+    "receiver": "0x2222222222222222222222222222222222222222",
+    "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "maxAmount": "1000000",
+    "preApprovalExpiry": 1757003600,
+    "authorizationExpiry": 1757007200,
+    "refundExpiry": 1759592000,
+    "minFeeBps": 0,
+    "maxFeeBps": 1300,
+    "feeReceiver": "0xaE07cEB6b395BC685a776a0b4c489E8d9cE9A6ad",
+    "salt": "0x0000000000000000000000000000000000000000000000000000000000003039"
+  },
+  "_saltAsSignedInteger": "12345",
+  "digest": "0x3dbd8a90a80785131a198a685f9f7400b1bf9a48d998e3aa1853abae56921918",
+  "signature": "0x78fe143886ee329e235cd7735e948f50ecd2ef32b20a4c88c46767cdd63b33ca77553f16c73adacf754e34b2cc988137fd77b843649d990c9a1a5001b28a13a71c",
+  "_typeString": "LifecycleOrder(string action,uint256 amount,uint256 deadline,bytes32 nonce,PaymentInfo paymentInfo)PaymentInfo(address operator,address payer,address receiver,address token,uint120 maxAmount,uint48 preApprovalExpiry,uint48 authorizationExpiry,uint48 refundExpiry,uint16 minFeeBps,uint16 maxFeeBps,address feeReceiver,uint256 salt)"
+}

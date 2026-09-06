@@ -907,6 +907,156 @@ for (const c of PRICE_CASES) {
   );
 }
 
+// -- phase 8: THE ESCROW LIFECYCLE ORDER -------------------------------------
+//
+// Who may move money that is ALREADY deposited?
+//
+// Phases 1-7 are ERC-8128 signatures, presets, verdicts, envelopes and prices.
+// Not one of them touches escrow. So when both SDKs learned to sign the
+// `LifecycleOrder` that gates `release` and `refundInEscrow`, a TypeScript that
+// signed a DIFFERENT struct than Python -- one reordered field, a `salt` signed
+// as a hex string instead of a uint256, a domain carrying a `verifyingContract`
+// that should not be there -- would have left every check above green, while
+// every order it emitted was rejected by the facilitator as `bad_signature`,
+// with no symptom the caller can see.
+//
+// This is the one place in this file where the two runtimes must produce the
+// SAME BYTES rather than merely agree on a verdict: the digest is over a struct
+// whose field ORDER is part of its type hash, and the facilitator recovers one
+// address from it. Both SDKs sign the same orders here, live, each in its own
+// process, and the signatures are compared to each other AND to the vector that
+// the facilitator's own `lifecycle_auth.rs` fixes.
+//
+// The key is the synthetic 0x11*32 test key. It has never held funds.
+console.log('');
+console.log('PHASE 8 - the escrow lifecycle order: both SDKs sign the same bytes');
+
+const LIFECYCLE_VECTOR = JSON.parse(
+  readFileSync(join(REPO, 'src', 'lifecycle-auth.vectors.json'), 'utf8')
+);
+
+const LIFECYCLE_CASES = [
+  {
+    id: 'release/the-pinned-vector',
+    action: 'release',
+    paymentInfo: LIFECYCLE_VECTOR.paymentInfo,
+    payer: LIFECYCLE_VECTOR.payer,
+    amount: LIFECYCLE_VECTOR.amount,
+    chainId: LIFECYCLE_VECTOR.chainId,
+    deadline: LIFECYCLE_VECTOR.deadline,
+    nonce: LIFECYCLE_VECTOR.nonce,
+    now: LIFECYCLE_VECTOR.deadline - 60,
+    privateKey: LIFECYCLE_VECTOR.privateKey,
+    expectSignature: LIFECYCLE_VECTOR.signature,
+  },
+  {
+    // The partial settle: amount != maxAmount. The pinned vector cannot tell
+    // apart an SDK that signs the amount SENT from one that signs maxAmount,
+    // because in that vector they are equal. A stream emits one order per
+    // delta, so this is the normal case, not the edge one.
+    id: 'release/partial-amount',
+    action: 'release',
+    paymentInfo: LIFECYCLE_VECTOR.paymentInfo,
+    payer: LIFECYCLE_VECTOR.payer,
+    amount: '250000',
+    chainId: LIFECYCLE_VECTOR.chainId,
+    deadline: LIFECYCLE_VECTOR.deadline,
+    nonce: LIFECYCLE_VECTOR.nonce,
+    now: LIFECYCLE_VECTOR.deadline - 60,
+    privateKey: LIFECYCLE_VECTOR.privateKey,
+  },
+  {
+    // The other action. `action` is a signed field, so two orders over an
+    // otherwise identical escrow must differ -- an SDK that hardcoded
+    // "release" would be caught only here.
+    id: 'refundInEscrow/same-escrow',
+    action: 'refundInEscrow',
+    paymentInfo: LIFECYCLE_VECTOR.paymentInfo,
+    payer: LIFECYCLE_VECTOR.payer,
+    amount: LIFECYCLE_VECTOR.amount,
+    chainId: LIFECYCLE_VECTOR.chainId,
+    deadline: LIFECYCLE_VECTOR.deadline,
+    nonce: LIFECYCLE_VECTOR.nonce,
+    now: LIFECYCLE_VECTOR.deadline - 60,
+    privateKey: LIFECYCLE_VECTOR.privateKey,
+  },
+  {
+    // A different chainId is a different domain separator. Same everything
+    // else; the bytes have to move.
+    id: 'release/other-chain',
+    action: 'release',
+    paymentInfo: LIFECYCLE_VECTOR.paymentInfo,
+    payer: LIFECYCLE_VECTOR.payer,
+    amount: LIFECYCLE_VECTOR.amount,
+    chainId: 84532,
+    deadline: LIFECYCLE_VECTOR.deadline,
+    nonce: LIFECYCLE_VECTOR.nonce,
+    now: LIFECYCLE_VECTOR.deadline - 60,
+    privateKey: LIFECYCLE_VECTOR.privateKey,
+  },
+];
+
+const tsLifecycle = await ask(NODE, { op: 'sign_lifecycle', cases: LIFECYCLE_CASES });
+const pyLifecycle = await ask(PY, { op: 'sign_lifecycle', cases: LIFECYCLE_CASES });
+
+const tsLcById = Object.fromEntries(tsLifecycle.results.map((r) => [r.id, r]));
+const pyLcById = Object.fromEntries(pyLifecycle.results.map((r) => [r.id, r]));
+
+for (const c of LIFECYCLE_CASES) {
+  const a = tsLcById[c.id];
+  const b = pyLcById[c.id];
+
+  if (!a || !b) {
+    check(false, `both SDKs answered for ${c.id}`, `ts=${!!a} py=${!!b}`);
+    continue;
+  }
+  check(!a.error, `typescript signs ${c.id}`, a.error);
+  check(!b.error, `python signs ${c.id}`, b.error);
+  if (a.error || b.error) continue;
+
+  check(
+    a.signature === b.signature,
+    `both SDKs produce the SAME signature bytes for ${c.id}`,
+    `ts=${a.signature} py=${b.signature}`
+  );
+  check(
+    a.signer.toLowerCase() === b.signer.toLowerCase(),
+    `both SDKs claim the same signer for ${c.id}`,
+    `ts=${a.signer} py=${b.signer}`
+  );
+  check(
+    a.nonce === b.nonce && Number(a.deadline) === Number(b.deadline),
+    `both SDKs echo the same nonce and deadline for ${c.id}`,
+    `ts=${a.nonce}/${a.deadline} py=${b.nonce}/${b.deadline}`
+  );
+
+  if (c.expectSignature) {
+    // Against the facilitator's own vector, not just against each other: two
+    // SDKs that agree with each other and disagree with `lifecycle_auth.rs`
+    // are two SDKs whose every order gets rejected.
+    check(
+      a.signature === c.expectSignature,
+      `typescript matches the facilitator's pinned vector for ${c.id}`,
+      a.signature
+    );
+    check(
+      b.signature === c.expectSignature,
+      `python matches the facilitator's pinned vector for ${c.id}`,
+      b.signature
+    );
+  }
+}
+
+// Every case is a distinct order, so no two may collide. A collision means one
+// of the signed fields is not actually reaching the digest.
+const lifecycleSignatures = LIFECYCLE_CASES.map((c) => tsLcById[c.id]?.signature).filter(Boolean);
+check(
+  new Set(lifecycleSignatures).size === lifecycleSignatures.length,
+  'every lifecycle case produces a distinct signature (action, amount and chainId all reach the digest)',
+  lifecycleSignatures.join(' ')
+);
+
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('\n────────────────────────────────────────────────────────────');
 if (failures.length) {
@@ -915,11 +1065,13 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 7 phases.\n` +
+  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 8 phases.\n` +
     `  ${SIGN_CASES.length} signatures produced live by TypeScript and verified live by Python,\n` +
     `  ${SIGN_CASES.length} produced live by Python and verified live by TypeScript,\n` +
     `  ${f3_3.verify_cases.length} matrix verdicts compared verifier to verifier,\n` +
     `  ${ENVELOPE_CASES.length} wires whose envelope both SDKs chose and built, compared body to body,\n` +
     `  ${PRICE_CASES.length} prices each SDK either billed or refused, compared integer to integer.\n` +
+    `  ${LIFECYCLE_CASES.length} escrow lifecycle orders both SDKs signed, compared signature byte to byte.
+` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );

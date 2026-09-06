@@ -355,6 +355,28 @@ export type {
   EscrowTierWindows,
 } from './escrow-preauth';
 
+// Signed escrow lifecycle orders (who may release / refund money already held)
+export {
+  buildLifecycleAuth,
+  buildLifecycleTypedData,
+  wagmiLifecycleSigner,
+  LIFECYCLE_ACTIONS,
+  LIFECYCLE_DOMAIN_NAME,
+  LIFECYCLE_DOMAIN_VERSION,
+  LIFECYCLE_MAX_DEADLINE_SECS,
+  LIFECYCLE_DEFAULT_DEADLINE_SECS,
+  LIFECYCLE_ORDER_TYPES,
+} from './lifecycle-auth';
+export type {
+  LifecycleAction,
+  LifecycleAuth,
+  LifecyclePaymentInfo,
+  LifecycleSigner,
+  LifecycleTypedDataParams,
+  BuildLifecycleAuthParams,
+  WagmiLifecycleWalletClient,
+} from './lifecycle-auth';
+
 // EIP-7702 delegated accounts (which dialect a delegated payer must sign in)
 export {
   DELEGATE_PREFIX,

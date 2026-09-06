@@ -26,6 +26,8 @@ Protocol
     stdout  {"runtime":"python", ...}   exit 0
             {"error":"…"}               exit 1
             {"op":"price_network","cases":[{id,network,amount,payTo}]}
+            {"op":"sign_lifecycle","cases":[{id,action,paymentInfo,payer,amount,
+                                             chainId,deadline,nonce,privateKey}]}
 """
 
 from __future__ import annotations
@@ -282,6 +284,47 @@ def price_network(cases):
     return {"runtime": "python", "results": results}
 
 
+def sign_lifecycle(cases):
+    """Sign an escrow lifecycle order (``release`` / ``refundInEscrow``).
+
+    The mirror of the TypeScript agent's ``signLifecycle``. Phases 1-7 are all
+    ERC-8128 and pricing: none of them touches escrow, so a TypeScript that
+    signed a DIFFERENT ``LifecycleOrder`` than this one would have left every
+    check green. The order decides who may move money that is already
+    deposited, so agreement has to be measured, not assumed.
+
+    The key comes from the driver and is the synthetic 0x11*32 test key; it has
+    never held funds.
+    """
+    try:
+        from uvd_x402_sdk.escrow_signing import build_lifecycle_auth
+    except Exception as exc:  # noqa: BLE001 - the message IS the product here
+        die(
+            "the Python SDK cannot sign lifecycle orders: "
+            f"{type(exc).__name__}: {exc}. Needs uvd-x402-sdk >= 0.78.0."
+        )
+        return None
+
+    results = []
+    for case in cases:
+        try:
+            auth = build_lifecycle_auth(
+                action=case["action"],
+                payment_info=case["paymentInfo"],
+                payer=case["payer"],
+                amount=int(case["amount"]),
+                chain_id=int(case["chainId"]),
+                wallet=EnvKeyAdapter(case["privateKey"]),
+                deadline=case.get("deadline"),
+                nonce=case.get("nonce"),
+                now=case.get("now"),
+            )
+            results.append({"id": case["id"], **auth})
+        except Exception as exc:  # noqa: BLE001 - a refusal is a comparable result
+            results.append({"id": case["id"], "error": f"{exc}"})
+    return {"runtime": "python", "results": results}
+
+
 def main() -> None:
     try:
         request = json.loads(sys.stdin.read())
@@ -296,6 +339,8 @@ def main() -> None:
             response = build_envelope(request["cases"])
         elif op == "price_network":
             response = price_network(request["cases"])
+        elif op == "sign_lifecycle":
+            response = sign_lifecycle(request["cases"])
         else:
             die(f"unknown op: {op!r}")
             return
