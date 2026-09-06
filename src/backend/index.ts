@@ -78,6 +78,8 @@ import {
   DEFAULT_MAX_FEE_BPS,
   OPERATOR_FEE_BPS,
 } from '../escrow-preauth';
+import { buildLifecycleAuth } from '../lifecycle-auth';
+import type { LifecycleSigner } from '../lifecycle-auth';
 import { getChainByName, isUsdPegged, usdConversionError } from '../chains';
 import {
   DEFAULT_RETRY_AFTER_SECONDS,
@@ -5744,6 +5746,36 @@ export interface AdvancedPaymentInfo {
 }
 
 /**
+ * Optional signed lifecycle order for `releaseViaFacilitator` /
+ * `refundViaFacilitator`.
+ *
+ * Both actions move money that is ALREADY escrowed, so neither carries an
+ * ERC-3009 signature and the entitlement question — who may ask for the move —
+ * has no other answer. Supplying a `lifecycleSigner` answers it; omitting one
+ * leaves the request byte-for-byte as it was, which is why every field here is
+ * optional and the default is to send nothing.
+ *
+ * The accepted signers are the facilitator's, not this SDK's: `release` takes
+ * the payer or the operator owner (`FEE_RECIPIENT()`); `refundInEscrow` takes
+ * the receiver, the operator owner, or the payer once `authorizationExpiry`
+ * has passed. Anything else is logged as `unauthorized_role`.
+ */
+export interface LifecycleAuthOptions {
+  /**
+   * Who signs the order. Any adapter with `getAddress()` + `signTypedData()`:
+   * `EnvKeyAdapter` server-side, `OWSWalletAdapter`, or
+   * `wagmiLifecycleSigner(walletClient)` when the PAYER signs in their own
+   * browser and this backend only transports the block.
+   */
+  lifecycleSigner?: LifecycleSigner;
+  /**
+   * Unix seconds. Default: `now + 600`, which leaves 300 s of headroom under
+   * the facilitator's 900 s ceiling.
+   */
+  lifecycleDeadline?: number;
+}
+
+/**
  * Result of an AUTHORIZE operation.
  */
 export interface AdvancedAuthorizationResult {
@@ -6430,34 +6462,61 @@ export class AdvancedEscrowClient {
    * const result = await client.releaseViaFacilitator(pi);
    * console.log(result.transactionHash);
    * ```
+   *
+   * @example Signed release (the payer proves the release is theirs to ask for)
+   * ```typescript
+   * await client.releaseViaFacilitator(pi, undefined, {
+   *   lifecycleSigner: payerWallet,   // EnvKeyAdapter, OWS, wagmiLifecycleSigner(...)
+   * });
+   * ```
    */
   async releaseViaFacilitator(
     paymentInfo: AdvancedPaymentInfo,
     amount?: string,
+    options?: LifecycleAuthOptions,
   ): Promise<AdvancedTransactionResult> {
     if (!this.payerAddress) await this.init();
 
     try {
+      const wirePaymentInfo = {
+        operator: paymentInfo.operator,
+        receiver: paymentInfo.receiver,
+        token: paymentInfo.token,
+        maxAmount: paymentInfo.maxAmount,
+        preApprovalExpiry: paymentInfo.preApprovalExpiry,
+        authorizationExpiry: paymentInfo.authorizationExpiry,
+        refundExpiry: paymentInfo.refundExpiry,
+        minFeeBps: paymentInfo.minFeeBps,
+        maxFeeBps: paymentInfo.maxFeeBps,
+        feeReceiver: paymentInfo.feeReceiver,
+        salt: paymentInfo.salt,
+      };
+      const releaseAmount = amount || paymentInfo.maxAmount;
+
+      // The signed lifecycle order, when a signer is supplied. Without one the
+      // payload goes out byte-for-byte as it did before — the facilitator's
+      // default mode does not look at the field at all.
+      const lifecycleAuth = options?.lifecycleSigner
+        ? await buildLifecycleAuth({
+            action: 'release',
+            paymentInfo: wirePaymentInfo,
+            payer: this.payerAddress,
+            amount: releaseAmount,
+            chainId: this.chainId,
+            wallet: options.lifecycleSigner,
+            deadline: options.lifecycleDeadline,
+          })
+        : undefined;
+
       const payload = {
         x402Version: 2,
         scheme: 'escrow',
         action: 'release',
         payload: {
-          paymentInfo: {
-            operator: paymentInfo.operator,
-            receiver: paymentInfo.receiver,
-            token: paymentInfo.token,
-            maxAmount: paymentInfo.maxAmount,
-            preApprovalExpiry: paymentInfo.preApprovalExpiry,
-            authorizationExpiry: paymentInfo.authorizationExpiry,
-            refundExpiry: paymentInfo.refundExpiry,
-            minFeeBps: paymentInfo.minFeeBps,
-            maxFeeBps: paymentInfo.maxFeeBps,
-            feeReceiver: paymentInfo.feeReceiver,
-            salt: paymentInfo.salt,
-          },
+          paymentInfo: wirePaymentInfo,
           payer: this.payerAddress,
-          amount: amount || paymentInfo.maxAmount,
+          amount: releaseAmount,
+          ...(lifecycleAuth ? { lifecycleAuth } : {}),
         },
         paymentRequirements: {
           scheme: 'escrow',
@@ -6578,30 +6637,50 @@ export class AdvancedEscrowClient {
   async refundViaFacilitator(
     paymentInfo: AdvancedPaymentInfo,
     amount?: string,
+    options?: LifecycleAuthOptions,
   ): Promise<AdvancedTransactionResult> {
     if (!this.payerAddress) await this.init();
 
     try {
+      const wirePaymentInfo = {
+        operator: paymentInfo.operator,
+        receiver: paymentInfo.receiver,
+        token: paymentInfo.token,
+        maxAmount: paymentInfo.maxAmount,
+        preApprovalExpiry: paymentInfo.preApprovalExpiry,
+        authorizationExpiry: paymentInfo.authorizationExpiry,
+        refundExpiry: paymentInfo.refundExpiry,
+        minFeeBps: paymentInfo.minFeeBps,
+        maxFeeBps: paymentInfo.maxFeeBps,
+        feeReceiver: paymentInfo.feeReceiver,
+        salt: paymentInfo.salt,
+      };
+      const refundAmount = amount || paymentInfo.maxAmount;
+
+      // Same optional order as `releaseViaFacilitator`, with the caveat that
+      // the accepted signers differ: the receiver, the operator owner, or the
+      // payer once `authorizationExpiry` has passed.
+      const lifecycleAuth = options?.lifecycleSigner
+        ? await buildLifecycleAuth({
+            action: 'refundInEscrow',
+            paymentInfo: wirePaymentInfo,
+            payer: this.payerAddress,
+            amount: refundAmount,
+            chainId: this.chainId,
+            wallet: options.lifecycleSigner,
+            deadline: options.lifecycleDeadline,
+          })
+        : undefined;
+
       const payload = {
         x402Version: 2,
         scheme: 'escrow',
         action: 'refundInEscrow',
         payload: {
-          paymentInfo: {
-            operator: paymentInfo.operator,
-            receiver: paymentInfo.receiver,
-            token: paymentInfo.token,
-            maxAmount: paymentInfo.maxAmount,
-            preApprovalExpiry: paymentInfo.preApprovalExpiry,
-            authorizationExpiry: paymentInfo.authorizationExpiry,
-            refundExpiry: paymentInfo.refundExpiry,
-            minFeeBps: paymentInfo.minFeeBps,
-            maxFeeBps: paymentInfo.maxFeeBps,
-            feeReceiver: paymentInfo.feeReceiver,
-            salt: paymentInfo.salt,
-          },
+          paymentInfo: wirePaymentInfo,
           payer: this.payerAddress,
-          amount: amount || paymentInfo.maxAmount,
+          amount: refundAmount,
+          ...(lifecycleAuth ? { lifecycleAuth } : {}),
         },
         paymentRequirements: {
           scheme: 'escrow',
