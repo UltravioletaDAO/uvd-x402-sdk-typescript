@@ -809,6 +809,104 @@ for (const c of ENVELOPE_CASES) {
   }
 }
 
+// -- phase 7: PRICE ---------------------------------------------------------
+//
+// What does each SDK CHARGE for a price written in dollars?
+//
+// Phases 1-6 compare how the two implementations SHAPE a request -- signatures,
+// presets, verdicts, envelopes -- and not one of them ever asked what either
+// side would bill. That blind spot had a name. Both SDKs turned a USD price
+// into atomic units by scaling it with the settlement token's decimals, which
+// is a currency conversion only when one whole unit IS one dollar. XRPL settles
+// in native XRP, so `$10.00` came out as 10 XRP -- in BOTH languages, with
+// every check above green, for as long as XRPL had been supported.
+//
+// So this phase exists because a conformance run that cannot see the defect
+// that happened is not conformance. Two of the four cases are the defect and
+// two are the control: a chain whose dollar really is a dollar has to keep
+// converting, and identically in both languages.
+//
+// A refusal is a comparable RESULT. The two SDKs must refuse the same prices,
+// and where they convert they must produce the same integer.
+console.log('');
+console.log('PHASE 7 - the price: what each SDK charges for $10.00');
+
+const EVM_PAYTO = '0x1234567890123456789012345678901234567890';
+const XRPL_PAYTO = 'rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe';
+
+const PRICE_CASES = [
+  // The defect: the settlement asset is XRP, so there is no dollar to scale.
+  { id: 'xrpl/usd-price', network: 'xrpl', amount: '10.00', payTo: XRPL_PAYTO, expect: 'refuse' },
+  // ...and through the alias, so the old spelling is not a way around the guard.
+  {
+    id: 'xrpl-mainnet/usd-price',
+    network: 'xrpl-mainnet',
+    amount: '10.00',
+    payTo: XRPL_PAYTO,
+    expect: 'refuse',
+  },
+  // The controls. 6 decimals and 7 decimals, both genuinely dollar-pegged.
+  { id: 'base/usd-price', network: 'base', amount: '10.00', payTo: EVM_PAYTO, expect: '10000000' },
+  {
+    id: 'stellar/usd-price',
+    network: 'stellar',
+    amount: '10.00',
+    payTo: EVM_PAYTO,
+    expect: '100000000',
+  },
+];
+
+const tsPrices = await ask(NODE, { op: 'price_network', cases: PRICE_CASES });
+const pyPrices = await ask(PY, { op: 'price_network', cases: PRICE_CASES });
+
+const tsPriceById = Object.fromEntries(tsPrices.results.map((r) => [r.id, r]));
+const pyPriceById = Object.fromEntries(pyPrices.results.map((r) => [r.id, r]));
+
+for (const c of PRICE_CASES) {
+  const a = tsPriceById[c.id];
+  const b = pyPriceById[c.id];
+  const label = `${c.id} ($${c.amount} on ${c.network})`;
+
+  if (!a || !b) {
+    check(false, `both SDKs answered for ${label}`, `ts=${!!a} py=${!!b}`);
+    continue;
+  }
+
+  // One of them quietly billing a price the other calls impossible is the
+  // dangerous half: the quiet one puts that number in a 402.
+  check(
+    !!a.error === !!b.error,
+    `both SDKs either price or refuse ${label}`,
+    `ts=${a.error ? 'refused' : `billed ${a.amount}`} py=${b.error ? 'refused' : `billed ${b.amount}`}`
+  );
+
+  if (c.expect === 'refuse') {
+    check(!!a.error, `typescript refuses ${label}`, a.error ? undefined : `billed ${a.amount}`);
+    check(!!b.error, `python refuses ${label}`, b.error ? undefined : `billed ${b.amount}`);
+    // Refusing without naming the asset moves the dead end one layer up.
+    for (const [name, r] of [
+      ['typescript', a],
+      ['python', b],
+    ]) {
+      check(
+        !r.error || /XRP/.test(r.error),
+        `${name}'s refusal for ${label} names the asset`,
+        r.error
+      );
+    }
+    continue;
+  }
+
+  check(!a.error && !b.error, `neither SDK refuses ${label}`, `ts=${a.error} py=${b.error}`);
+  check(a.amount === c.expect, `typescript bills ${c.expect} for ${label}`, `got ${a.amount}`);
+  check(b.amount === c.expect, `python bills ${c.expect} for ${label}`, `got ${b.amount}`);
+  check(
+    a.amount === b.amount,
+    `both SDKs bill the same integer for ${label}`,
+    `ts=${a.amount} py=${b.amount}`
+  );
+}
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('\n────────────────────────────────────────────────────────────');
 if (failures.length) {
@@ -817,10 +915,11 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 6 phases.\n` +
+  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 7 phases.\n` +
     `  ${SIGN_CASES.length} signatures produced live by TypeScript and verified live by Python,\n` +
     `  ${SIGN_CASES.length} produced live by Python and verified live by TypeScript,\n` +
     `  ${f3_3.verify_cases.length} matrix verdicts compared verifier to verifier,\n` +
-    `  ${ENVELOPE_CASES.length} wires whose envelope both SDKs chose and built, compared body to body.\n` +
+    `  ${ENVELOPE_CASES.length} wires whose envelope both SDKs chose and built, compared body to body,\n` +
+    `  ${PRICE_CASES.length} prices each SDK either billed or refused, compared integer to integer.\n` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );

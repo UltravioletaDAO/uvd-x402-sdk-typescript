@@ -417,8 +417,8 @@ describe('commerce scheme support', () => {
 });
 
 describe('XRPL network support', () => {
-  it('registers xrpl-mainnet and xrpl-testnet with native XRP (6 decimals, no token contract)', () => {
-    const mainnet = getChainByName('xrpl-mainnet');
+  it('registers xrpl and xrpl-testnet with native XRP (6 decimals, no token contract)', () => {
+    const mainnet = getChainByName('xrpl');
     const testnet = getChainByName('xrpl-testnet');
 
     expect(mainnet).toBeDefined();
@@ -434,23 +434,56 @@ describe('XRPL network support', () => {
 
   it('exposes XRPL via helper functions', () => {
     const xrplChains = getXRPLChains();
-    expect(xrplChains.map(c => c.name).sort()).toEqual(['xrpl-mainnet', 'xrpl-testnet']);
-    expect(isXRPLChain('xrpl-mainnet')).toBe(true);
+    expect(xrplChains.map(c => c.name).sort()).toEqual(['xrpl', 'xrpl-testnet']);
+    expect(isXRPLChain('xrpl')).toBe(true);
     expect(isXRPLChain('base')).toBe(false);
-    expect(getNetworkType('xrpl-mainnet')).toBe('xrpl');
+    expect(getNetworkType('xrpl')).toBe('xrpl');
   });
 
-  it('uses the v1 network id for CAIP-2 (XRPL has no CAIP-2 form)', () => {
-    expect(chainToCAIP2('xrpl-mainnet')).toBe('xrpl-mainnet');
+  /**
+   * The mainnet is named `xrpl`, because that is the ONLY spelling the
+   * facilitator puts on the wire (`x402-rs/src/network.rs:189`). It took
+   * `xrpl-mainnet` in its `FromStr` and nowhere else, under a comment calling
+   * that spelling "right for a lookup and wrong for a wire format" -- and a
+   * lookup spelling is exactly what this SDK was emitting.
+   */
+  it('names the mainnet `xrpl`, the spelling the facilitator publishes', () => {
+    expect(getChainByName('xrpl')?.name).toBe('xrpl');
+    expect(getXRPLChains().map(c => c.name)).toContain('xrpl');
+    expect(getXRPLChains().map(c => c.name)).not.toContain('xrpl-mainnet');
+  });
+
+  it('still answers to `xrpl-mainnet` as an input alias, resolved to the canonical entry', () => {
+    // RED before 2.85.0 in the other direction: `xrpl-mainnet` WAS the entry.
+    // Callers who wrote it must keep working, so it resolves -- to `xrpl`.
+    expect(getChainByName('xrpl-mainnet')?.name).toBe('xrpl');
+    expect(getChainByName('xrpl-mainnet')).toBe(getChainByName('xrpl'));
+    expect(isXRPLChain('xrpl-mainnet')).toBe(true);
+    expect(getNetworkType('xrpl-mainnet')).toBe('xrpl');
+    // ...without becoming a second network in any listing or count.
+    expect(getXRPLChains()).toHaveLength(2);
+  });
+
+  /**
+   * An alias must not manufacture an identifier. `chainToCAIP2` falls back to
+   * `${networkType}:${name}` for a non-EVM chain it has no id for, and reading
+   * that fallback with the ALIAS produced `xrpl:xrpl-mainnet`: a string no
+   * facilitator accepts that nonetheless passes the colon test every v2 guard
+   * in this SDK uses. A fabricated id is worse than a missing one -- the
+   * missing one is refused loudly, the fabricated one ships.
+   */
+  it('never manufactures a CAIP-2 id out of an alias', () => {
+    expect(chainToCAIP2('xrpl-mainnet')).toBe(chainToCAIP2('xrpl'));
+    expect(chainToCAIP2('xrpl-mainnet')).not.toBe('xrpl:xrpl-mainnet');
+    expect(chainToCAIP2('xrpl')).toBe('xrpl');
     expect(chainToCAIP2('xrpl-testnet')).toBe('xrpl-testnet');
-    expect(caip2ToChain('xrpl-mainnet')).toBe('xrpl-mainnet');
   });
 
   it('builds XRPL explorer URLs', () => {
-    expect(getExplorerTxUrl('xrpl-mainnet', 'ABC123')).toBe(
+    expect(getExplorerTxUrl('xrpl', 'ABC123')).toBe(
       'https://livenet.xrpl.org/transactions/ABC123'
     );
-    expect(getExplorerAddressUrl('xrpl-mainnet', 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp')).toBe(
+    expect(getExplorerAddressUrl('xrpl', 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp')).toBe(
       'https://livenet.xrpl.org/accounts/rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp'
     );
     expect(getExplorerTxUrl('xrpl-testnet', 'DEF456')).toBe(
@@ -459,9 +492,9 @@ describe('XRPL network support', () => {
   });
 
   it('returns the correct facilitator wallet addresses for XRPL', () => {
-    expect(FACILITATOR_ADDRESSES['xrpl-mainnet']).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
+    expect(FACILITATOR_ADDRESSES.xrpl).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
     expect(FACILITATOR_ADDRESSES['xrpl-testnet']).toBe('rGhTioKAFHe75KgVnQtacRiKFuPv28Wbwk');
-    expect(getFacilitatorAddress('xrpl-mainnet')).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
+    expect(getFacilitatorAddress('xrpl')).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
     expect(getFacilitatorAddress('unknown', 'xrpl')).toBe('rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp');
   });
 });

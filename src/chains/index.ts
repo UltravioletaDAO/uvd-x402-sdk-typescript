@@ -934,10 +934,12 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // XRPL (2 networks) - XRP Ledger, native XRP via pre-signed Payment blobs
   // ============================================================================
 
-  'xrpl-mainnet': {
+  // Named `xrpl`, which is the only spelling the facilitator puts on the wire
+  // (x402-rs/src/network.rs:189). `xrpl-mainnet` still resolves, as an alias.
+  xrpl: {
     chainId: 0, // Non-EVM (XRPL uses network id strings, no numeric chain ID)
     chainIdHex: '0x0',
-    name: 'xrpl-mainnet',
+    name: 'xrpl',
     displayName: 'XRP Ledger',
     networkType: 'xrpl',
     rpcUrl: 'https://xrplcluster.com',
@@ -949,11 +951,15 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     },
     // XRPL settles in native XRP - there is no USDC/token contract.
     // The `usdc` field describes the native asset for interface compatibility.
+    // `usdPegged: false` is what stops that compatibility shim from being read
+    // as a price: the key says usdc, the value is XRP, and a caller who writes
+    // "10.00" means ten dollars. See TokenConfig.usdPegged.
     usdc: {
       address: 'XRP', // Native asset - no token contract
       decimals: 6,
       name: 'XRP',
       version: '1',
+      usdPegged: false,
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
@@ -980,12 +986,30 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       decimals: 6,
       name: 'XRP',
       version: '1',
+      usdPegged: false,
     },
     x402: {
       facilitatorUrl: DEFAULT_FACILITATOR_URL,
       enabled: true,
     },
   },
+};
+
+/**
+ * Alternate spellings that resolve to a registry entry without becoming one.
+ *
+ * A caller may WRITE these; the SDK never puts one on the wire, and they are
+ * not separate networks, so counts and listings stay honest. The facilitator
+ * keeps exactly this distinction: its `FromStr` takes `xrpl-mainnet` while
+ * everything it publishes says `xrpl`, and the comment there calls that
+ * spelling "right for a lookup and wrong for a wire format"
+ * (`x402-rs/src/network.rs:251,189,719`).
+ *
+ * Mirrors `_NETWORK_ALIASES` in the Python SDK (`networks/base.py:199`).
+ */
+export const CHAIN_ALIASES: Record<string, string> = {
+  // Renamed in 2.85.0: the facilitator advertises the mainnet as `xrpl`.
+  'xrpl-mainnet': 'xrpl',
 };
 
 /**
@@ -1004,7 +1028,8 @@ export function getChainById(chainId: number): ChainConfig | undefined {
  * Get chain config by name (case-insensitive)
  */
 export function getChainByName(name: string): ChainConfig | undefined {
-  return SUPPORTED_CHAINS[name.toLowerCase()];
+  const key = name.toLowerCase();
+  return SUPPORTED_CHAINS[key] ?? SUPPORTED_CHAINS[CHAIN_ALIASES[key] ?? ''];
 }
 
 /**
@@ -1014,7 +1039,7 @@ export function isChainSupported(chainIdOrName: number | string): boolean {
   if (typeof chainIdOrName === 'number') {
     return Object.values(SUPPORTED_CHAINS).some(chain => chain.chainId === chainIdOrName);
   }
-  return chainIdOrName.toLowerCase() in SUPPORTED_CHAINS;
+  return getChainByName(chainIdOrName) !== undefined;
 }
 
 /**
@@ -1202,6 +1227,42 @@ export function getTokenConfig(
   }
 
   return undefined;
+}
+
+/**
+ * Whether a price written in dollars can be scaled into this token's base
+ * units. Absent `usdPegged` means yes, so every stablecoin keeps its behaviour.
+ *
+ * @param token - Token configuration, or undefined
+ * @returns True when one whole unit of the token is one dollar
+ */
+export function isUsdPegged(token: TokenConfig | undefined): boolean {
+  return token?.usdPegged !== false;
+}
+
+/**
+ * The sentence for refusing to price a network in dollars.
+ *
+ * Refusing without saying where to look only moves the dead end one layer up,
+ * so this names the asset, states what the old code would have charged, and
+ * points at the one place that lists the alternatives. Same shape as the Python
+ * SDK's `NetworkConfig.usd_conversion_error()` (`networks/base.py:158`, 0.77.0)
+ * so a team hitting this in either language reads the same explanation.
+ *
+ * @param chainName - Chain the price was written for
+ * @param token - The settlement token that carries no dollar peg
+ * @returns Message naming the asset and the way out
+ */
+export function usdConversionError(chainName: string, token: TokenConfig): string {
+  const symbol = token.name || token.address;
+  return (
+    `${chainName} settles in ${symbol}, which is not pegged to the dollar, so an ` +
+    `amount written in USD cannot be converted with its ${token.decimals} decimals: ` +
+    `$1.00 would be charged as 1 ${symbol}. Name a dollar-pegged token this ` +
+    `network's facilitator settles (GET /supported lists them; on XRPL that is the ` +
+    `Circle USDC issued by rGm7WCVp9gb4jZHWTEtGUr4dd74z2XuWhE) and register it under ` +
+    `the chain's \`tokens\`, or price the call in ${symbol} units yourself.`
+  );
 }
 
 /**

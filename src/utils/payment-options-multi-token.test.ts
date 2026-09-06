@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { generatePaymentOptions } from './x402';
-import { getChainByName, getEnabledChains, getTokenConfig } from '../chains';
+import { getChainByName, getEnabledChains, getTokenConfig, isUsdPegged } from '../chains';
 
 /**
  * `generatePaymentOptions()` and the chain's token map.
@@ -68,19 +68,44 @@ describe('generatePaymentOptions - multi-token', () => {
     expect(options.every(o => o.asset !== undefined)).toBe(true);
   });
 
-  it('defaults to USDC only, which is byte-for-byte the old behaviour', () => {
+  it('defaults to USDC only, one option per chain that can be priced in dollars', () => {
     const chains = getEnabledChains();
+    const pegged = chains.filter(c => isUsdPegged(getTokenConfig(c.name, 'usdc')));
 
     const options = generatePaymentOptions(chains, '5');
 
-    // One option per enabled chain, all of them USDC.
-    expect(options).toHaveLength(chains.length);
-    for (const chain of chains) {
+    // One option per enabled chain whose USDC entry really is a dollar.
+    expect(options).toHaveLength(pegged.length);
+    for (const chain of pegged) {
       const match = options.filter(
         o => o.asset === getTokenConfig(chain.name, 'usdc')!.address
       );
       expect(match.length).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  /**
+   * XRPL files native XRP under the key `usdc`, so this loop used to emit an
+   * option reading "5 units of asset XRP" for a seller who wrote `'5.00'`
+   * meaning five dollars -- an `accepts` entry advertising a price nobody set.
+   *
+   * It is SKIPPED rather than thrown, and that is deliberate: this array is the
+   * `accepts` of ONE 402 spanning MANY chains, and the usual call passes every
+   * enabled chain, so throwing would cost the seller the chains that were fine
+   * over the one that was not. The loud path is `buildPaymentRequirements`,
+   * which names a single chain.
+   */
+  it('drops a chain whose settlement asset is not a dollar, and keeps the rest', () => {
+    const xrpl = getChainByName('xrpl')!;
+
+    // RED before 2.85.0: length 1, asset 'XRP', amount '5000000' -- 5 XRP.
+    expect(generatePaymentOptions([xrpl], '5')).toHaveLength(0);
+
+    // The neighbours in the same call are untouched.
+    const mixed = generatePaymentOptions([BASE, xrpl], '5');
+    expect(mixed).toHaveLength(1);
+    expect(mixed[0].asset).toBe(getTokenConfig('base', 'usdc')!.address);
+    expect(mixed.some(o => o.asset === 'XRP')).toBe(false);
   });
 
   it('still honours the facilitator override and skips disabled chains', () => {

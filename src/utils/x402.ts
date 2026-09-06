@@ -16,7 +16,7 @@ import type {
   TokenType,
 } from '../types';
 import { CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from '../types';
-import { getChainByName, getTokenConfig } from '../chains';
+import { getChainByName, getTokenConfig, isUsdPegged } from '../chains';
 import { decodeBase64Utf8, encodeBase64Json } from './base64';
 
 /**
@@ -94,19 +94,26 @@ export function detectX402Version(data: unknown): X402Version {
  * @returns CAIP-2 identifier (e.g., 'eip155:8453', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp')
  */
 export function chainToCAIP2(chainName: string): string {
-  const caip2 = CAIP2_IDENTIFIERS[chainName.toLowerCase()];
+  // Resolve through the registry FIRST, so an alias answers with the canonical
+  // chain's id rather than one built out of the alias. Without this, asking
+  // with `xrpl-mainnet` fell past the lookup into the fallback below and
+  // manufactured `xrpl:xrpl-mainnet` -- a well-formed CAIP-2 string that no
+  // facilitator has ever accepted, and one that PASSES the colon test every v2
+  // guard in this SDK uses. A fabricated id is worse than a missing one: the
+  // missing one is refused loudly, the fabricated one ships.
+  const chain = getChainByName(chainName);
+  const caip2 = CAIP2_IDENTIFIERS[(chain?.name ?? chainName).toLowerCase()];
   if (caip2) {
     return caip2;
   }
 
   // Try to construct from chain config
-  const chain = getChainByName(chainName);
   if (chain) {
     if (chain.networkType === 'evm') {
       return `eip155:${chain.chainId}`;
     }
-    // For non-EVM, return the name as-is with network prefix
-    return `${chain.networkType}:${chainName}`;
+    // For non-EVM, return the canonical name with the network prefix
+    return `${chain.networkType}:${chain.name}`;
   }
 
   return chainName; // Return as-is if unknown
@@ -300,6 +307,19 @@ export function generatePaymentOptions(
     for (const tokenType of tokens) {
       const token = getTokenConfig(chain.name, tokenType);
       if (!token) continue;
+
+      // A token with no dollar peg is skipped for the same reason a missing one
+      // is: this array can only carry pairs the registry can actually price.
+      // XRPL reaches here because it files native XRP under the key `usdc`, so
+      // the loop would otherwise emit "5 XRP" for a seller who wrote `'5.00'`
+      // and asked for dollars.
+      //
+      // SKIP, not throw, and that is deliberate. This builds the `accepts` of
+      // ONE 402 covering MANY chains -- the usual call is every enabled chain
+      // at once -- so throwing would take the whole response down over a single
+      // unpriceable pair and cost the seller the chains that were fine.
+      // `buildPaymentRequirements` names one chain and therefore throws there.
+      if (!isUsdPegged(token)) continue;
 
       // Atomic units in THIS token's decimals -- BSC USDC has 18, not 6.
       const atomicAmount = Math.floor(

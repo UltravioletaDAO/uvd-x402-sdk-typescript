@@ -23,6 +23,7 @@
  *           {"op":"build_envelope","cases":[{id,marker,scheme,payloadNetwork,
  *                                            requirementsNetwork,pin,payload,requirements,
  *                                            payloadV2?}]}
+ *           {"op":"price_network","cases":[{id,network,amount,payTo}]}
  *   stdout  {"runtime":"typescript", ...}   exit 0
  *           {"error":"…"}                   exit 1
  */
@@ -57,6 +58,7 @@ const sdk = await import(pathToFileURL(DIST).href);
 const root = await import(pathToFileURL(ROOT_DIST).href);
 
 const {
+  buildPaymentRequirements,
   buildSettleRequestForVersion,
   buildVerifyRequestForVersion,
   resolveEnvelopeVersion,
@@ -233,6 +235,42 @@ async function buildEnvelope(cases) {
   return { runtime: 'typescript', results };
 }
 
+/**
+ * Turn a price written in DOLLARS into the atomic amount this SDK would put in
+ * a 402, or refuse.
+ *
+ * Phases 1-6 are ERC-8128 signatures and x402 envelopes -- they compare how the
+ * two SDKs SHAPE a request, and never once what either one would CHARGE for it.
+ * That blind spot had a name: both SDKs scaled a USD price by the settlement
+ * token's decimals, which is only a currency conversion when one whole unit is
+ * one dollar, and XRPL settles in native XRP. `$10.00` came out as 10 XRP in
+ * both languages while every check here was green.
+ *
+ * A refusal is a RESULT, not a crash. The two SDKs must refuse the same prices
+ * and, where they do convert, produce the same integer.
+ */
+async function priceNetwork(cases) {
+  const results = [];
+  for (const c of cases) {
+    try {
+      const requirements = buildPaymentRequirements({
+        amount: c.amount,
+        recipient: c.payTo,
+        resource: 'https://api.example.com/premium',
+        chainName: c.network,
+      });
+      results.push({
+        id: c.id,
+        amount: String(requirements.maxAmountRequired),
+        asset: requirements.asset ?? null,
+      });
+    } catch (error) {
+      results.push({ id: c.id, error: String(error?.message ?? error) });
+    }
+  }
+  return { runtime: 'typescript', results };
+}
+
 try {
   const request = JSON.parse(await readStdin());
   let response;
@@ -240,6 +278,7 @@ try {
   else if (request.op === 'sign') response = await sign(request.cases);
   else if (request.op === 'verify') response = await verify(request.cases);
   else if (request.op === 'build_envelope') response = await buildEnvelope(request.cases);
+  else if (request.op === 'price_network') response = await priceNetwork(request.cases);
   else die(`unknown op: ${JSON.stringify(request.op)}`);
   process.stdout.write(JSON.stringify(response));
 } catch (error) {

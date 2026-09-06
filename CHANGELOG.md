@@ -4,6 +4,84 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.85.0] - 2026-09-05
+
+**XRPL charged in XRP what the integrator wrote in dollars**, and the mainnet
+travelled under a name the facilitator publishes nowhere. Both defects are the
+ones the Python SDK closed in
+[0.77.0](https://github.com/UltravioletaDAO/uvd-x402-sdk-python/pull/11); this
+is the TypeScript half of that parity, mirrored rather than reinvented.
+
+### Fixed
+
+- **A price written in USD is refused on a chain that does not settle in
+  dollars, instead of being billed in the native asset.**
+  `buildPaymentRequirements({ amount: '10.00', chainName: 'xrpl' })` returned
+  `maxAmountRequired: '10000000'` — measured — which on XRPL is **10 XRP**, not
+  ten dollars.
+
+  The bug is **unit, not scale**, which is why `decimals` never rescued it.
+  Scaling a price by the token's decimals turns dollars into base units only
+  when one whole unit IS one dollar; that holds for all 23 stablecoin networks
+  and fails for a chain settling in its own floating asset. XRP genuinely has
+  six decimals — and six decimals of XRP are still XRP.
+
+  The contradiction lived inside this repo: `PaymentInfo.amount` was documented
+  as USD while the SDK's own XRPL provider read the same field as whole XRP
+  (`xrpToDrops`). The type and its only XRPL consumer disagreed about the unit,
+  and the consumer won.
+
+  `TokenConfig.usdPegged` (absent = pegged, so every other network is byte-for-
+  byte unchanged) now marks native XRP as unpegged, and the SDK **refuses**
+  rather than converting at a rate nobody agreed to. The message names the
+  asset, states what the old code would have charged, and points at
+  `GET /supported` — refusing without saying where to look only moves the dead
+  end one layer up.
+
+  `generatePaymentOptions()` **skips** the unpriceable pair instead of throwing:
+  it builds the `accepts` of ONE 402 spanning MANY chains, so failing loudly
+  there would cost the seller every chain that was fine. The loud path is
+  `buildPaymentRequirements`, which names a single chain.
+
+- **The XRPL mainnet is now `xrpl`, the only spelling the facilitator puts on
+  the wire.** It was registered as `xrpl-mainnet`, which the facilitator accepts
+  in its `FromStr` and nowhere else, under a comment calling that spelling
+  *"right for a lookup and wrong for a wire format"*
+  (`x402-rs/src/network.rs:189,251,719`). The SDK was emitting the lookup
+  spelling.
+
+  `xrpl-mainnet` **keeps working as an input alias** (new `CHAIN_ALIASES`,
+  mirroring the Python SDK's `_NETWORK_ALIASES`) without becoming a second
+  network: counts and listings stay at 25.
+
+- **`chainToCAIP2()` no longer manufactures an identifier out of an alias.** It
+  resolves through the registry first, so an alias answers with the canonical
+  chain's id. Without this the new alias fell into the
+  `${networkType}:${name}` fallback and produced `xrpl:xrpl-mainnet` — a string
+  no facilitator accepts that nonetheless **passes the colon test every v2 guard
+  in this SDK uses**. A fabricated id is worse than a missing one: the missing
+  one is refused loudly, the fabricated one ships.
+
+### Added
+
+- **Phase 7 of the cross-language conformance run: the price.** Phases 1-6
+  compare how the two SDKs *shape* a request and never once asked what either
+  would *charge* — which is how both languages billed `$10.00` as 10 XRP with
+  every check green. The run is now **367 checks across 7 phases** (was 347/6),
+  and it is discriminating: with the guard removed it reports
+  `ts=billed 10000000 py=refused`.
+
+### Not changed, on purpose
+
+- **XRPL still carries no CAIP-2 id, so a v2 body for it is refused rather than
+  built.** The facilitator does publish `xrpl:0` / `xrpl:1`
+  (`x402-rs/src/network.rs:613`), but the Python SDK deliberately withheld those
+  ids and the conformance run compares the two SDKs' envelope decisions live —
+  adding them here alone was measured as
+  `FAIL ... ts=built py=refused`. XRPL travels on v1, where it now carries the
+  correct name. Adding the ids is a coordinated, two-SDK change; see
+  `docs/handoffs/2026-09-05-xrpl-cobro-y-nombre-de-red.md`.
+
 ## [2.84.0] - 2026-09-05
 
 Three defects found by the first real client audit of this SDK before it picked

@@ -25,6 +25,7 @@ Protocol
                                              payloadV2?}]}
     stdout  {"runtime":"python", ...}   exit 0
             {"error":"…"}               exit 1
+            {"op":"price_network","cases":[{id,network,amount,payTo}]}
 """
 
 from __future__ import annotations
@@ -245,6 +246,42 @@ def build_envelope(cases):
     return {"runtime": "python", "results": results}
 
 
+def price_network(cases):
+    """Turn a price written in DOLLARS into the atomic amount, or refuse.
+
+    The mirror of the TypeScript agent's ``price_network``. Phases 1-6 compare
+    how the two SDKs SHAPE a request and never what either would CHARGE, which
+    is how both of them scaled a USD price by the settlement token's decimals
+    on a chain that settles in native XRP -- ``$10.00`` billed as 10 XRP, in
+    both languages, with every check green.
+
+    A refusal is a comparable RESULT, not a crash.
+    """
+    try:
+        from uvd_x402_sdk.networks.base import get_network
+    except Exception as exc:  # noqa: BLE001 - the message IS the product here
+        die(f"the Python SDK has no network registry: {type(exc).__name__}: {exc}")
+        return None
+
+    results = []
+    for case in cases:
+        try:
+            network = get_network(case["network"])
+            if network is None:
+                raise ValueError(f"unknown network: {case['network']}")
+            amount = network.get_token_amount(float(case["amount"]))
+            results.append(
+                {
+                    "id": case["id"],
+                    "amount": str(amount),
+                    "asset": network.usdc_address or None,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - a refusal is a comparable result
+            results.append({"id": case["id"], "error": f"{exc}"})
+    return {"runtime": "python", "results": results}
+
+
 def main() -> None:
     try:
         request = json.loads(sys.stdin.read())
@@ -257,6 +294,8 @@ def main() -> None:
             response = verify(request["cases"])
         elif op == "build_envelope":
             response = build_envelope(request["cases"])
+        elif op == "price_network":
+            response = price_network(request["cases"])
         else:
             die(f"unknown op: {op!r}")
             return

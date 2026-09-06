@@ -128,6 +128,13 @@ describe('XRPLProvider.signPayment payload shape', () => {
     const built = autofillMock.mock.calls[0][0] as Record<string, unknown>;
     expect(built.TransactionType).toBe('Payment');
     expect(built.Destination).toBe(TESTNET_PAYTO);
+    // This pin SURVIVES 2.85.0 unchanged, and that is the point of the fix
+    // rather than a gap in it. `PaymentInfo.amount` on XRPL was always read
+    // here as whole XRP; what was wrong is that the type documented it as USD,
+    // so the merchant side scaled a dollar price into the same field and the
+    // two readings met on the wire. The SDK now refuses to build that dollar
+    // price at all, which leaves this reading the only one -- so 1.50 XRP ->
+    // 1,500,000 drops is now the whole truth instead of half of a contradiction.
     expect(built.Amount).toBe('1500000'); // 1.50 XRP -> integer drops (6 decimals)
     expect(built.Flags).toBe(0); // tfPartialPayment OFF
     expect('SendMax' in built).toBe(false); // never cross-currency
@@ -204,11 +211,11 @@ describe('XRPLProvider.encodePaymentHeader', () => {
 
     expect(decoded.x402Version).toBe(1);
     expect(decoded.scheme).toBe('exact');
-    expect(decoded.network).toBe('xrpl-mainnet');
+    expect(decoded.network).toBe('xrpl');
     expect(decoded.payload).toEqual({ signedTxBlob: 'ABCD' });
   });
 
-  it('uses the same network id for v2 (XRPL has no CAIP-2 form)', async () => {
+  it('uses the same network id for v2 (the registry carries no CAIP-2 id for XRPL)', async () => {
     const provider = new XRPLProvider({ seed: 'sEXAMPLESEED', testnet: true });
     await provider.connect();
 
@@ -225,7 +232,7 @@ describe('XRPLProvider.getBalance', () => {
   it('returns the native XRP balance formatted to 2 decimals', async () => {
     const provider = new XRPLProvider({ seed: 'sEXAMPLESEED' });
     await provider.connect();
-    const balance = await provider.getBalance(getChainByName('xrpl-mainnet')!);
+    const balance = await provider.getBalance(getChainByName('xrpl')!);
     expect(balance).toBe('42.12');
   });
 });
