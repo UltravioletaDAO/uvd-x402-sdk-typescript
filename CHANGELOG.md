@@ -4,6 +4,89 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.86.0] - 2026-09-06
+
+**`release` and `refundInEscrow` can now be signed**, so moving money that is
+already escrowed stops depending on who happens to be calling. This is the
+TypeScript half of the parity with the Python SDK's
+[0.78.0](https://github.com/UltravioletaDAO/uvd-x402-sdk-python/pull/12);
+byte-for-byte, mirrored rather than reinvented.
+
+### Added
+
+- **`buildLifecycleAuth()` — the EIP-712 order the facilitator verifies.**
+  Both lifecycle actions move funds that are ALREADY deposited, so neither
+  carries an ERC-3009 signature: there is no transfer left to authorize. That
+  left the other half of the question unanswered — *who is entitled to ask for
+  the move* — and the de-facto answer was "whoever calls". On 2026-08-30 a
+  third party probed exactly that: five calls with a fabricated `paymentInfo`,
+  two of them mined, gas spent.
+
+  ```ts
+  const auth = await buildLifecycleAuth({
+    action: 'release',            // or 'refundInEscrow'
+    paymentInfo: pi,              // the SAME object that is sent
+    payer: payerAddress,          // payload.payer, NOT inside paymentInfo
+    amount: '1000000',            // the SAME as payload.amount
+    chainId: 8453,
+    wallet: signer,               // injected; the SDK reads no keys
+  });
+  ```
+
+  The signer is **injected**, never fetched: `EnvKeyAdapter` server-side,
+  `OWSWalletAdapter`, a KMS, or `wagmiLifecycleSigner(walletClient)` when the
+  PAYER signs in their own browser with the same wallet they paid with and the
+  marketplace only transports the block.
+
+- **`releaseViaFacilitator` / `refundViaFacilitator` accept a third argument**,
+  `{ lifecycleSigner, lifecycleDeadline }`. **Without it the request goes out
+  byte-for-byte as before** — pinned whole in
+  `src/backend/lifecycle-wiring.test.ts`, because every caller in production
+  today passes no signer.
+
+- **`wagmiLifecycleSigner()`** wraps a wagmi/viem wallet client. It exists
+  because a lifecycle domain has **no `verifyingContract`**, so this SDK's
+  payment `WalletClient` type — which requires one — cannot sign these orders.
+
+- **`buildLifecycleTypedData()`**, `LIFECYCLE_ORDER_TYPES` and the constants,
+  for callers that need the raw document.
+
+### Accepted signers (the facilitator's rule, not this SDK's)
+
+| action | who may sign |
+|---|---|
+| `release` | the payer; the operator owner (`FEE_RECIPIENT()`) |
+| `refundInEscrow` | the receiver; the operator owner; the payer, but only once `authorizationExpiry` has passed |
+
+The receiver may never `release` (self-payment is what escrow exists to stop)
+and the payer may never refund early (that is the chargeback). Anything else is
+`unauthorized_role`.
+
+### The three traps, each a rejection the caller cannot see
+
+1. **`salt` is `bytes32` on the wire and `uint256` in the signature.** The
+   facilitator converts it with `U256::from_be_bytes` (`types.rs:288`). A bare
+   hex string without `0x` read as decimal is a different digest and a mute
+   `bad_signature` whose only symptom is that no order ever verifies.
+2. **The signed `amount` is the amount SENT.** Signing `maxAmount` and
+   submitting a partial never verifies — and the partial is the normal case of
+   a stream, which emits one order and one nonce per delta.
+3. **`deadline` has a 900 s ceiling.** The default signs `now + 600`: signing
+   the full 900 lets a facilitator clock five seconds behind decide the verdict
+   (`deadline_too_far`).
+
+### Verified
+
+- **Byte parity with Python**, pinned by `src/lifecycle-auth.vectors.json` and
+  by phase 8 of the cross-language conformance run, where both runtimes sign
+  the same four orders live and the signatures are compared byte to byte —
+  and to the vector `lifecycle_auth.rs` fixes. `390 checks across 8 phases`.
+- **Against the live facilitator** (`escrowLifecycleAuth: log`): an order
+  signed by this SDK logged `verdict="ok" role=payer` at
+  `2026-09-06T15:47:17.670Z`. No funds and no gas were involved — base-sepolia
+  with a deliberately invalid `tokenCollector`, so the gate runs and logs and
+  `validate_addresses` then kills the request before a transaction exists.
+
 ## [2.85.0] - 2026-09-05
 
 **XRPL charged in XRP what the integrator wrote in dollars**, and the mainnet
