@@ -17,7 +17,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ethers } from 'ethers';
 import { AdvancedEscrowClient, type AdvancedPaymentInfo } from './index';
-import { LIFECYCLE_ORDER_TYPES, type LifecycleSigner } from '../lifecycle-auth';
+import {
+  LIFECYCLE_ORDER_TYPES,
+  buildLifecycleTypedData,
+  lifecycleAuthFromSignature,
+  type LifecycleSigner,
+} from '../lifecycle-auth';
 
 const PAYER_KEY = `0x${'11'.repeat(32)}`;
 const payerWallet = new ethers.Wallet(PAYER_KEY);
@@ -81,6 +86,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** Recover the signer straight from the body that was sent. */
+function recoverFromBody(body: Record<string, unknown>, action: string): string {
+  const payload = body.payload as Record<string, unknown>;
+  const auth = payload.lifecycleAuth as {
+    signer: string;
+    deadline: number;
+    nonce: string;
+    signature: string;
+  };
+  const pi = payload.paymentInfo as Record<string, string | number>;
+  const types = { ...LIFECYCLE_ORDER_TYPES };
+  delete types['EIP712Domain'];
+  return ethers.verifyTypedData(
+    { name: 'x402 escrow lifecycle', version: '1', chainId: 8453 },
+    types,
+    {
+      action,
+      amount: String(payload.amount),
+      deadline: String(auth.deadline),
+      nonce: auth.nonce,
+      paymentInfo: {
+        operator: ethers.getAddress(String(pi.operator)),
+        payer: ethers.getAddress(String(payload.payer)),
+        receiver: ethers.getAddress(String(pi.receiver)),
+        token: ethers.getAddress(String(pi.token)),
+        maxAmount: String(pi.maxAmount),
+        preApprovalExpiry: String(pi.preApprovalExpiry),
+        authorizationExpiry: String(pi.authorizationExpiry),
+        refundExpiry: String(pi.refundExpiry),
+        minFeeBps: String(pi.minFeeBps),
+        maxFeeBps: String(pi.maxFeeBps),
+        feeReceiver: ethers.getAddress(String(pi.feeReceiver)),
+        salt: BigInt(String(pi.salt)).toString(),
+      },
+    },
+    auth.signature
+  );
+}
+
 describe('release/refund without a lifecycle signer', () => {
   it('release sends the exact body it sent before lifecycle orders existed', async () => {
     const result = await makeClient().releaseViaFacilitator(PI);
@@ -124,45 +168,6 @@ describe('release/refund without a lifecycle signer', () => {
 });
 
 describe('release/refund with a lifecycle signer', () => {
-  /** Recover the signer straight from the body that was sent. */
-  function recoverFromBody(body: Record<string, unknown>, action: string): string {
-    const payload = body.payload as Record<string, unknown>;
-    const auth = payload.lifecycleAuth as {
-      signer: string;
-      deadline: number;
-      nonce: string;
-      signature: string;
-    };
-    const pi = payload.paymentInfo as Record<string, string | number>;
-    const types = { ...LIFECYCLE_ORDER_TYPES };
-    delete types['EIP712Domain'];
-    return ethers.verifyTypedData(
-      { name: 'x402 escrow lifecycle', version: '1', chainId: 8453 },
-      types,
-      {
-        action,
-        amount: String(payload.amount),
-        deadline: String(auth.deadline),
-        nonce: auth.nonce,
-        paymentInfo: {
-          operator: ethers.getAddress(String(pi.operator)),
-          payer: ethers.getAddress(String(payload.payer)),
-          receiver: ethers.getAddress(String(pi.receiver)),
-          token: ethers.getAddress(String(pi.token)),
-          maxAmount: String(pi.maxAmount),
-          preApprovalExpiry: String(pi.preApprovalExpiry),
-          authorizationExpiry: String(pi.authorizationExpiry),
-          refundExpiry: String(pi.refundExpiry),
-          minFeeBps: String(pi.minFeeBps),
-          maxFeeBps: String(pi.maxFeeBps),
-          feeReceiver: ethers.getAddress(String(pi.feeReceiver)),
-          salt: BigInt(String(pi.salt)).toString(),
-        },
-      },
-      auth.signature
-    );
-  }
-
   it('release: the order recovers to the signer, over the submitted body', async () => {
     const result = await makeClient().releaseViaFacilitator(PI, undefined, {
       lifecycleSigner: signerAdapter(),
@@ -212,5 +217,103 @@ describe('release/refund with a lifecycle signer', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/deadline_too_far/);
     expect(bodies).toHaveLength(0);
+  });
+});
+
+describe('release/refund transporting an order signed elsewhere', () => {
+  /**
+   * What the publisher's browser produced: a document this backend built, a
+   * signature from the wallet, reassembled into the wire block. The backend
+   * never sees a key.
+   */
+  async function orderFromBrowser(
+    action: 'release' | 'refundInEscrow',
+    amount: string
+  ): Promise<ReturnType<typeof lifecycleAuthFromSignature>> {
+    const typedData = buildLifecycleTypedData({
+      action,
+      paymentInfo: PI,
+      payer: payerWallet.address,
+      amount,
+      chainId: 8453,
+    });
+    const types = { ...typedData.types };
+    delete types['EIP712Domain'];
+    const signature = await payerWallet.signTypedData(
+      typedData.domain as ethers.TypedDataDomain,
+      types,
+      typedData.message
+    );
+    return lifecycleAuthFromSignature(typedData, signature, payerWallet.address);
+  }
+
+  it('release: the block travels byte for byte, nothing re-derived', async () => {
+    const auth = await orderFromBrowser('release', '1000000');
+    const result = await makeClient().releaseViaFacilitator(PI, undefined, {
+      lifecycleAuth: auth,
+    });
+    expect(result.success).toBe(true);
+
+    const payload = bodies[0].payload as Record<string, unknown>;
+    // Deep-equal, not field by field: re-signing or "normalizing" any part of
+    // it changes bytes the browser committed to and nobody would notice until
+    // the facilitator answered `bad_signature`.
+    expect(payload.lifecycleAuth).toEqual(auth);
+    // And it is still the order the SDK would have signed itself.
+    expect(recoverFromBody(bodies[0], 'release')).toBe(payerWallet.address);
+  });
+
+  it('refundInEscrow: the same, with its own action', async () => {
+    const auth = await orderFromBrowser('refundInEscrow', '250000');
+    const result = await makeClient().refundViaFacilitator(PI, '250000', {
+      lifecycleAuth: auth,
+    });
+    expect(result.success).toBe(true);
+    expect((bodies[0].payload as Record<string, unknown>).lifecycleAuth).toEqual(auth);
+    expect(recoverFromBody(bodies[0], 'refundInEscrow')).toBe(payerWallet.address);
+  });
+
+  it('an order signed for a DIFFERENT amount than the one sent does not recover', async () => {
+    // The trap the split flow makes reachable: the browser signs the bounty,
+    // the backend sends a partial. Both halves look right on their own.
+    const auth = await orderFromBrowser('release', '1000000');
+    await makeClient().releaseViaFacilitator(PI, '250000', { lifecycleAuth: auth });
+    expect((bodies[0].payload as Record<string, unknown>).amount).toBe('250000');
+    expect(recoverFromBody(bodies[0], 'release')).not.toBe(payerWallet.address);
+  });
+
+  it('a signer and a pre-signed order together is an error, and nothing is sent', async () => {
+    const auth = await orderFromBrowser('release', '1000000');
+    const result = await makeClient().releaseViaFacilitator(PI, undefined, {
+      lifecycleSigner: signerAdapter(),
+      lifecycleAuth: auth,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/mutually exclusive/);
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('the same refusal on the refund path', async () => {
+    const auth = await orderFromBrowser('refundInEscrow', '1000000');
+    const result = await makeClient().refundViaFacilitator(PI, undefined, {
+      lifecycleSigner: signerAdapter(),
+      lifecycleAuth: auth,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/mutually exclusive/);
+    expect(bodies).toHaveLength(0);
+  });
+
+  it('lifecycleDeadline is ignored next to a pre-signed order', async () => {
+    // The order already carries the deadline it was signed with. A ceiling
+    // check here would be checking a clock that is not the one that signed.
+    const auth = await orderFromBrowser('release', '1000000');
+    const result = await makeClient().releaseViaFacilitator(PI, undefined, {
+      lifecycleAuth: auth,
+      lifecycleDeadline: Math.floor(Date.now() / 1000) + 4000,
+    });
+    expect(result.success).toBe(true);
+    const sent = (bodies[0].payload as Record<string, { deadline: number }>).lifecycleAuth;
+    expect(sent.deadline).toBe(auth.deadline);
   });
 });

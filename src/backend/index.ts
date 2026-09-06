@@ -79,7 +79,13 @@ import {
   OPERATOR_FEE_BPS,
 } from '../escrow-preauth';
 import { buildLifecycleAuth } from '../lifecycle-auth';
-import type { LifecycleSigner } from '../lifecycle-auth';
+import type {
+  LifecycleAction,
+  LifecycleAuth,
+  LifecyclePaymentInfo,
+  LifecycleSigner,
+} from '../lifecycle-auth';
+import { X402Error } from '../types';
 import { getChainByName, isUsdPegged, usdConversionError } from '../chains';
 import {
   DEFAULT_RETRY_AFTER_SECONDS,
@@ -5770,9 +5776,65 @@ export interface LifecycleAuthOptions {
   lifecycleSigner?: LifecycleSigner;
   /**
    * Unix seconds. Default: `now + 600`, which leaves 300 s of headroom under
-   * the facilitator's 900 s ceiling.
+   * the facilitator's 900 s ceiling. Only read alongside `lifecycleSigner` —
+   * a `lifecycleAuth` already carries the deadline it was signed with.
    */
   lifecycleDeadline?: number;
+  /**
+   * An order that was ALREADY SIGNED somewhere else — the publisher's browser
+   * — and that this backend only transports.
+   *
+   * The signing side builds the document with `buildLifecycleTypedData`, the
+   * browser signs it, and `lifecycleAuthFromSignature` turns the signature
+   * back into this block. Nothing is re-derived here: the `paymentInfo`, the
+   * `payer` and the `amount` this call sends must be the ones the order
+   * committed to, or the facilitator reads `bad_signature`.
+   *
+   * MUTUALLY EXCLUSIVE with `lifecycleSigner`. Passing both is not a
+   * preference to resolve — it means the caller believes two different orders
+   * are about to travel, and only one can. It throws.
+   */
+  lifecycleAuth?: LifecycleAuth;
+}
+
+/**
+ * The order that rides on a lifecycle request, from whichever of the two
+ * shapes the caller chose.
+ *
+ * Kept out of both methods so the exclusivity rule is written ONCE: duplicated,
+ * the day one branch grows a condition the other silently keeps the old one.
+ */
+async function resolveLifecycleAuth(
+  action: LifecycleAction,
+  options: LifecycleAuthOptions | undefined,
+  order: {
+    paymentInfo: LifecyclePaymentInfo;
+    payer: string;
+    amount: string;
+    chainId: number;
+  }
+): Promise<LifecycleAuth | undefined> {
+  if (options?.lifecycleSigner && options?.lifecycleAuth) {
+    throw new X402Error(
+      'lifecycleSigner and lifecycleAuth are mutually exclusive: the first signs an order ' +
+        'here, the second was already signed elsewhere. Passing both means two different ' +
+        'orders exist and only one can travel.',
+      'INVALID_CONFIG'
+    );
+  }
+  // Transported as-is. Re-signing or "normalizing" it would change the bytes
+  // the browser committed to.
+  if (options?.lifecycleAuth) return options.lifecycleAuth;
+  if (!options?.lifecycleSigner) return undefined;
+  return buildLifecycleAuth({
+    action,
+    paymentInfo: order.paymentInfo,
+    payer: order.payer,
+    amount: order.amount,
+    chainId: order.chainId,
+    wallet: options.lifecycleSigner,
+    deadline: options.lifecycleDeadline,
+  });
 }
 
 /**
@@ -6469,6 +6531,13 @@ export class AdvancedEscrowClient {
    *   lifecycleSigner: payerWallet,   // EnvKeyAdapter, OWS, wagmiLifecycleSigner(...)
    * });
    * ```
+   *
+   * @example Transporting an order the publisher signed in their browser
+   * ```typescript
+   * // The browser sent back a signature over a document THIS backend built.
+   * const lifecycleAuth = lifecycleAuthFromSignature(typedData, signature, payer);
+   * await client.releaseViaFacilitator(pi, amount, { lifecycleAuth });
+   * ```
    */
   async releaseViaFacilitator(
     paymentInfo: AdvancedPaymentInfo,
@@ -6493,20 +6562,16 @@ export class AdvancedEscrowClient {
       };
       const releaseAmount = amount || paymentInfo.maxAmount;
 
-      // The signed lifecycle order, when a signer is supplied. Without one the
-      // payload goes out byte-for-byte as it did before — the facilitator's
-      // default mode does not look at the field at all.
-      const lifecycleAuth = options?.lifecycleSigner
-        ? await buildLifecycleAuth({
-            action: 'release',
-            paymentInfo: wirePaymentInfo,
-            payer: this.payerAddress,
-            amount: releaseAmount,
-            chainId: this.chainId,
-            wallet: options.lifecycleSigner,
-            deadline: options.lifecycleDeadline,
-          })
-        : undefined;
+      // The signed lifecycle order: signed here from a `lifecycleSigner`, or
+      // handed over already signed as `lifecycleAuth`. With NEITHER the payload
+      // goes out byte-for-byte as it did before — the facilitator's default
+      // mode does not look at the field at all.
+      const lifecycleAuth = await resolveLifecycleAuth('release', options, {
+        paymentInfo: wirePaymentInfo,
+        payer: this.payerAddress,
+        amount: releaseAmount,
+        chainId: this.chainId,
+      });
 
       const payload = {
         x402Version: 2,
@@ -6660,17 +6725,12 @@ export class AdvancedEscrowClient {
       // Same optional order as `releaseViaFacilitator`, with the caveat that
       // the accepted signers differ: the receiver, the operator owner, or the
       // payer once `authorizationExpiry` has passed.
-      const lifecycleAuth = options?.lifecycleSigner
-        ? await buildLifecycleAuth({
-            action: 'refundInEscrow',
-            paymentInfo: wirePaymentInfo,
-            payer: this.payerAddress,
-            amount: refundAmount,
-            chainId: this.chainId,
-            wallet: options.lifecycleSigner,
-            deadline: options.lifecycleDeadline,
-          })
-        : undefined;
+      const lifecycleAuth = await resolveLifecycleAuth('refundInEscrow', options, {
+        paymentInfo: wirePaymentInfo,
+        payer: this.payerAddress,
+        amount: refundAmount,
+        chainId: this.chainId,
+      });
 
       const payload = {
         x402Version: 2,

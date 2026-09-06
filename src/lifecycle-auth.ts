@@ -18,6 +18,19 @@
  * KMS. In H2A/H2H the PAYER signs in their own browser with the same wallet
  * they paid with, and the marketplace merely transports the block.
  *
+ * >>> TWO SHAPES, ONE ORDER <<<
+ * `buildLifecycleAuth` does the whole ceremony in one call: it mints the
+ * nonce and the deadline, signs through the injected adapter, and returns the
+ * block. That is the server and the `wagmi` paths.
+ *
+ * A publisher's browser cannot use it. There the backend assembles the
+ * document — nonce and deadline included — the browser signs whatever it was
+ * handed, and gives back a signature and nothing else. That is
+ * {@link buildLifecycleTypedData} on one side and
+ * {@link lifecycleAuthFromSignature} on the other, and it produces the SAME
+ * bytes as the one-call path for the same nonce and deadline, pinned in
+ * `src/lifecycle-auth.test.ts`.
+ *
  * Source of truth for the format is the facilitator, `x402-rs`
  * `src/payment_operator/lifecycle_auth.rs` (PR #21). The Python twin is
  * `uvd_x402_sdk.escrow_signing.build_lifecycle_auth` (0.78.0); the two must
@@ -191,29 +204,42 @@ export interface LifecycleTypedDataParams {
   amount: string | number | bigint;
   /** EVM chain id of the payment network. */
   chainId: number;
-  /** Unix seconds after which the order is dead. */
-  deadline: number;
-  /** 32 bytes, hex. */
-  nonce: string;
+  /**
+   * Unix seconds after which the order is dead. Default: `now + 600`, which
+   * leaves 300 s of headroom under the facilitator's 900 s ceiling.
+   */
+  deadline?: number;
+  /**
+   * 32 bytes, hex. Default: a fresh random one. Distinct PER ORDER — the
+   * facilitator consumes it on acceptance.
+   */
+  nonce?: string;
+  /** Unix seconds, for the `deadline` default and for tests. Default: the clock. */
+  now?: number;
 }
 
-export interface BuildLifecycleAuthParams
-  extends Omit<LifecycleTypedDataParams, 'deadline' | 'nonce'> {
+/**
+ * The EIP-712 document itself: what {@link buildLifecycleTypedData} returns and
+ * what {@link lifecycleAuthFromSignature} reads back.
+ *
+ * Named because it is a WIRE type in the split flow: a backend builds it,
+ * ships it to a browser as JSON, and the browser hands it to `signTypedData`.
+ * `types` carries no `EIP712Domain` entry — ethers and viem both derive that
+ * one, and including it makes ethers throw `ambiguous primary types`.
+ */
+export interface LifecycleTypedData {
+  domain: { name: string; version: string; chainId: number };
+  types: Record<string, Array<{ name: string; type: string }>>;
+  primaryType: 'LifecycleOrder';
+  message: Record<string, unknown>;
+}
+
+export interface BuildLifecycleAuthParams extends LifecycleTypedDataParams {
   /**
    * The signer. Must be the payer, the receiver or the operator owner
    * depending on the action — see the table in the module docblock.
    */
   wallet: LifecycleSigner;
-  /** Unix seconds. Default: `now + 600`. */
-  deadline?: number;
-  /**
-   * 32 bytes in hex. Default: a fresh random one. Distinct PER ORDER — the
-   * facilitator consumes it on acceptance (a stream's partial settles emit
-   * one per delta).
-   */
-  nonce?: string;
-  /** Unix seconds, for tests. Default: the clock. */
-  now?: number;
 }
 
 // ============================================================================
@@ -280,6 +306,28 @@ function randomNonce(): string {
   return ethers.hexlify(ethers.randomBytes(32));
 }
 
+/**
+ * The two values that must be IDENTICAL in the signed document and in the
+ * `lifecycleAuth` block, resolved in ONE place so the two entry points cannot
+ * drift. {@link buildLifecycleAuth} needs them before signing; the split
+ * browser flow reads them back out of the document it built.
+ */
+function resolveOrderTiming(params: { deadline?: number; nonce?: string; now?: number }): {
+  nowSec: number;
+  deadline: number;
+  nonce: string;
+} {
+  const nowSec = params.now === undefined ? Math.floor(Date.now() / 1000) : Math.floor(params.now);
+  return {
+    nowSec,
+    deadline:
+      params.deadline === undefined
+        ? nowSec + LIFECYCLE_DEFAULT_DEADLINE_SECS
+        : Math.floor(params.deadline),
+    nonce: params.nonce === undefined ? randomNonce() : params.nonce,
+  };
+}
+
 function toUintString(value: unknown, field: string): string {
   let n: bigint;
   try {
@@ -301,21 +349,40 @@ function toUintString(value: unknown, field: string): string {
  * The exact EIP-712 document a lifecycle order signs.
  *
  * Kept separate from {@link buildLifecycleAuth} because it is the useful
- * seam: it is what the Python twin mirrors, and what a test can poke field
- * by field to confirm the signature stops verifying.
+ * seam: it is what the Python twin mirrors, what a test can poke field by
+ * field to confirm the signature stops verifying, and — the reason it is
+ * PUBLIC — what a backend hands to a browser that signs.
+ *
+ * {@link buildLifecycleAuth} cannot serve that browser: it takes an injected
+ * `WalletAdapter` and mints its own nonce and deadline, while a publisher
+ * signs a document the backend already assembled and hands back only a
+ * signature. Build it here, ship it, and reassemble the wire block with
+ * {@link lifecycleAuthFromSignature} — which reads `deadline` and `nonce`
+ * back out of this same document, so the two cannot disagree.
+ *
+ * @example The split flow, backend half
+ * ```typescript
+ * const typedData = buildLifecycleTypedData({
+ *   action: 'release',
+ *   paymentInfo: pi,   // the SAME object that will be sent
+ *   payer,             // payload.payer
+ *   amount,            // the SAME as payload.amount
+ *   chainId: 8453,
+ * });                  // deadline -> now + 600, nonce -> 32 fresh bytes
+ * // -> res.json({ typedData })  ... the browser signs it and posts back a signature
+ * const lifecycleAuth = lifecycleAuthFromSignature(typedData, signature, payer);
+ * ```
  *
  * @throws {X402Error} `INVALID_CONFIG` on an unknown action or a paymentInfo
- *   missing a field; `INVALID_AMOUNT` on a negative amount. Nothing is
- *   defaulted: an invented field is a signature over a different struct than
- *   the one that is sent, i.e. a rejection the caller cannot diagnose.
+ *   missing a field; `INVALID_AMOUNT` on a negative amount. Nothing IN THE
+ *   SIGNED STRUCT is defaulted: an invented field is a signature over a
+ *   different struct than the one that is sent, i.e. a rejection the caller
+ *   cannot diagnose. `deadline` and `nonce` are the exception because they
+ *   exist nowhere else — they are born here and read back from the document.
  */
-export function buildLifecycleTypedData(params: LifecycleTypedDataParams): {
-  domain: { name: string; version: string; chainId: number };
-  types: Record<string, Array<{ name: string; type: string }>>;
-  primaryType: 'LifecycleOrder';
-  message: Record<string, unknown>;
-} {
-  const { action, paymentInfo, payer, amount, chainId, deadline, nonce } = params;
+export function buildLifecycleTypedData(params: LifecycleTypedDataParams): LifecycleTypedData {
+  const { action, paymentInfo, payer, amount, chainId } = params;
+  const { deadline, nonce } = resolveOrderTiming(params);
 
   if (!LIFECYCLE_ACTIONS.includes(action)) {
     throw new X402Error(
@@ -402,11 +469,9 @@ export function buildLifecycleTypedData(params: LifecycleTypedDataParams): {
 export async function buildLifecycleAuth(
   params: BuildLifecycleAuthParams
 ): Promise<LifecycleAuth> {
-  const { wallet, deadline, nonce, now, ...rest } = params;
+  const { wallet, ...rest } = params;
 
-  const nowSec = now === undefined ? Math.floor(Date.now() / 1000) : Math.floor(now);
-  const dl = deadline === undefined ? nowSec + LIFECYCLE_DEFAULT_DEADLINE_SECS : Math.floor(deadline);
-  const nonceHex = nonce === undefined ? randomNonce() : nonce;
+  const { nowSec, deadline: dl, nonce: nonceHex } = resolveOrderTiming(params);
 
   if (dl < nowSec) {
     throw new X402Error(
@@ -431,6 +496,118 @@ export async function buildLifecycleAuth(
     deadline: dl,
     nonce: nonceToBytes32(nonceHex),
     signature: signed.signature,
+  };
+}
+
+/**
+ * Reassemble `payload.lifecycleAuth` from a document that was signed
+ * ELSEWHERE — the other half of the split flow.
+ *
+ * `buildLifecycleAuth` owns the whole ceremony: it mints the nonce and the
+ * deadline, signs, and returns the block. A publisher's browser owns none of
+ * that. It receives a document the backend already assembled and gives back
+ * one string. This is the seam where that string becomes a wire block.
+ *
+ * `deadline` and `nonce` are NOT parameters: they are read out of
+ * `typedData.message`, which is the document that was actually hashed. Taking
+ * them from the caller would let the block claim a nonce the signature never
+ * committed to — a `bad_signature` the caller cannot see, because both halves
+ * look right on their own.
+ *
+ * The signature is NOT recovered here. This SDK's payers include ERC-7702
+ * delegated accounts and contract wallets that validate through ERC-1271
+ * (`src/erc7702.ts:8`), whose signatures do not ecrecover to their address;
+ * `ethers.verifyTypedData` would reject the good ones. Recovery — and the
+ * role check that goes with it — is the facilitator's, against the chain.
+ *
+ * @param typedData - what {@link buildLifecycleTypedData} returned, unmodified.
+ * @param signature - the 0x-hex the wallet gave back (`signTypedData`).
+ * @param signer - the address that signed, claimed in the block and checked
+ *   against the recovered one by the facilitator.
+ *
+ * @throws {X402Error} `INVALID_CONFIG` if the document is not a
+ *   `LifecycleOrder` for this domain, if the signature is not hex, or if the
+ *   signer is not an address.
+ *
+ * @example The browser half
+ * ```typescript
+ * const signature = await walletClient.signTypedData({
+ *   domain: typedData.domain,
+ *   types: typedData.types,
+ *   primaryType: typedData.primaryType,
+ *   message: typedData.message,
+ * });
+ * const lifecycleAuth = lifecycleAuthFromSignature(typedData, signature, address);
+ * ```
+ */
+export function lifecycleAuthFromSignature(
+  typedData: LifecycleTypedData,
+  signature: string,
+  signer: string
+): LifecycleAuth {
+  const td = (typedData ?? {}) as Partial<LifecycleTypedData>;
+  const message = (td.message ?? {}) as Record<string, unknown>;
+
+  // A payment's typed data would sail through the shape checks below and
+  // produce a block over the wrong struct entirely, so the document is
+  // identified before anything is read out of it.
+  if (td.primaryType !== 'LifecycleOrder') {
+    throw new X402Error(
+      `typedData.primaryType must be LifecycleOrder, got ${String(td.primaryType)}: ` +
+        'pass the document buildLifecycleTypedData returned, unmodified',
+      'INVALID_CONFIG'
+    );
+  }
+  const domain = (td.domain ?? {}) as Record<string, unknown>;
+  if (
+    domain.name !== LIFECYCLE_DOMAIN_NAME ||
+    String(domain.version) !== LIFECYCLE_DOMAIN_VERSION
+  ) {
+    throw new X402Error(
+      `typedData.domain must be ${LIFECYCLE_DOMAIN_NAME} v${LIFECYCLE_DOMAIN_VERSION}, got ` +
+        `${String(domain.name)} v${String(domain.version)}`,
+      'INVALID_CONFIG'
+    );
+  }
+  if (message.deadline === undefined || message.nonce === undefined) {
+    throw new X402Error(
+      'typedData.message carries no deadline/nonce: the wire block reads them from the ' +
+        'document that was signed, it does not invent them',
+      'INVALID_CONFIG'
+    );
+  }
+
+  // uint256 in the signature, a JSON number on the wire. The facilitator's
+  // block is typed `u64`, so a deadline that lost precision here is an
+  // `expired` on an order whose signature is perfectly good.
+  const deadlineBig = BigInt(toUintString(message.deadline, 'typedData.message.deadline'));
+  if (deadlineBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new X402Error(
+      `typedData.message.deadline ${deadlineBig} does not fit a JSON number`,
+      'INVALID_CONFIG'
+    );
+  }
+
+  if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]+$/.test(signature) ||
+      signature.length % 2 !== 0) {
+    throw new X402Error(
+      `signature must be 0x-prefixed hex, got ${String(signature)}`,
+      'INVALID_CONFIG'
+    );
+  }
+
+  let checksummed: string;
+  try {
+    checksummed = ethers.getAddress(signer);
+  } catch {
+    throw new X402Error(`signer is not an EVM address: ${String(signer)}`, 'INVALID_CONFIG');
+  }
+
+  return {
+    signer: checksummed,
+    deadline: Number(deadlineBig),
+    nonce: nonceToBytes32(message.nonce),
+    signature,
   };
 }
 
