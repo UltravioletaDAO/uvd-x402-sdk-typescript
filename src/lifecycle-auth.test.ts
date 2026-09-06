@@ -18,6 +18,7 @@ import { ethers } from 'ethers';
 import {
   buildLifecycleAuth,
   buildLifecycleTypedData,
+  lifecycleAuthFromSignature,
   wagmiLifecycleSigner,
   LIFECYCLE_DOMAIN_NAME,
   LIFECYCLE_DOMAIN_VERSION,
@@ -835,5 +836,222 @@ describe('the payer signs in the browser', () => {
         },
       })
     ).toThrow(/needs an account/);
+  });
+});
+
+// ============================================================================
+// 6 · THE SPLIT FLOW — the backend builds the document, the browser signs it
+// ============================================================================
+
+/**
+ * `buildLifecycleAuth` cannot serve a publisher's browser: it signs through an
+ * injected `WalletAdapter` and mints its own nonce and deadline, while the
+ * publisher signs a document the backend already assembled and gives back one
+ * string.
+ *
+ * What is pinned here is that the two shapes are the SAME order — same bytes,
+ * for the same nonce and deadline — because the moment they can differ, the
+ * browser path is a `bad_signature` that neither half can see from its side.
+ */
+describe('the split flow: buildLifecycleTypedData + lifecycleAuthFromSignature', () => {
+  /** Exactly what a viem/wagmi `signTypedData` does with the document. */
+  async function signAsBrowser(
+    typedData: ReturnType<typeof buildLifecycleTypedData>,
+    privateKey: string = KEY
+  ): Promise<string> {
+    const wallet = new ethers.Wallet(privateKey);
+    const types = { ...typedData.types };
+    delete types['EIP712Domain'];
+    return wallet.signTypedData(
+      typedData.domain as ethers.TypedDataDomain,
+      types,
+      typedData.message
+    );
+  }
+
+  const documentFor = (over: Record<string, unknown> = {}) =>
+    buildLifecycleTypedData({
+      action: 'release',
+      paymentInfo: PI,
+      payer: vectors.payer,
+      amount: vectors.amount,
+      chainId: CHAIN_ID,
+      deadline: vectors.deadline,
+      nonce: vectors.nonce,
+      ...over,
+    });
+
+  it('produces byte-for-byte the block buildLifecycleAuth produces', async () => {
+    // One call, server-side.
+    const oneShot = await buildLifecycleAuth({
+      action: 'release',
+      paymentInfo: PI,
+      payer: vectors.payer,
+      amount: vectors.amount,
+      chainId: CHAIN_ID,
+      deadline: vectors.deadline,
+      nonce: vectors.nonce,
+      wallet: testSigner(KEY),
+      now: vectors.deadline - 60,
+    });
+
+    // Two halves: the backend builds, the browser signs, the backend reassembles.
+    const typedData = documentFor();
+    const split = lifecycleAuthFromSignature(
+      typedData,
+      await signAsBrowser(typedData),
+      vectors.signer
+    );
+
+    // Not key by key: the whole block, because a single field drifting apart is
+    // the failure mode this exists to rule out.
+    expect(split).toEqual(oneShot);
+  });
+
+  it('reaches the exact signature Python fixed for this vector', async () => {
+    const typedData = documentFor();
+    const auth = lifecycleAuthFromSignature(
+      typedData,
+      await signAsBrowser(typedData),
+      vectors.signer
+    );
+
+    expect(auth.signature).toBe(vectors.signature);
+    expect(auth.signer).toBe(vectors.signer);
+    expect(auth.deadline).toBe(vectors.deadline);
+    expect(auth.nonce).toBe(vectors.nonce);
+  });
+
+  it('the whole browser round trip verifies through the local oracle', async () => {
+    // The oracle is the chain-free half of lifecycle_auth.rs, not this SDK: a
+    // block that satisfies it is one the facilitator accepts.
+    const typedData = documentFor();
+    const auth = lifecycleAuthFromSignature(
+      typedData,
+      await signAsBrowser(typedData),
+      vectors.signer
+    );
+
+    expect(
+      oracleVerdict(auth, {
+        action: 'release',
+        amount: BigInt(vectors.amount),
+        payer: vectors.payer,
+        paymentInfo: PI,
+        chainId: CHAIN_ID,
+        now: vectors.deadline - 60,
+      })
+    ).toBe('ok');
+  });
+
+  it('reads deadline and nonce from the DOCUMENT, never from the caller', async () => {
+    const typedData = documentFor();
+    const signature = await signAsBrowser(typedData);
+
+    // The document is the only source. Rewrite it and the block follows it —
+    // which is what keeps a block from ever claiming a nonce the signature
+    // never committed to.
+    const rewritten = {
+      ...typedData,
+      message: { ...typedData.message, deadline: '1757000999', nonce: `0x${'ab'.repeat(32)}` },
+    };
+    const auth = lifecycleAuthFromSignature(rewritten, signature, vectors.signer);
+    expect(auth.deadline).toBe(1757000999);
+    expect(auth.nonce).toBe(`0x${'ab'.repeat(32)}`);
+  });
+
+  it('defaults deadline to now + 600 and mints a fresh 32-byte nonce', () => {
+    const now = vectors.deadline - 300;
+    const typedData = documentFor({ deadline: undefined, nonce: undefined, now });
+    expect(Number(typedData.message.deadline) - now).toBe(LIFECYCLE_DEFAULT_DEADLINE_SECS);
+    expect(String(typedData.message.nonce)).toMatch(/^0x[0-9a-f]{64}$/);
+
+    // A backend that reused a nonce would get `replayed` on the second order.
+    const other = documentFor({ deadline: undefined, nonce: undefined, now });
+    expect(other.message.nonce).not.toBe(typedData.message.nonce);
+  });
+
+  it('the document survives the wire, because it is JSON that crosses it', async () => {
+    const typedData = documentFor();
+    // The backend serializes it, the browser parses it, and it must still hash
+    // to the same digest — no bigint, no Date, nothing JSON silently drops.
+    const overTheWire = JSON.parse(JSON.stringify(typedData)) as typeof typedData;
+    expect(overTheWire).toEqual(typedData);
+    const auth = lifecycleAuthFromSignature(
+      overTheWire,
+      await signAsBrowser(overTheWire),
+      vectors.signer
+    );
+    expect(auth.signature).toBe(vectors.signature);
+  });
+});
+
+describe('what lifecycleAuthFromSignature refuses to assemble', () => {
+  const GOOD = () =>
+    buildLifecycleTypedData({
+      action: 'release',
+      paymentInfo: PI,
+      payer: vectors.payer,
+      amount: vectors.amount,
+      chainId: CHAIN_ID,
+      deadline: vectors.deadline,
+      nonce: vectors.nonce,
+    });
+  const SIG = vectors.signature;
+
+  it('refuses a document that is not a LifecycleOrder', () => {
+    // A payment's typed data would pass every shape check below and yield a
+    // block over a completely different struct.
+    const notOurs = { ...GOOD(), primaryType: 'TransferWithAuthorization' as 'LifecycleOrder' };
+    expect(() => lifecycleAuthFromSignature(notOurs, SIG, vectors.signer)).toThrow(
+      /primaryType must be LifecycleOrder/
+    );
+  });
+
+  it('refuses a foreign domain', () => {
+    const wrong = { ...GOOD(), domain: { name: 'x402 escrow', version: '1', chainId: 8453 } };
+    expect(() => lifecycleAuthFromSignature(wrong, SIG, vectors.signer)).toThrow(
+      /x402 escrow lifecycle/
+    );
+  });
+
+  it('refuses a document with no deadline or nonce', () => {
+    const td = GOOD();
+    const stripped = { ...td, message: { ...td.message } };
+    delete (stripped.message as Record<string, unknown>).nonce;
+    expect(() => lifecycleAuthFromSignature(stripped, SIG, vectors.signer)).toThrow(
+      /carries no deadline\/nonce/
+    );
+  });
+
+  it('refuses a signature that is not hex', () => {
+    expect(() => lifecycleAuthFromSignature(GOOD(), 'not-a-signature', vectors.signer)).toThrow(
+      /0x-prefixed hex/
+    );
+    // An odd nibble count is a truncated signature, not a short one.
+    expect(() => lifecycleAuthFromSignature(GOOD(), '0xabc', vectors.signer)).toThrow(
+      /0x-prefixed hex/
+    );
+  });
+
+  it('refuses a signer that is not an address', () => {
+    expect(() => lifecycleAuthFromSignature(GOOD(), SIG, 'publisher-42')).toThrow(
+      /not an EVM address/
+    );
+  });
+
+  it('checksums the signer, so a lowercase address is not a different claim', () => {
+    const auth = lifecycleAuthFromSignature(GOOD(), SIG, vectors.signer.toLowerCase());
+    expect(auth.signer).toBe(vectors.signer);
+  });
+
+  it('passes an ERC-1271 signature through instead of trying to recover it', () => {
+    // Contract wallets and ERC-7702 delegated accounts (`src/erc7702.ts:8`)
+    // validate through ERC-1271; their signatures do not ecrecover to their
+    // address and are not 65 bytes. Recovery is the facilitator's, on-chain —
+    // rejecting these here would lock out every smart account this SDK serves.
+    const smartAccountSig = `0x${'cd'.repeat(200)}`;
+    const auth = lifecycleAuthFromSignature(GOOD(), smartAccountSig, vectors.signer);
+    expect(auth.signature).toBe(smartAccountSig);
   });
 });

@@ -359,6 +359,7 @@ export type {
 export {
   buildLifecycleAuth,
   buildLifecycleTypedData,
+  lifecycleAuthFromSignature,
   wagmiLifecycleSigner,
   LIFECYCLE_ACTIONS,
   LIFECYCLE_DOMAIN_NAME,
@@ -372,6 +373,7 @@ export type {
   LifecycleAuth,
   LifecyclePaymentInfo,
   LifecycleSigner,
+  LifecycleTypedData,
   LifecycleTypedDataParams,
   BuildLifecycleAuthParams,
   WagmiLifecycleWalletClient,

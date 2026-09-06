@@ -4,6 +4,90 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.87.0] - 2026-09-06
+
+**El publisher puede firmar la orden de `release` en su propio browser.** La
+2.86.0 dejó una sola forma de firmar — `buildLifecycleAuth`, con un adaptador
+inyectado que inventa su propio nonce y su propio deadline —, y esa forma no
+sirve para un browser: el publisher firma un documento que el backend ya armó y
+devuelve una firma, nada más. Esta versión abre esa costura en dos y prueba que
+las dos mitades producen **los mismos bytes**.
+
+### Added
+
+- **`lifecycleAuthFromSignature(typedData, signature, signer)` — la otra mitad.**
+  Toma el documento que `buildLifecycleTypedData` devolvió, la firma que la
+  wallet dio, y arma el bloque `{ signer, deadline, nonce, signature }` que va
+  en `payload.lifecycleAuth`.
+
+  `deadline` y `nonce` **no son parámetros**: se leen de `typedData.message`,
+  que es el documento que realmente se hasheó. Tomarlos del llamador dejaría
+  que el bloque declare un nonce que la firma nunca comprometió — un
+  `bad_signature` que nadie ve, porque las dos mitades se ven bien por
+  separado.
+
+  La firma **no se recupera acá**. Los payers de este SDK incluyen cuentas
+  delegadas ERC-7702 y wallets de contrato que validan por ERC-1271
+  (`src/erc7702.ts:8`), cuyas firmas no hacen `ecrecover` a su dirección:
+  `ethers.verifyTypedData` rechazaría justo las buenas. La recuperación —y el
+  chequeo de rol que la acompaña— es del facilitador, contra la cadena.
+
+  ```ts
+  // backend
+  const typedData = buildLifecycleTypedData({
+    action: 'release', paymentInfo: pi, payer, amount, chainId: 8453,
+  });                                  // deadline -> now + 600, nonce -> 32 bytes frescos
+  res.json({ typedData });
+
+  // browser (wagmi / viem)
+  const signature = await walletClient.signTypedData({ ...typedData });
+
+  // backend, de vuelta
+  const lifecycleAuth = lifecycleAuthFromSignature(typedData, signature, payer);
+  await client.releaseViaFacilitator(pi, amount, { lifecycleAuth });
+  ```
+
+- **`releaseViaFacilitator` / `refundViaFacilitator` aceptan `{ lifecycleAuth }`**
+  ya firmado, como alternativa **excluyente** a `{ lifecycleSigner }`. El bloque
+  viaja tal cual: nada se vuelve a derivar ni a "normalizar", porque cualquiera
+  de las dos cosas cambiaría bytes que el browser ya comprometió.
+
+  Pasar los dos juntos **lanza**. No es una preferencia que se resuelva por
+  precedencia: significa que el llamador cree que van a viajar dos órdenes
+  distintas, y solo una puede.
+
+- **`LifecycleTypedData`** exportado como tipo. Es un tipo de **wire**: el
+  backend lo arma, lo serializa a JSON y lo manda al browser.
+
+### Changed
+
+- **`buildLifecycleTypedData` es la superficie del browser, y ya no exige
+  `deadline` ni `nonce`.** Omitidos, toma los mismos defaults que
+  `buildLifecycleAuth` (`now + 600` y 32 bytes frescos), resueltos en **un solo
+  lugar** para las dos entradas — así un backend no tiene que escribir su propio
+  generador de nonces, que es exactamente el paso donde se reusa uno y el
+  facilitador contesta `replayed`.
+
+  Pasarlos explícitos sigue haciendo lo de siempre; el vector de paridad con
+  Python los pasa y no se movió un byte.
+
+### Notas para quien integre desde un browser
+
+Tres cosas que el frontend tiene que respetar, o la orden no verifica:
+
+1. El `paymentInfo`, el `payer` y el `amount` firmados tienen que ser **los que
+   el backend envía**. Si se recalcula cualquiera de los tres antes del
+   `/settle`, es `bad_signature`. Hay un test que lo fija
+   (`src/backend/lifecycle-wiring.test.ts`, *an order signed for a DIFFERENT
+   amount than the one sent does not recover*).
+2. La orden vive **600 segundos**. Armar el documento en el momento de firmar,
+   no al pintar la página.
+3. Un nonce por orden, y `buildLifecycleTypedData` ya lo genera fresco.
+
+`lifecycleDeadline` se ignora al lado de un `lifecycleAuth`: la orden ya trae
+el deadline con el que se firmó, y chequear acá un reloj que no es el que firmó
+solo agregaría un rechazo local a algo que el facilitador hoy acepta.
+
 ## [2.86.0] - 2026-09-06
 
 **`release` and `refundInEscrow` can now be signed**, so moving money that is
