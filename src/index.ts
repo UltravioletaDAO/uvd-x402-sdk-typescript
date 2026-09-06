@@ -95,7 +95,7 @@
  *
  * const xrpl = new XRPLProvider({ seed: process.env.XRPL_SEED });
  * const address = await xrpl.connect();
- * const xrplConfig = getChainByName('xrpl-mainnet')!;
+ * const xrplConfig = getChainByName('xrpl')!;
  * const payload = await xrpl.signPayment(paymentInfo, xrplConfig); // { signedTxBlob }
  * const header = xrpl.encodePaymentHeader(payload);
  * ```

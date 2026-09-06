@@ -51,14 +51,16 @@ import { chainToCAIP2, encodeBase64Json } from '../../utils';
 /**
  * XRP Ledger network configuration.
  *
- * Native XRP uses 6 decimals (1 XRP = 1,000,000 drops). The network ids are
- * plain strings ("xrpl-mainnet" / "xrpl-testnet") with no CAIP-2 form, so the
- * v1 and v2 network identifiers are identical.
+ * Native XRP uses 6 decimals (1 XRP = 1,000,000 drops). The network names are
+ * the ones the facilitator publishes -- `xrpl` and `xrpl-testnet`
+ * (`x402-rs/src/network.rs:189,191`). `xrpl-mainnet` was the old spelling here
+ * and is now an input alias only (`CHAIN_ALIASES`): the facilitator's own
+ * comment calls it "right for a lookup and wrong for a wire format".
  */
 const XRPL_CONFIG = {
   mainnet: {
     rpcUrl: 'wss://xrplcluster.com',
-    network: 'xrpl-mainnet',
+    network: 'xrpl',
     explorerUrl: 'https://livenet.xrpl.org',
     facilitatorWallet: 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp',
   },
@@ -339,9 +341,7 @@ export class XRPLProvider implements WalletAdapter {
       signedTxBlob: payload.signedTxBlob,
     };
 
-    // XRPL has no CAIP-2 form: the v1 string IS the network id, so v1 and v2
-    // carry the same network identifier.
-    const network = this.testnet ? 'xrpl-testnet' : 'xrpl-mainnet';
+    const network = this.testnet ? 'xrpl-testnet' : 'xrpl';
 
     const x402Payload =
       version === 2

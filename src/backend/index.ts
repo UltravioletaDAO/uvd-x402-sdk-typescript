@@ -78,7 +78,7 @@ import {
   DEFAULT_MAX_FEE_BPS,
   OPERATOR_FEE_BPS,
 } from '../escrow-preauth';
-import { getChainByName } from '../chains';
+import { getChainByName, isUsdPegged, usdConversionError } from '../chains';
 import {
   DEFAULT_RETRY_AFTER_SECONDS,
   SETTLEMENT_UNCONFIRMED,
@@ -422,7 +422,17 @@ export function buildPaymentRequirements(
     throw new Error(`Unsupported chain: ${chainName}`);
   }
 
-  // Convert amount to atomic units
+  // Convert amount to atomic units.
+  //
+  // Scaling by the decimals only turns dollars into base units when one whole
+  // unit IS one dollar. On a chain that settles in its own floating native
+  // asset it silently prices the call in that asset instead: XRPL registers
+  // native XRP under the `usdc` key, so `"10.00"` used to bill 10 XRP. Refusing
+  // is the only honest answer -- the SDK has no rate and inventing one would
+  // charge a number nobody agreed to.
+  if (!isUsdPegged(chain.usdc)) {
+    throw new Error(usdConversionError(chain.name, chain.usdc));
+  }
   const atomicAmount = Math.floor(
     parseFloat(amount) * Math.pow(10, chain.usdc.decimals)
   ).toString();
@@ -636,9 +646,9 @@ export function buildSettleRequest(
  * Networks are CAIP-2 in v2 (`eip155:8453`) and plain names in v1 (`base`).
  *
  * The colon is the whole test, and it is the same one `create402Response` and
- * `normalizeRequirementForVersion` already use. Note `xrpl-mainnet` has no
- * CAIP-2 form -- the v1 string IS its network id -- so XRPL stays on v1 here,
- * which is correct.
+ * `normalizeRequirementForVersion` already use. Note the SDK's XRPL entries
+ * carry no CAIP-2 id yet (the facilitator publishes `xrpl:0` / `xrpl:1`, the
+ * registry does not), so XRPL stays on v1 here -- see the CHANGELOG for 2.85.0.
  */
 function isCaip2Network(network: string | undefined): boolean {
   return typeof network === 'string' && network.includes(':');

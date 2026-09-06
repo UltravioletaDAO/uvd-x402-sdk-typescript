@@ -54,6 +54,25 @@ export interface TokenConfig {
   name: string;
   /** Token version for EIP-712 domain */
   version: string;
+  /**
+   * Whether one whole unit of this token IS one dollar.
+   *
+   * Absent means yes, so every stablecoin entry in the registry keeps the
+   * behaviour it had. It is `false` for exactly one thing today: the native
+   * XRP that XRPL settles in.
+   *
+   * **The distinction is unit, not scale.** `decimals` already handles scale --
+   * BSC USDC has 18 of them and prices correctly. But scaling a price by the
+   * decimals only turns dollars into base units when one whole unit is one
+   * dollar. XRP has six real decimals and is still not a dollar, so
+   * `$1.00 -> 10**6` charges **1 XRP**, which is whatever XRP happens to cost.
+   * Six decimals of XRP are still XRP.
+   *
+   * The SDK refuses to price in USD against a token carrying `false` rather
+   * than converting at a rate nobody agreed to. Mirrors `NetworkConfig
+   * .usd_pegged` in the Python SDK (`networks/base.py:129`, 0.77.0).
+   */
+  usdPegged?: boolean;
 }
 
 /**
@@ -69,6 +88,15 @@ export interface USDCConfig {
   name: string;
   /** Token version for EIP-712 domain */
   version: string;
+  /**
+   * Whether one whole unit of this token IS one dollar. Absent means yes.
+   *
+   * See {@link TokenConfig.usdPegged}. It matters here because this field is
+   * also where a chain that settles in its own native asset describes that
+   * asset -- XRPL keeps native XRP under the key `usdc`, so the key promises a
+   * dollar the value does not deliver.
+   */
+  usdPegged?: boolean;
 }
 
 /**
@@ -218,7 +246,19 @@ export interface PaymentInfo {
   };
   /** Facilitator address (for Solana fee payer) */
   facilitator?: string;
-  /** Amount in USD (e.g., "10.00") */
+  /**
+   * Amount in whole units of the settlement asset (e.g., "10.00").
+   *
+   * For every dollar-pegged token that is dollars, which is all of them but
+   * one. On XRPL it is **XRP**, because XRPL settles in its own native asset:
+   * the provider spends this through `xrpToDrops` and bills whole XRP
+   * (`src/providers/xrpl/index.ts`). This used to be documented as USD, which
+   * made the type and its only XRPL consumer disagree about the unit -- and the
+   * consumer won, so a "10.00" written as ten dollars left as ten XRP. The SDK
+   * now refuses to build a dollar price for an asset with no dollar peg rather
+   * than let the two readings meet on the wire; see
+   * {@link TokenConfig.usdPegged}.
+   */
   amount: string;
   /** Token symbol (usually "USDC") */
   token?: string;
@@ -553,8 +593,8 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   // Sui
   sui: 'sui:mainnet',
   'sui-testnet': 'sui:testnet',
-  // XRPL (XRP Ledger has no CAIP-2 form - the v1 string IS the network id)
-  'xrpl-mainnet': 'xrpl-mainnet',
+  // XRPL (XRP Ledger)
+  xrpl: 'xrpl',
   'xrpl-testnet': 'xrpl-testnet',
 };
 

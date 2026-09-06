@@ -133,7 +133,7 @@ export const FACILITATOR_ADDRESSES = {
    * XRPL facilitator address (mainnet)
    * Used for: Submitting pre-signed Payment blobs and paying the network fee
    */
-  'xrpl-mainnet': 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp',
+  xrpl: 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp',
 
   /**
    * XRPL facilitator address (testnet)
@@ -178,7 +178,7 @@ export function getFacilitatorAddress(
     return FACILITATOR_ADDRESSES.sui;
   }
   if (networkType === 'xrpl') {
-    return FACILITATOR_ADDRESSES['xrpl-mainnet'];
+    return FACILITATOR_ADDRESSES.xrpl;
   }
 
   return undefined;
