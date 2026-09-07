@@ -3686,6 +3686,42 @@ export function supportsRelayedFeedback(network: string): boolean {
 }
 
 /**
+ * Networks where the facilitator serves the rater-authored feedback rail on
+ * **Solana**, through `POST /feedback/solana/prepare` + `/submit`.
+ *
+ * A separate list from {@link RELAYED_FEEDBACK_NETWORKS} on purpose, and the
+ * two must never be merged. That one names the chains where Execution Market
+ * deployed a `FeedbackDelegate` and the facilitator verified it on-chain; it
+ * routes to `/feedback/evm/*`. Adding `solana` to it would send a Solana
+ * rating to the EVM route, which answers 400 — and would claim a delegate that
+ * does not exist and is not missing.
+ *
+ * Solana needs no delegate at all: account 0 of the program's `give_feedback`
+ * instruction is already declared `[signer, writable] client`, so the rater
+ * signs as the author natively and the facilitator only co-signs as fee payer.
+ * Nothing is delegated because nothing has to be.
+ *
+ * Both networks are served by the deployed facilitator (v2.16.0, measured
+ * against `GET /supported`).
+ */
+export const SOLANA_FEEDBACK_NETWORKS: readonly Erc8004Network[] = [
+  'solana',
+  'solana-devnet',
+] as const;
+
+/**
+ * Whether `network` serves the rater-authored feedback rail on Solana.
+ *
+ * A routing hint, never the authority: the facilitator re-resolves the
+ * programs and the RPC provider per request and answers
+ * `400 "<network> is not a Solana network served by this facilitator"` for
+ * anything else.
+ */
+export function supportsSolanaFeedback(network: string): boolean {
+  return (SOLANA_FEEDBACK_NETWORKS as readonly string[]).includes(wireNetwork(network));
+}
+
+/**
  * An EIP-7702 authorization, as a wallet produces it.
  *
  * Needed only the first time a rater rates: it points their EOA at the
@@ -3819,6 +3855,84 @@ export interface SubmitRelayFeedbackRequest {
   signature: string;
   /** Required only when `prepare` answered `delegated: false` */
   authorization?: RelayAuthorizationParams;
+}
+
+/**
+ * Request body for `POST /feedback/solana/prepare`.
+ *
+ * `rater` is REQUIRED here and is a base58 Solana pubkey — an `0x` address is
+ * refused (`400 "rater must be a base58 Solana pubkey on this network"`).
+ * `agentId` is the agent's asset pubkey, also base58.
+ */
+export interface PrepareSolanaFeedbackRequest {
+  x402Version: 1 | 2;
+  /** One of {@link SOLANA_FEEDBACK_NETWORKS} */
+  network: Erc8004Network;
+  /**
+   * The rating, plus who signs it.
+   *
+   * **Set `score`.** It is optional on the wire and the ATOM Engine ignores an
+   * unscored feedback entirely: the record lands on the agent, the transaction
+   * succeeds, and the program reports `had_impact=false` — reputation stays at
+   * zero however much unscored feedback accumulates, and it is not retroactive.
+   * Omit it only when a deliberately non-scoring record is what you want.
+   */
+  feedback: FeedbackParams & { rater: string };
+}
+
+/**
+ * Response from `POST /feedback/solana/prepare`.
+ *
+ * Carries an UNSIGNED transaction whose `client` account is the rater. Sign it
+ * with the rater's key and hand it back to {@link Erc8004Client.submitSolanaFeedback}.
+ */
+export interface PrepareSolanaFeedbackResponse {
+  success: boolean;
+  /**
+   * base64 of the bincode-serialised unsigned **legacy** transaction — read it
+   * with `Transaction.from()`, not `VersionedTransaction`.
+   *
+   * It expects TWO signatures: the rater's, which you add, and the fee
+   * payer's, which `/feedback/solana/submit` adds. Do not re-encode the
+   * message or rebuild the instruction — the facilitator rebuilds it from the
+   * declared parameters and refuses to co-sign anything that is not
+   * byte-for-byte what it offered.
+   */
+  transaction?: string;
+  /** Who must sign as `client`, i.e. who the chain will record as the author */
+  rater?: string;
+  /** Who pays the fee. Still the facilitator — that is the point */
+  feePayer?: string;
+  /** The blockhash baked into the message. Submit before it expires */
+  blockhash?: string;
+  /**
+   * Last block height at which this transaction is still valid.
+   *
+   * Past it the network drops the transaction; nothing is written and nothing
+   * is charged. Prepare again rather than resubmitting.
+   */
+  lastValidBlockHeight?: number;
+  error?: string;
+  network: Erc8004Network;
+}
+
+/**
+ * Request body for `POST /feedback/solana/submit`.
+ *
+ * The feedback parameters are not redundant with `prepare`: the facilitator
+ * re-derives the message from them plus the blockhash carried by
+ * {@link transaction}, and refuses to co-sign anything that does not match
+ * byte for byte. Signing arbitrary blobs would turn the fee-payer keypair into
+ * a public signing oracle — one `system_program::transfer` would empty the
+ * wallet with the facilitator's signature on it.
+ */
+export interface SubmitSolanaFeedbackRequest {
+  x402Version: 1 | 2;
+  network: Erc8004Network;
+  /** Exactly what was sent to `prepare`, `rater` included */
+  feedback: FeedbackParams & { rater: string };
+  /** base64 of the rater-signed transaction */
+  transaction: string;
 }
 
 /**
@@ -4865,6 +4979,152 @@ export class Erc8004Client {
     } catch (error) {
       // Timeout or connection failure: the write may already be on-chain.
       // Retryable, never replayable -- reconcile before resending.
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network: request.network,
+        retryable: true,
+        safeToReplay: false,
+        retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
+      };
+    }
+  }
+
+  /**
+   * Ask the facilitator for the Solana transaction the rater must sign.
+   *
+   * Step 1 of the rater-authored rail on Solana. Writes nothing on-chain and
+   * costs nothing: it resolves the programs and the agent asset, reads the
+   * registry collection and a finalized blockhash, and hands back an UNSIGNED
+   * transaction whose `client` account is the rater.
+   *
+   * Why this exists, and why it is not the EVM rail: the program's
+   * `give_feedback` instruction declares account 0 as
+   * `[signer, writable] client (feedback author / fee payer)`, and plain
+   * `POST /feedback` puts the FACILITATOR's keypair there — so the chain
+   * records the facilitator as the author of the rating. Solana carries several
+   * signers per transaction natively, so the rater signs as `client` while the
+   * facilitator stays the fee payer. **No delegation and no program change**,
+   * which is why {@link SOLANA_FEEDBACK_NETWORKS} is its own list and `solana`
+   * must never appear in {@link RELAYED_FEEDBACK_NETWORKS} — that one routes to
+   * `/feedback/evm/*`, which answers 400 here.
+   *
+   * What to do with the answer:
+   * 1. Deserialise `transaction` — base64 of the bincode-serialised **legacy**
+   *    transaction, which is `@solana/web3.js`'s `Transaction.from()`, not
+   *    `VersionedTransaction` — and add the RATER's ed25519 signature. Sign the
+   *    message as it came: re-encoding it changes bytes the facilitator will
+   *    compare. The fee payer's slot stays empty; `submit` fills it.
+   * 2. Hand it back to {@link Erc8004Client.submitSolanaFeedback} with the SAME
+   *    feedback parameters, before `lastValidBlockHeight` passes.
+   *
+   * @param request - Network, rater pubkey and feedback parameters
+   * @returns The unsigned transaction, the fee payer and the blockhash window
+   *
+   * @example
+   * ```ts
+   * import { Transaction } from '@solana/web3.js';
+   *
+   * const prep = await erc8004.prepareSolanaFeedback({
+   *   x402Version: 1,
+   *   network: 'solana',
+   *   feedback: {
+   *     agentId: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv',
+   *     rater: raterPubkey,   // base58: who the chain records as the author
+   *     value: 87,
+   *     score: 95,            // without it the rating counts for nothing
+   *     tag1: 'quality',
+   *   },
+   * });
+   *
+   * const tx = Transaction.from(Buffer.from(prep.transaction!, 'base64'));
+   * tx.partialSign(raterKeypair);
+   * ```
+   */
+  async prepareSolanaFeedback(
+    request: PrepareSolanaFeedbackRequest,
+  ): Promise<PrepareSolanaFeedbackResponse> {
+    const url = `${this.baseUrl}/feedback/solana/prepare`;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          error: `Facilitator error: ${response.status} - ${errorText}`,
+          network: request.network,
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        network: request.network,
+      };
+    }
+  }
+
+  /**
+   * Co-sign and send a rater-signed Solana feedback transaction.
+   *
+   * Step 2 of the rater-authored rail on Solana. What lands on-chain has the
+   * RATER as `client`, so the agent's feedback lists the rater rather than the
+   * facilitator — and only the rater can revoke it.
+   *
+   * Pass back the same feedback parameters {@link Erc8004Client.prepareSolanaFeedback}
+   * was given. They are not redundant: the facilitator re-derives the message
+   * from them plus the blockhash inside the submitted transaction, and refuses
+   * to co-sign anything that is not byte-for-byte what it built
+   * (`400 "submitted transaction does not match the one this facilitator built"`).
+   * The rater's signature is verified BEFORE the facilitator adds its own, so a
+   * transaction the network would reject never costs a fee.
+   *
+   * @param request - Feedback parameters plus the rater-signed transaction
+   * @returns Feedback response with the transaction signature
+   */
+  async submitSolanaFeedback(
+    request: SubmitSolanaFeedbackRequest,
+  ): Promise<FeedbackResponse> {
+    const url = `${this.baseUrl}/feedback/solana/submit`;
+
+    try {
+      const { response, error } = await this.writeJson(url, {
+        ...request,
+        network: wireNetwork(request.network),
+      });
+
+      if (error) {
+        return {
+          success: false,
+          error: error.error,
+          network: request.network,
+          ...failureFields(error),
+        };
+      }
+
+      return await response.json();
+    } catch (error) {
+      // Timeout or connection failure: the write may already be on-chain.
+      // Retryable, never replayable -- and on this rail a resubmission needs a
+      // fresh `prepare`, because the blockhash the rater signed over expires.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',

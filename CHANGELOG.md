@@ -4,6 +4,78 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.88.0] - 2026-09-07
+
+**La autoría real de una calificación en Solana: el rater firma, el facilitador
+paga.** `submitFeedback()` escribe la calificación con la llave del
+**facilitador** en la cuenta 0 — que el programa declara
+`[signer, writable] client (feedback author)` —, así que la cadena registra al
+facilitador como autor, y el facilitador es el único que puede revocarla. En EVM
+eso se arregló con EIP-7702 y un `FeedbackDelegate`. En Solana no hace falta
+nada de eso: una transacción lleva varias firmas de forma nativa, así que el
+rater firma como `client` y el facilitador se queda de fee payer. El riel ya
+está desplegado (facilitador v2.16.0, medido hoy en
+`GET /api-docs/openapi.json`); lo que faltaba era el cliente.
+
+### Added
+
+- **`prepareSolanaFeedback()` / `submitSolanaFeedback()`** contra
+  `POST /feedback/solana/prepare` y `/submit`. `prepare` no escribe nada y no
+  cuesta nada: devuelve la transacción **sin firmar** (base64 del bincode) cuya
+  cuenta `client` es el rater, más `feePayer`, `blockhash` y
+  `lastValidBlockHeight`. El rater la firma con su llave ed25519 y `submit` la
+  co-firma como fee payer y la manda.
+
+  ```ts
+  const prep = await erc8004.prepareSolanaFeedback({
+    x402Version: 1,
+    network: 'solana',
+    feedback: { agentId: assetPubkey, rater: raterPubkey, value: 87, score: 95 },
+  });
+  const tx = Transaction.from(Buffer.from(prep.transaction!, 'base64'));
+  tx.partialSign(raterKeypair);
+  await erc8004.submitSolanaFeedback({
+    x402Version: 1, network: 'solana', feedback: { /* lo mismo */ },
+    transaction: tx.serialize({ requireAllSignatures: false }).toString('base64'),
+  });
+  ```
+
+  Los parámetros de `feedback` **no son redundantes** en `submit`: el
+  facilitador re-deriva el mensaje a partir de ellos y del blockhash que viaja
+  en la transacción, y se niega a co-firmar cualquier cosa que no sea byte por
+  byte la que él armó. Firmar blobs arbitrarios convertiría la llave del fee
+  payer en un oráculo de firma público — un solo `system_program::transfer`
+  vaciaría la wallet con la firma del facilitador encima.
+
+- **`SOLANA_FEEDBACK_NETWORKS` / `supportsSolanaFeedback()`** — `solana` y
+  `solana-devnet`, las dos que el facilitador sirve en vivo.
+
+  **Es una lista propia, y `solana` NUNCA entra a `RELAYED_FEEDBACK_NETWORKS`.**
+  Esa otra nombra las cadenas donde hay un `FeedbackDelegate` desplegado y
+  verificado on-chain, y es la que arma la URL `/feedback/evm/prepare`: meter
+  `solana` ahí manda la calificación a la ruta EVM —400— y además afirma un
+  delegate que nunca se desplegó y que no falta. Un test nuevo fija que las dos
+  listas no se tocan, y el que ya fijaba la lista de delegates
+  (`relayed-feedback.test.ts`) sigue verde sin tocarlo.
+
+- **`PrepareSolanaFeedbackRequest`**, **`PrepareSolanaFeedbackResponse`** y
+  **`SubmitSolanaFeedbackRequest`** como tipos de wire.
+
+### Notas
+
+- **Poné `score`.** Es opcional en el wire y el ATOM Engine ignora un feedback
+  sin score: la transacción sale bien, el registro queda en el agente, y la
+  reputación se queda en cero (`had_impact=false`). No es retroactivo — omitilo
+  solo si lo que querés es un registro que a propósito no puntúa.
+- `prepare` entrega una ventana, no un permiso permanente: pasado
+  `lastValidBlockHeight` la red descarta la transacción, no se escribe ni se
+  cobra nada, y reenviar exige un `prepare` nuevo porque el blockhash que el
+  rater firmó ya venció.
+- `rater` es obligatorio y es una pubkey base58; una dirección `0x` se rechaza
+  con 400. Es el punto entero del endpoint.
+
+Requiere facilitador v2.16.0+.
+
 ## [2.87.0] - 2026-09-06
 
 **El publisher puede firmar la orden de `release` en su propio browser.** La

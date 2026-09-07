@@ -1142,6 +1142,69 @@ chain that supports EIP-7702 -- the payment stays where it was made.
 
 Requires facilitator v1.93.0+ for the mainnets; base-sepolia since v1.74.0.
 
+### The same thing on Solana, without a delegate
+
+Solana reaches the same place by a shorter road, so it is a **different pair of
+calls and a different network list**. The program's `give_feedback` instruction
+already declares account 0 as `[signer, writable] client (feedback author)`, and
+a Solana transaction carries several signatures natively: the rater signs as
+`client`, the facilitator co-signs as fee payer. Nothing is delegated because
+nothing has to be.
+
+**`solana` never goes in `RELAYED_FEEDBACK_NETWORKS`.** That list drives
+`/feedback/evm/*` and names chains with a deployed `FeedbackDelegate`; a Solana
+rating sent there is a 400, and the entry would assert a delegate that was never
+deployed and is not missing. Use `SOLANA_FEEDBACK_NETWORKS` /
+`supportsSolanaFeedback()`.
+
+```typescript
+import { Erc8004Client, supportsSolanaFeedback } from 'uvd-x402-sdk/backend';
+import { Transaction } from '@solana/web3.js';
+
+const erc8004 = new Erc8004Client();
+
+if (!supportsSolanaFeedback('solana')) {
+  // fall back to submitFeedback(); the facilitator is the author there
+}
+
+const prep = await erc8004.prepareSolanaFeedback({
+  x402Version: 1,
+  network: 'solana',
+  feedback: {
+    agentId: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv', // the agent asset
+    rater: raterPubkey,   // base58: who the chain will record as the author
+    value: 87,
+    valueDecimals: 0,
+    score: 95,            // WITHOUT THIS the rating counts for nothing
+    tag1: 'quality',
+  },
+});
+
+// Sign the message as it came. Re-encoding it changes bytes the facilitator
+// will compare, and it refuses to co-sign anything it did not build. It is a
+// LEGACY transaction: `Transaction.from()`, not `VersionedTransaction`.
+const tx = Transaction.from(Buffer.from(prep.transaction!, 'base64'));
+tx.partialSign(raterKeypair);   // ...or a wallet: await wallet.signTransaction(tx)
+
+const result = await erc8004.submitSolanaFeedback({
+  x402Version: 1,
+  network: 'solana',
+  feedback: { /* exactly what went to prepare, rater included */ },
+  transaction: tx.serialize({ requireAllSignatures: false }).toString('base64'),
+});
+```
+
+`prep.feePayer` is the facilitator and `prep.rater` is the rater — that split is
+the whole point. Submit before `prep.lastValidBlockHeight`: past it the network
+drops the transaction, nothing is written and nothing is charged, and a resend
+needs a fresh `prepare()` because the blockhash the rater signed over is gone.
+
+**Set `score`.** It is optional on the wire and the ATOM Engine ignores an
+unscored feedback: the transaction succeeds, the record lands on the agent, and
+reputation stays at zero (`had_impact=false`) — and it is not retroactive.
+
+Available on `solana` and `solana-devnet`. Requires facilitator v2.16.0+.
+
 ## `/accepts` Negotiation
 
 Discover what the facilitator can settle before constructing payment authorizations. Used by Faremeter middleware and clients.
