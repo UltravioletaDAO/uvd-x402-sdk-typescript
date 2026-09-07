@@ -285,16 +285,49 @@ async function priceNetwork(cases) {
  * The key comes from the driver and is the synthetic 0x11*32 test key; it has
  * never held funds.
  */
+/**
+ * The METADATA of an EIP-712 document -- everything a signature cannot prove.
+ *
+ * Deliberately NOT the message values: Python signs `nonce` as bytes and
+ * TypeScript as a hex string, so comparing messages across runtimes would
+ * report a divergence that does not exist. What the message contains is
+ * already proven identical by the signature bytes. What it CANNOT prove is
+ * the envelope the signer is handed -- and viem refuses to sign a document
+ * with no `primaryType`, so a missing field closes the browser route while
+ * every byte-comparison stays green.
+ */
+function describeDocument(td) {
+  if (!td || typeof td !== 'object') return null;
+  return {
+    keys: Object.keys(td).sort(),
+    primaryType: td.primaryType ?? null,
+    typeNames: Object.keys(td.types ?? {}).sort(),
+    // The message travels too, and it travels THROUGH JSON -- which is the
+    // point. A uint written as a JSON number instead of a string loses
+    // precision the moment `JSON.parse` sees 32 bytes of salt, and the browser
+    // then signs a different struct with no error anywhere. Comparing the
+    // messages after they crossed the runtime boundary catches exactly that.
+    message: td.message ?? null,
+  };
+}
+
 async function signLifecycle(cases) {
   const { Wallet } = await import('ethers');
   const results = [];
   for (const c of cases) {
     try {
       const wallet = new Wallet(c.privateKey);
+      // The document the SDK hands the wallet, captured verbatim. `primaryType`
+      // does NOT enter the digest, so a signature comparison cannot see it --
+      // and that is exactly how Python shipped without the field while this
+      // gate stayed green (2026-09-07). The shape travels alongside the bytes.
+      let handed = null;
       const signer = {
         getAddress: () => wallet.address,
         async signTypedData(typedData) {
-          const { domain, types, message } = JSON.parse(typedData);
+          const parsed = JSON.parse(typedData);
+          handed = parsed;
+          const { domain, types, message } = parsed;
           const clean = { ...types };
           delete clean['EIP712Domain'];
           return { signature: await wallet.signTypedData(domain, clean, message) };
@@ -311,7 +344,7 @@ async function signLifecycle(cases) {
         nonce: c.nonce,
         now: c.now,
       });
-      results.push({ id: c.id, ...auth });
+      results.push({ id: c.id, ...auth, document: describeDocument(handed) });
     } catch (error) {
       results.push({ id: c.id, error: String(error?.message ?? error) });
     }
