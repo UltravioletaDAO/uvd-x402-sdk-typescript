@@ -284,6 +284,49 @@ def price_network(cases):
     return {"runtime": "python", "results": results}
 
 
+class _CapturaElDocumento:
+    """A ``WalletAdapter`` that signs AND keeps the document it was handed.
+
+    The SDK builds the EIP-712 document and passes it to the wallet; nothing
+    else in the API returns it. That document is what a browser receives, and
+    the one field that decides whether a browser can sign it -- ``primaryType``
+    -- does not enter the digest, so no signature comparison can see it.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.documento = None
+
+    def get_address(self):
+        return self._inner.get_address()
+
+    def sign_typed_data(self, typed_data):
+        self.documento = typed_data
+        return self._inner.sign_typed_data(typed_data)
+
+
+def describe_document(td):
+    """The METADATA of the document -- what a signature cannot prove.
+
+    Deliberately NOT the message values: this runtime signs ``nonce`` as bytes
+    and the TypeScript one as a hex string, so comparing messages would report
+    a divergence that does not exist. The signature bytes already prove the
+    message is identical; the envelope around it is what this reports.
+    """
+    if not isinstance(td, dict):
+        return None
+    return {
+        "keys": sorted(td),
+        "primaryType": td.get("primaryType"),
+        "typeNames": sorted(td.get("types") or {}),
+        # The message travels too, THROUGH json.dumps -> JSON.parse, which is
+        # the point: a uint written as a number instead of a string loses
+        # precision on the Node side the moment a 32-byte salt crosses, and a
+        # browser fed that document signs a different struct silently.
+        "message": td.get("message"),
+    }
+
+
 def sign_lifecycle(cases):
     """Sign an escrow lifecycle order (``release`` / ``refundInEscrow``).
 
@@ -308,18 +351,21 @@ def sign_lifecycle(cases):
     results = []
     for case in cases:
         try:
+            firmante = _CapturaElDocumento(EnvKeyAdapter(case["privateKey"]))
             auth = build_lifecycle_auth(
                 action=case["action"],
                 payment_info=case["paymentInfo"],
                 payer=case["payer"],
                 amount=int(case["amount"]),
                 chain_id=int(case["chainId"]),
-                wallet=EnvKeyAdapter(case["privateKey"]),
+                wallet=firmante,
                 deadline=case.get("deadline"),
                 nonce=case.get("nonce"),
                 now=case.get("now"),
             )
-            results.append({"id": case["id"], **auth})
+            results.append(
+                {"id": case["id"], **auth, "document": describe_document(firmante.documento)}
+            )
         except Exception as exc:  # noqa: BLE001 - a refusal is a comparable result
             results.append({"id": case["id"], "error": f"{exc}"})
     return {"runtime": "python", "results": results}

@@ -927,6 +927,20 @@ for (const c of PRICE_CASES) {
 // process, and the signatures are compared to each other AND to the vector that
 // the facilitator's own `lifecycle_auth.rs` fixes.
 //
+// AND THE BYTES ARE NOT ENOUGH (2026-09-07). `primaryType` names the root struct
+// of the document. It does NOT enter the EIP-712 digest -- domain, types and
+// message do -- so every signature check above was green while Python emitted no
+// `primaryType` at all and TypeScript emitted one. viem refuses to sign such a
+// document, which closed the browser route on the Python side; the gate could not
+// see it because the gate only compared what the digest covers. So the agents now
+// return the DOCUMENT the SDK handed the wallet, and it is compared too.
+//
+// The message travels through a real `json.dumps` -> `JSON.parse` boundary here,
+// which is the second thing bytes cannot show: a uint written as a JSON number is
+// identical to the digest and destroyed by the parser once a salt is 32 bytes
+// wide. `release/real-salt` is the case that exercises it -- the pinned vector's
+// salt is 12345, which fits in a double and proves nothing.
+//
 // The key is the synthetic 0x11*32 test key. It has never held funds.
 console.log('');
 console.log('PHASE 8 - the escrow lifecycle order: both SDKs sign the same bytes');
@@ -934,6 +948,10 @@ console.log('PHASE 8 - the escrow lifecycle order: both SDKs sign the same bytes
 const LIFECYCLE_VECTOR = JSON.parse(
   readFileSync(join(REPO, 'src', 'lifecycle-auth.vectors.json'), 'utf8')
 );
+
+// The root struct of the signed document. Written here rather than imported so
+// that an SDK renaming its own constant cannot rename what this gate expects.
+const LIFECYCLE_PRIMARY_TYPE = 'LifecycleOrder';
 
 const LIFECYCLE_CASES = [
   {
@@ -972,6 +990,24 @@ const LIFECYCLE_CASES = [
     id: 'refundInEscrow/same-escrow',
     action: 'refundInEscrow',
     paymentInfo: LIFECYCLE_VECTOR.paymentInfo,
+    payer: LIFECYCLE_VECTOR.payer,
+    amount: LIFECYCLE_VECTOR.amount,
+    chainId: LIFECYCLE_VECTOR.chainId,
+    deadline: LIFECYCLE_VECTOR.deadline,
+    nonce: LIFECYCLE_VECTOR.nonce,
+    now: LIFECYCLE_VECTOR.deadline - 60,
+    privateKey: LIFECYCLE_VECTOR.privateKey,
+  },
+  {
+    // A REAL salt: 32 random bytes, which is what `build_escrow_pre_auth`
+    // mints. The pinned vector's salt is 12345 -- it fits in a double, so it
+    // cannot tell apart a document whose uints survive JSON from one whose
+    // uints do not. This one can: as a JSON number, 0xab*32 comes out of
+    // `JSON.parse` as 7.76e+76 and the browser signs a different struct with
+    // no error. Python emitted numbers until 0.80.0.
+    id: 'release/real-salt',
+    action: 'release',
+    paymentInfo: { ...LIFECYCLE_VECTOR.paymentInfo, salt: `0x${'ab'.repeat(32)}` },
     payer: LIFECYCLE_VECTOR.payer,
     amount: LIFECYCLE_VECTOR.amount,
     chainId: LIFECYCLE_VECTOR.chainId,
@@ -1030,6 +1066,61 @@ for (const c of LIFECYCLE_CASES) {
     `ts=${a.nonce}/${a.deadline} py=${b.nonce}/${b.deadline}`
   );
 
+  // THE DOCUMENT, not just the bytes. `primaryType` is metadata for the
+  // signer: EIP-712 hashes domain + types + message, so the field never
+  // reaches the digest and every signature check above stays green without
+  // it. Python shipped 0.78.0 and 0.79.0 with no `primaryType` at all while
+  // this gate passed, and viem -- which does NOT derive the root struct the
+  // way ethers and eth-account do -- refuses to sign such a document. The
+  // browser route was closed on one side and nothing here said so.
+  const da = a.document;
+  const db = b.document;
+  check(!!da && !!db, `both SDKs report the document they signed for ${c.id}`,
+    `ts=${JSON.stringify(da)} py=${JSON.stringify(db)}`);
+  if (da && db) {
+    check(
+      da.primaryType === LIFECYCLE_PRIMARY_TYPE && db.primaryType === LIFECYCLE_PRIMARY_TYPE,
+      `both SDKs name the root struct '${LIFECYCLE_PRIMARY_TYPE}' for ${c.id} (viem will not sign without it)`,
+      `ts=${da.primaryType} py=${db.primaryType}`
+    );
+    check(
+      da.primaryType === db.primaryType,
+      `both SDKs declare the SAME primaryType for ${c.id}`,
+      `ts=${da.primaryType} py=${db.primaryType}`
+    );
+    // A primaryType that names a type the document does not carry is as
+    // unsignable as a missing one.
+    check(
+      da.typeNames.includes(String(da.primaryType)) &&
+        db.typeNames.includes(String(db.primaryType)),
+      `each primaryType names a type the document carries for ${c.id}`,
+      `ts=${da.primaryType} in [${da.typeNames.join(',')}] py=${db.primaryType} in [${db.typeNames.join(',')}]`
+    );
+    check(
+      da.keys.join(',') === db.keys.join(','),
+      `both documents carry the same top-level keys for ${c.id}`,
+      `ts=${da.keys.join(',')} py=${db.keys.join(',')}`
+    );
+    // The messages, compared AFTER each crossed its own JSON boundary. The
+    // signature bytes already prove the two runtimes hashed the same values;
+    // this proves the two DOCUMENTS survive being shipped as JSON, which is
+    // the only way a browser ever sees one. A uint written as a number rather
+    // than a string is identical to the digest and destroyed by `JSON.parse`
+    // once the salt is 32 bytes wide -- so no signature check can see it.
+    check(
+      JSON.stringify(da.message) === JSON.stringify(db.message),
+      `both documents survive JSON with the same message for ${c.id}`,
+      `ts=${JSON.stringify(da.message)} py=${JSON.stringify(db.message)}`
+    );
+    // ethers throws `ambiguous primary types` when EIP712Domain is written
+    // out; both runtimes derive it from `domain`.
+    check(
+      !da.typeNames.includes('EIP712Domain') && !db.typeNames.includes('EIP712Domain'),
+      `neither document writes EIP712Domain into types for ${c.id}`,
+      `ts=${da.typeNames.join(',')} py=${db.typeNames.join(',')}`
+    );
+  }
+
   if (c.expectSignature) {
     // Against the facilitator's own vector, not just against each other: two
     // SDKs that agree with each other and disagree with `lifecycle_auth.rs`
@@ -1071,7 +1162,8 @@ console.log(
     `  ${f3_3.verify_cases.length} matrix verdicts compared verifier to verifier,\n` +
     `  ${ENVELOPE_CASES.length} wires whose envelope both SDKs chose and built, compared body to body,\n` +
     `  ${PRICE_CASES.length} prices each SDK either billed or refused, compared integer to integer.\n` +
-    `  ${LIFECYCLE_CASES.length} escrow lifecycle orders both SDKs signed, compared signature byte to byte.
+    `  ${LIFECYCLE_CASES.length} escrow lifecycle orders both SDKs signed, compared signature byte to byte
+  AND document to document -- primaryType included, which no signature can prove.
 ` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );
