@@ -228,14 +228,19 @@ export function useBalance() {
  * usePayment - Hook for creating payments
  */
 export function usePayment() {
-  const { client, isConnected } = useX402();
+  const { client } = useX402();
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<PaymentResult | null>(null);
 
   const pay = useCallback(
     async (paymentInfo: PaymentInfo): Promise<PaymentResult> => {
-      if (!isConnected) {
+      // The client is the source of truth. `isConnected` from the context is the snapshot of
+      // the render that created this callback, so a `connect()` awaited in the same click
+      // handler is not visible here yet: the first click after connecting threw
+      // "Wallet not connected" and only the second one opened the wallet (seen with Rabby,
+      // 2026-09-09).
+      if (!client.getState().connected) {
         throw new Error('Wallet not connected');
       }
 
@@ -254,7 +259,7 @@ export function usePayment() {
         setIsPaying(false);
       }
     },
-    [client, isConnected]
+    [client]
   );
 
   const reset = useCallback(() => {
