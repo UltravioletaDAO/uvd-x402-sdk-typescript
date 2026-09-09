@@ -196,7 +196,7 @@ esté envuelto en `.catch()` para que esbuild lo deje pasar; y una línea en el 
 
 ---
 
-## 13. `usePayment().pay()` se queda con el `isConnected` del render anterior (arreglado en 2.89)
+## 13. `usePayment().pay()` se queda con el `isConnected` del render anterior (arreglado en 2.90)
 
 El hook cerraba el `useCallback` sobre `isConnected` del contexto. Un handler que hace
 `await connect()` y enseguida `pay()` usa el `pay` que se creó cuando todavía no había
