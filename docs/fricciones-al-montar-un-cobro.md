@@ -148,6 +148,54 @@ pasarían a ser envoltorios de eso.
 
 ---
 
+## 10. `pay()` manda dos headers y el preflight lo esconde
+
+Desde 2.81 `usePayment().pay()` devuelve `headers: { "X-PAYMENT", "PAYMENT-SIGNATURE" }`. Un
+consumidor hace `...firmado.headers` y manda los dos, y una Function URL cuyo `allow_headers`
+solo tiene `x-payment` contesta el preflight sin `Access-Control-Allow-Headers`: el navegador
+corta con `TypeError: Failed to fetch` antes de invocar la función. El 402 inicial (sin header
+custom) carga bien, el log del gateway queda vacío y la métrica `Invocations` no se mueve.
+Se vio el 2026-09-09 en el primer cobro real de un consumidor.
+
+**Qué cambiaría.** Que `X402_CORS_HEADERS` (ya existe en `backend`) sea lo que el README
+recomienda copiar al Terraform, con `payment-signature` y `retry-after` incluidos, y que la
+sección de CORS diga en una línea que son **dos** headers.
+
+---
+
+## 11. Un rechazo del facilitador no deja rastro, y la firma vence en 60 segundos
+
+`FacilitatorClient.verify()` devuelve `{ isValid: false, invalidReason }` y ahí termina: si el
+consumidor no escribe `invalidReason` a su log, CloudWatch muestra START/END/REPORT y nada más,
+y el front dice "no se pudo completar". Fue exactamente lo que pasó con un pago firmado desde
+la billetera: cero rastro, motivo desconocido, y hubo que redesplegar solo para poder ver.
+
+Sumado a eso, `createEVMPayment` firma con `validBefore = now + 60 s` fuera de Base (300 s en
+Base) y no es configurable desde `PaymentInfo`. El facilitador exige 6 s de gracia, así que la
+persona tiene ~54 s entre que aparece la billetera y que firma. En móvil, con una billetera
+que abre lenta, eso produce un `expired` que parece un bug.
+
+**Qué cambiaría.** (1) Un `onVerdict`/log opcional en `FacilitatorClient` (o al menos un
+`console.warn` por defecto en `createPaymentMiddleware`) con `invalidReason`, red, monto y
+pagador. (2) `validityWindowSeconds` en `PaymentInfo` o en `X402Config`, con el 60/300 como
+default. (3) Un mapa `invalidReason → texto para la persona` exportado, para que cada consumidor
+no invente el suyo.
+
+---
+
+## 12. Solana entra por import dinámico y rompe el bundle de Lambda
+
+Desde 2.88 `index.mjs` hace `await import('@solana/web3.js')` y `await import('@solana/spl-token')`.
+Un consumidor que empaqueta un handler con esbuild (Lambda, Cloudflare) muere en el build con un
+stack trace cuyo tail es solo `Node.js v23…`; si el build corre encadenado con `terraform apply`,
+este dice "0 changed" y la función vieja sigue en producción sin que nada avise.
+
+**Qué cambiaría.** Que `backend` no importe el módulo que arrastra Solana, o que el `import()`
+esté envuelto en `.catch()` para que esbuild lo deje pasar; y una línea en el README de `backend`:
+"si empaquetás con esbuild, `@solana/web3.js` y `@solana/spl-token` van como `external`".
+
+---
+
 ## 9. Lo que sí funcionó a la primera, y conviene no romper
 
 Para que el balance sea justo:
@@ -176,5 +224,8 @@ Para que el balance sea justo:
 | 8 | Sin adaptador serverless | Cien líneas repetidas por proyecto |
 | 2 | Red duplicada en `accepts` | Cosmético, pero se ve mal en el registro |
 | 5 | Varios proveedores | Confuso y difícil de diagnosticar |
+| 11 | Rechazo sin rastro y firma de 60 s | Un pago real falla y nadie sabe por qué |
+| 10 | Dos headers y el preflight | "Failed to fetch" sin nada del lado del servidor |
+| 12 | Solana por import dinámico | El bundle no compila y el deploy viejo sigue vivo |
 
-Los tres primeros cuestan dinero o confianza. Los demás cuestan tiempo.
+Los tres primeros y la 11 cuestan dinero o confianza. Los demás cuestan tiempo.
