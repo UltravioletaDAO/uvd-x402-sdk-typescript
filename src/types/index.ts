@@ -5,6 +5,10 @@
  * These types define the contract between the SDK and consuming applications.
  */
 
+// Type-only, so it is erased at compile time and no runtime cycle exists between
+// this module and `policy.ts` (which imports `X402Error` from here as a value).
+import type { AdvertisedQuote, PolicyApproval, PurchasePolicy } from '../policy';
+
 // ============================================================================
 // CHAIN CONFIGURATION TYPES
 // ============================================================================
@@ -328,6 +332,26 @@ export interface X402FetchOptions {
   init?: RequestInit;
   /** Injectable `fetch` (tests, or a runtime without a global one). */
   fetchImpl?: typeof globalThis.fetch;
+  /**
+   * What a catalog listing advertised, when the caller read one.
+   *
+   * The comparison NEVER decides anything -- a seller repricing inside a policy
+   * the operator already authorised is ordinary commerce -- but handing it over
+   * gets the divergence reported on the approval instead of having to diff the
+   * two by hand. See `PolicyApproval.versusQuote`.
+   */
+  advertised?: AdvertisedQuote;
+  /**
+   * Called once the paid retry came back with something other than a 402, i.e.
+   * the seller accepted the payment.
+   *
+   * This is where a caller calls `client.policy.recordSpend(...)`. Evaluating
+   * deliberately does not spend: signing can fail and a settlement can be
+   * refused, and a cumulative limit that counted attempts would lock a caller
+   * out of money it never spent. Nothing here is automatic, so a caller that
+   * wants a cumulative limit to mean something has to say so.
+   */
+  onPaid?: (approval: PolicyApproval) => void;
 }
 
 /**
@@ -830,6 +854,17 @@ export interface X402ClientConfig {
   /** Multi-payment configuration for supporting multiple networks */
   multiPayment?: MultiPaymentConfig;
   /**
+   * What this buyer is allowed to sign, decided before it signs.
+   *
+   * Left undefined, the client holds `PurchasePolicy.permissive()`: this SDK had
+   * no budget before 2.89.0 and turning one on silently would refuse payments
+   * callers are making today. A policy built with `PurchasePolicy.create()`
+   * denies any asset it was not given a ceiling for.
+   *
+   * @see {@link PurchasePolicy}
+   */
+  policy?: PurchasePolicy;
+  /**
    * Include a `token` block in the payload naming the asset, its decimals and
    * its EIP-712 domain.
    *
@@ -936,6 +971,12 @@ export type X402ErrorCode =
   | 'INVALID_RECIPIENT'
   | 'PAYMENT_EXCEEDS_MAX'
   | 'NO_ACCEPTABLE_PAYMENT'
+  /**
+   * The buyer's own policy refused the offer before anything was signed. The
+   * concrete cause is on `PolicyRefusedError.refusal.code` -- see
+   * {@link PurchasePolicy}.
+   */
+  | 'POLICY_REFUSED'
   | 'UNKNOWN_ERROR';
 
 /**

@@ -156,6 +156,34 @@ export type { AnchoredEvidence, EvidenceMode, RecipientRole, AnchorOptions } fro
 
 export { X402Client } from './client';
 
+// ============================================================================
+// Buyer policy - what this buyer is allowed to sign, decided before it signs
+// ============================================================================
+
+export {
+  PurchasePolicy,
+  PolicyRefusedError,
+  decideOnChallenge,
+  noReadableOffer,
+  offerValidUntil,
+  offerAsset,
+  canonicalRecipient,
+  assetKey,
+  OFFER_VALIDITY_EXTENSION,
+} from './policy';
+export type {
+  PolicyAsset,
+  PolicyRefusal,
+  PolicyRefusalCode,
+  PolicyApproval,
+  PolicyDecision,
+  QuoteComparison,
+  AdvertisedQuote,
+  EvaluateOptions,
+  DecideOptions,
+  ReadChallenge,
+} from './policy';
+
 // Chain configuration
 export {
   SUPPORTED_CHAINS,

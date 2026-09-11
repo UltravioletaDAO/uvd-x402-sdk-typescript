@@ -4,6 +4,166 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.89.0] - 2026-09-10
+
+**La decisión de comprar se toma contra la oferta en la mano, no contra el
+catálogo.** Un listado es lo que alguien dijo de su propio precio; el `402` que
+vuelve del request es la oferta, y pueden diferir legítimamente. Así que ahora la
+decisión se evalúa contra **la oferta concreta**, siempre, antes de firmar. Es el
+mismo contrato que el facilitador fijó en Rust (`x402-reqwest`, release 2.25.0),
+escrito una sola vez para que un comprador en cualquiera de los dos lenguajes
+niegue los mismos pagos por las mismas causas nombradas.
+
+**Nada cambia para quien no escribe una política.** `X402Client` sin `policy`
+sostiene `PurchasePolicy.permissive()`, porque este SDK no tenía presupuesto antes
+de esta versión y encenderlo en silencio rechazaría pagos que los consumidores
+hacen hoy. La asimetría es a propósito: quien se sienta a **escribir** una política
+se lleva el default seguro.
+
+### Added
+
+- **`PurchasePolicy`** (`src/policy.ts`) — los cinco campos del contrato:
+
+  | campo | tipo | significado |
+  |---|---|---|
+  | `perPayment(asset, amount)` | `bigint`, unidades atómicas | máximo de UN pago en ese activo |
+  | `cumulative(asset, amount)` | `bigint`, unidades atómicas | máximo total mientras viva la política |
+  | `spent(asset)` | `bigint` | lo ya registrado; **solo lo mueve `recordSpend`** |
+  | `onlyPay([...])` | direcciones | destinatarios permitidos, canonicalizados **por familia** |
+  | `allowUnlistedAssets()` | booleano, **false por defecto** | si se puede pagar un activo sin techo declarado |
+
+  ```ts
+  import { X402Client, PurchasePolicy } from 'uvd-x402-sdk';
+
+  const USDC_BASE = { network: 'base', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' };
+  const policy = PurchasePolicy.create()      // create() DENIEGA lo que no presupuestaste
+    .perPayment(USDC_BASE, 50_000n)           // 0.05 USDC
+    .cumulative(USDC_BASE, 1_000_000n)        // 1 USDC en total
+    .onlyPay(['0xe4dc963c56979E0260fc146b87eE24F18220e545']);
+
+  const client = new X402Client({ defaultChain: 'base', policy });
+
+  const res = await client.fetch('https://api.example.com/data', {
+    onPaid: (a) => client.policy.recordSpend(a.asset, a.amount),  // evaluar NO gasta
+  });
+  ```
+
+- **Orden de evaluación fijo, y es parte del contrato**, porque la PRIMERA causa que
+  falla es la que se reporta y quien llama ramifica sobre ella:
+
+  `no-readable-offer` → `offer-expired` → `recipient-not-permitted` →
+  `asset-not-budgeted` → `per-payment-limit` → `cumulative-limit`
+
+  Los seis son un vocabulario **cerrado** en kebab (`PolicyRefusalCode`), tipado
+  como unión literal, para ramificar sin parsear inglés. No hay `other`: una negativa
+  que quien llama no puede interpretar es una negativa que va a tapar. Cada una lleva
+  los números que la causaron (`requested`, `allowed`, `spent`, `wouldTotal`, `asset`,
+  `payTo`, `validUntil`, `now`, `offered[]`).
+
+- **`PolicyRefusedError`** — extiende `X402Error` con código `POLICY_REFUSED`, así
+  que un consumidor que ya atrapa `X402Error` sigue atrapándolo; la causa tipada está
+  en `err.refusal` y su código estable en `err.refusal.code`.
+
+- **Vigencia de oferta: `offerValidUntil(extensions)`** lee
+  `extensions["offer-receipt/1"].info.validUntil` en segundos Unix, y
+  **`OFFER_VALIDITY_EXTENSION`** es esa clave, definida una sola vez. La versión va
+  EN la clave porque el transporte de offer-and-receipt todavía puede cambiar, y un
+  valor leído de una clave sin versión no podría compararse con nada después. Una
+  clave que no reconocemos se ignora: eso significa "sin vencimiento declarado", que
+  es distinto de "venció".
+
+- **`decideOnChallenge(policy, challenge, offer, { now })`** — los seis pasos, en un
+  solo lugar, **sin stack de red**. Toma el desafío COMPLETO a propósito: pasar las
+  ofertas solas es exactamente lo que tiró el `validUntil` del vendedor al piso en
+  Rust durante un commit entero con todos los tests en verde, y una firma que toma
+  las partes invita a repetirlo. Una decisión que solo se puede ejercer manejando un
+  cliente HTTP real es una decisión que nadie testea.
+
+- **`X402FetchOptions.advertised`** — lo que decía el catálogo, para que la
+  divergencia se reporte en `approval.versusQuote` (`not-compared` | `matches` |
+  `amount-differs` | `different-asset`). **Nunca decide nada.**
+
+- **`X402FetchOptions.onPaid`** — se llama cuando el reintento volvió con algo que no
+  es otro `402`, o sea cuando el vendedor aceptó el pago. Es el lugar donde quien
+  llama hace `recordSpend`. Nada es automático acá: **evaluar no gasta**.
+
+### Changed
+
+- **`accepts` es una LISTA, y una entrada ilegible ya no hunde la lista.** Un vendedor
+  que ofrecía algo pagable **al lado de** un esquema que este build no implementa
+  quedaba sin ofertas usables, y quien compraba nunca se enteraba de que había una
+  oferta perfectamente pagable ahí mismo. Ahora las legibles se conservan y las otras
+  se cuentan **por nombre de esquema**, así que la negativa dice qué ofreció el
+  vendedor:
+
+  ```
+  no offer in this challenge is one this build can pay; offered: ["batch-settlement","agent-pay"]
+  ```
+
+  Descubrir el servicio sigue funcionando aunque comprarlo automáticamente no.
+
+- **Tres hechos que antes eran un solo error.** `client.fetch()` ahora distingue "el
+  vendedor no mandó ofertas" (sigue siendo `NO_ACCEPTABLE_PAYMENT`, sin cambio) de
+  "mandó ofertas que no sabemos leer" (`POLICY_REFUSED` / `no-readable-offer`, con los
+  nombres de esquema) y de "mandó ofertas pagables". El primer mensaje era justo el
+  que manda a alguien a buscar un bug en su propio código.
+
+- **`maxAmount` queda intacto** y sigue corriendo **antes** de la política: quien puso
+  un techo y ninguna política conserva exactamente el comportamiento que tenía.
+
+### Notas — las reglas que no se negocian
+
+1. **Evaluar no gasta.** Firmar puede fallar y una liquidación puede rechazarse; un
+   límite que contara intentos dejaría a quien llama sin dinero que nunca gastó.
+   `recordSpend` es una llamada aparte, después de que la liquidación resolvió.
+2. **La política no se ensancha desde dentro de una evaluación.** No hay método que
+   suba un techo: todos los builders devuelven una política NUEVA y dejan la receptora
+   igual de estricta. Un test lo fija.
+3. **No se pide confirmación humana** si la política ya cubre la operación. Una
+   divergencia respecto del listado **no es, por sí sola, una negativa**: si la oferta
+   cuesta más que lo que decía el catálogo pero entra en una política que el operador
+   ya autorizó, se paga. Parar a preguntar convertiría cada repricing ordinario en un
+   alto, y un agente que se detiene ante el comercio normal es un agente que nadie
+   puede dejar corriendo. **No hay gancho de confirmación en este camino.**
+4. **Un activo distinto no es el mismo precio**: no se comparan números entre activos,
+   y el mismo address en otra red es **otro** activo. Un presupuesto en USDC no era
+   presupuesto para ningún otro token, y el firmante EVM lo hubiera firmado igual,
+   porque toma el dominio EIP-712 del `extra` del propio vendedor y firma para un
+   token y una red que nunca vio. Por eso `asset-not-budgeted` corre **antes** de los
+   techos: a quien llama hay que decirle "presupuestá ese activo", no "subí un techo
+   que no existe".
+5. **La dirección se canonicaliza por familia, nunca con `toLowerCase()`.** Hex se
+   pliega; base58 (Solana, XRPL) se compara **exacto**. Bajar una dirección base58 no
+   produce la misma dirección escrita distinto, produce una cadena que no es una
+   dirección: una lista blanca escrita con la grafía del vendedor no coincidiría nunca
+   y todo pago legítimo a ese payee se rechazaría. Y en la dirección peligrosa, dos
+   direcciones base58 distintas pueden plegarse a la misma minúscula, lo que dejaría
+   entrar a una que nadie puso en la lista.
+6. **`validUntil` ilegible = ausente, NUNCA cero.** "El vendedor dijo algo que no
+   pudimos leer" no puede convertirse en "esta oferta venció en 1970". Un string, un
+   float, un negativo o algo más grande que `MAX_SAFE_INTEGER`: todos ausentes.
+7. **`validUntil === now` todavía vale**: es el último instante en que la oferta está
+   en pie.
+8. **Una copia gasta de la misma bolsa.** Un cliente se copia por request; si cada
+   copia llevara su propio total, un límite acumulado no significaría nada.
+9. **Estado corrupto reporta el TECHO, nunca cero.** Si algo dejó la bolsa en un valor
+   que no es un bigint sano, `spent()` devuelve el límite acumulado: para el dinero, la
+   dirección segura es negarse, nunca permitir.
+10. **Aritmética en `bigint`, nunca `number`.** Las unidades atómicas de un token de 18
+    decimales pasan `Number.MAX_SAFE_INTEGER` con 0.01 de token, y un techo comparado
+    como float es un techo que redondea. Un monto que no se puede leer se compara como
+    el valor más grande representable, así que falla todos los techos en vez de pasar
+    como cero.
+
+**Lo que esta versión NO trae** (y el facilitador tampoco, a propósito): verificación
+de firma de `offer-receipt` — está el transporte y la vigencia, no la firma ni la
+autoridad del firmante, que necesita un modelo de identidad del vendedor que todavía
+no existe —, vinculación por input, y contabilidad de `upto`.
+
+Requiere facilitador 2.25.0+ para que el vendedor declare vigencia; sin eso, una
+oferta sin `validUntil` simplemente no tiene vencimiento declarado y todo lo demás de
+la política funciona igual.
+
 ## [2.88.0] - 2026-09-07
 
 **La autoría real de una calificación en Solana: el rater firma, el facilitador

@@ -26,6 +26,13 @@ import type {
 } from '../types';
 import { X402Error, DEFAULT_CONFIG } from '../types';
 import {
+  PurchasePolicy,
+  PolicyRefusedError,
+  decideOnChallenge,
+  noReadableOffer,
+} from '../policy';
+import type { PolicyApproval, ReadChallenge } from '../policy';
+import {
   SUPPORTED_CHAINS,
   getChainByName,
   getChainById,
@@ -82,6 +89,17 @@ export class X402Client {
   // Event emitter
   private eventHandlers: Map<X402Event, Set<X402EventHandler<X402Event>>> = new Map();
 
+  /**
+   * What this buyer is allowed to sign, evaluated against the offer in hand
+   * before anything is signed.
+   *
+   * `permissive()` when the caller supplied none, and that asymmetry is
+   * deliberate: this SDK had no budget before 2.89.0, so switching one on
+   * silently would refuse payments consumers are making today, while whoever
+   * sits down to WRITE a policy gets the deny-by-default one.
+   */
+  private readonly purchasePolicy: PurchasePolicy;
+
   constructor(config: X402ClientConfig = {}) {
     this.config = {
       ...DEFAULT_CONFIG,
@@ -106,7 +124,19 @@ export class X402Client {
       }
     }
 
+    this.purchasePolicy = config.policy ?? PurchasePolicy.permissive();
+
     this.log('X402Client initialized', { config: this.config });
+  }
+
+  /**
+   * The policy in force, for a caller that wants to record a settled payment
+   * against it with {@link PurchasePolicy.recordSpend}.
+   *
+   * Nothing on the payment path ever widens it.
+   */
+  get policy(): PurchasePolicy {
+    return this.purchasePolicy;
   }
 
   // ============================================================================
@@ -375,8 +405,19 @@ export class X402Client {
     }
 
     const tokenType: TokenType = options.tokenType || 'usdc';
-    const { version, offers } = this.parse402(body, tokenType);
+    const challenge = this.parse402(body, tokenType);
+    const { version, offers } = challenge;
     if (offers.length === 0) {
+      // Step 1 of the policy contract, and two different facts that used to be
+      // one error. A seller that sent offers none of which this build can read is
+      // asking for a scheme we do not implement; saying so names what it wanted,
+      // where "no usable payment options" sends the caller hunting a bug in its
+      // own code. A seller that sent none at all is the other fact, and keeps the
+      // error it always had.
+      const unreadableCount = challenge.unreadableCount ?? challenge.unreadable.length;
+      if (unreadableCount > 0) {
+        throw new PolicyRefusedError(noReadableOffer(challenge.unreadable));
+      }
       throw new X402Error(
         '402 response offered no usable payment options',
         'NO_ACCEPTABLE_PAYMENT'
@@ -412,6 +453,33 @@ export class X402Client {
       }
     }
 
+    // The policy, evaluated against THIS offer, before anything is signed. An
+    // offer that diverges from a listing but sits inside an authorised policy
+    // proceeds -- stopping to ask would turn every ordinary reprice into a halt --
+    // and one that does not is refused with a concrete cause. The policy is never
+    // widened to fit the offer, and there is no confirmation hook in this path.
+    //
+    // The whole challenge goes in, never just the offer: `validUntil` lives in
+    // the challenge's `extensions`, and a call that takes the parts is how it gets
+    // dropped.
+    const decision = decideOnChallenge(this.purchasePolicy, challenge, chosen, {
+      now: Math.floor(Date.now() / 1000),
+      quote: options.advertised,
+    });
+    if (!decision.ok) {
+      this.log('policy refused this offer', { cause: decision.refusal.code });
+      this.emit('paymentFailed', {
+        error: decision.refusal.message,
+        code: 'POLICY_REFUSED',
+      });
+      throw new PolicyRefusedError(decision.refusal);
+    }
+    const approval: PolicyApproval = decision.approval;
+    this.log('policy approved this offer', {
+      versusQuote: approval.versusQuote.code,
+      amount: String(approval.amount),
+    });
+
     if (!chosen.chainName) {
       throw new X402Error(
         `402 asked for payment on unknown network '${chosen.network}'`,
@@ -442,20 +510,43 @@ export class X402Client {
       paidHeaders['PAYMENT-SIGNATURE'] = payment.paymentHeader;
     }
 
-    return doFetch(url, { ...options.init, method, headers: paidHeaders });
+    const paid = await doFetch(url, { ...options.init, method, headers: paidHeaders });
+
+    // Approving did not spend: signing can fail and a settlement can be refused,
+    // and a cumulative limit that counted attempts would lock a caller out of
+    // money it never spent. A retry that came back as anything but another 402 is
+    // the seller accepting the payment, which is the moment a caller records it --
+    // by its own hand, in `onPaid`, never automatically here.
+    if (paid.status !== 402) {
+      options.onPaid?.(approval);
+    }
+    return paid;
   }
 
   /**
-   * Normalise a 402 body into its envelope version and its payment offers.
+   * Normalise a 402 body into its envelope version, its payment offers, the ones
+   * it could not read, and the challenge's `extensions`.
    *
    * Reads both spec shapes -- `{x402Version, accepts: [...]}` and the non-spec
    * one where a lone requirement sits at the top level -- and both dialects of
    * the price field (`maxAmountRequired` in v1, `amount` in v2).
+   *
+   * **`accepts` is a list, so one unreadable entry does not sink the list.** A
+   * seller offering `exact` alongside a scheme this build does not implement used
+   * to be unpayable in the Rust crate, and the buyer never learned there was a
+   * perfectly payable offer right there. The readable ones are kept and the
+   * others are counted by scheme name, so a refusal can say what the seller
+   * offered instead of "could not parse". Discovering the service keeps working
+   * even when buying it automatically does not.
+   *
+   * Returns the WHOLE challenge on purpose: handing `offers` alone downstream is
+   * what dropped the seller's `validUntil` on the floor in Rust for a full commit
+   * with every unit test green.
    */
   private parse402(
     body: unknown,
     tokenType: TokenType
-  ): { version: X402Version; offers: X402PaymentOffer[] } {
+  ): ReadChallenge & { version: X402Version } {
     const doc = (body ?? {}) as Record<string, unknown>;
     const version: X402Version = Number(doc.x402Version) === 2 ? 2 : 1;
 
@@ -466,16 +557,38 @@ export class X402Client {
         : [];
 
     const offers: X402PaymentOffer[] = [];
+    const unreadable: string[] = [];
+    let unreadableCount = 0;
+
+    /** Count an entry this build cannot pay, by scheme name when it has one. */
+    const cannotRead = (accept: Record<string, unknown> | null) => {
+      unreadableCount += 1;
+      const scheme = accept?.scheme;
+      if (typeof scheme === 'string' && scheme) unreadable.push(scheme);
+    };
+
     for (const entry of rawAccepts) {
-      if (!entry || typeof entry !== 'object') continue;
+      if (!entry || typeof entry !== 'object') {
+        cannotRead(null);
+        continue;
+      }
       const accept = entry as Record<string, unknown>;
 
       const amount = accept.amount ?? accept.maxAmountRequired;
       const payTo = accept.payTo;
       const network = accept.network;
-      if (amount === undefined || amount === null) continue;
-      if (typeof payTo !== 'string' || !payTo) continue;
-      if (typeof network !== 'string' || !network) continue;
+      if (amount === undefined || amount === null) {
+        cannotRead(accept);
+        continue;
+      }
+      if (typeof payTo !== 'string' || !payTo) {
+        cannotRead(accept);
+        continue;
+      }
+      if (typeof network !== 'string' || !network) {
+        cannotRead(accept);
+        continue;
+      }
 
       const chainName = getChainByName(network) ? network : caip2ToChain(network);
 
@@ -490,7 +603,12 @@ export class X402Client {
       });
     }
 
-    return { version, offers };
+    const extensions =
+      doc.extensions && typeof doc.extensions === 'object' && !Array.isArray(doc.extensions)
+        ? (doc.extensions as Record<string, unknown>)
+        : undefined;
+
+    return { version, offers, unreadable, unreadableCount, extensions };
   }
 
   /**

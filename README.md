@@ -10,6 +10,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT, USDG (Robinhood Chain)
 - **x402 v1 & v2**: Both protocol versions with auto-detection
 - **Gasless**: Facilitator pays all network fees
+- **Buyer Policy**: Per-payment and cumulative budgets, payee allowlist and offer expiry, evaluated against the offer in hand **before signing** — six closed refusal codes in a fixed order
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
 - **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
@@ -868,6 +869,148 @@ try {
   }
 }
 ```
+
+## Buyer policy — what this buyer is allowed to sign, decided before it signs
+
+A catalog listing is a claim somebody else made about their own price. The `402`
+that comes back from the actual request is the offer, and they can differ
+legitimately: a seller may have repriced, and the listing may be a copy of a
+copy. So the buying decision is made against **the offer in hand**, every time,
+before anything is signed. Same contract the facilitator fixed in Rust
+(`x402-reqwest`, release 2.25.0), so a buyer in either language refuses the same
+payments for the same stated reasons.
+
+```ts
+import { X402Client, PurchasePolicy, PolicyRefusedError } from 'uvd-x402-sdk';
+
+const USDC_BASE = {
+  network: 'base',
+  address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+};
+
+// create() DENIES any asset it was not given a ceiling for.
+const policy = PurchasePolicy.create()
+  .perPayment(USDC_BASE, 50_000n)      // 0.05 USDC, atomic units, bigint
+  .cumulative(USDC_BASE, 1_000_000n)   // 1 USDC total, for this policy's life
+  .onlyPay(['0xe4dc963c56979E0260fc146b87eE24F18220e545']);
+
+const client = new X402Client({ defaultChain: 'base', policy });
+await client.connectWithPrivateKey(process.env.PRIVATE_KEY!, 'base');
+
+try {
+  const res = await client.fetch('https://api.example.com/data', {
+    // What the catalog advertised, if you read one. It is REPORTED, never a gate.
+    advertised: { asset: USDC_BASE, amount: 10_000n },
+    // Evaluating does not spend. This is where a settled payment gets recorded.
+    onPaid: (approval) => client.policy.recordSpend(approval.asset, approval.amount),
+  });
+  const data = await res.json();
+} catch (err) {
+  if (err instanceof PolicyRefusedError) {
+    switch (err.refusal.code) {
+      case 'offer-expired':           // ask the seller for new terms
+      case 'asset-not-budgeted':      // budget that asset
+      case 'per-payment-limit':       // one payment is too big
+      case 'cumulative-limit':        // the budget is spent
+      case 'recipient-not-permitted': // not a payee you allowed
+      case 'no-readable-offer':       // err.refusal.offered names the schemes
+    }
+  }
+}
+```
+
+**Nothing changes for a caller who never writes a policy.** A client without one
+holds `PurchasePolicy.permissive()`: this SDK had no budget before 2.89.0 and
+switching one on silently would refuse payments consumers are making today. The
+asymmetry is deliberate — whoever sits down to **write** a policy gets the
+deny-by-default one. `maxAmount` is untouched and still runs before the policy.
+
+### The fields
+
+| field | type | meaning |
+|---|---|---|
+| `perPayment(asset, amount)` | `bigint`, atomic units | most this policy pays in ONE payment of that asset |
+| `cumulative(asset, amount)` | `bigint`, atomic units | most it pays in that asset in TOTAL, for as long as it lives |
+| `spent(asset)` | `bigint` | what has been recorded; **only `recordSpend` moves it** |
+| `onlyPay([...])` | addresses | permitted recipients, canonicalised **by family** |
+| `allowUnlistedAssets()` | boolean, **false by default** | whether an asset with no declared ceiling may be paid |
+
+An `asset` is a `{ network, address }` pair, and both halves matter: the same
+contract address on two networks is two different assets. Use the SDK chain name
+(`'base'`), not the CAIP-2 string — the client resolves a v2 challenge's
+`eip155:8453` to it, so one written policy covers both 402 dialects.
+
+### The order of evaluation is part of the contract
+
+The FIRST failing check is the one reported, because a caller branches on it.
+Reporting `per-payment-limit` for an expired offer to a payee nobody allowed
+would tell the caller to raise a ceiling when the real fix is to ask the seller
+for new terms.
+
+```
+no-readable-offer → offer-expired → recipient-not-permitted
+                  → asset-not-budgeted → per-payment-limit → cumulative-limit
+```
+
+The six are a closed kebab-case vocabulary (`PolicyRefusalCode`), typed as a
+literal union so you branch without parsing English. There is no `other`: a
+refusal a caller cannot interpret is one it will paper over. Each carries the
+numbers that caused it — `requested`, `allowed`, `spent`, `wouldTotal`, `asset`,
+`payTo`, `validUntil`, `now`, `offered[]`.
+
+`asset-not-budgeted` runs **before** the ceilings on purpose. The ceilings are a
+map, and a map has no opinion about a key it does not hold — which is exactly how
+an unlisted token sails past a budget that looks complete. And the EVM signer
+would have signed it: it takes its EIP-712 domain from the seller's own `extra`,
+for a token and a network it has never seen.
+
+### The seven rules
+
+1. **Evaluating does not spend.** Signing can fail and a settlement can be
+   refused; a limit that counted attempts would lock you out of money you never
+   spent. `recordSpend` is a separate call, after the settlement resolved — use
+   `onPaid` for it.
+2. **A policy is never widened from inside an evaluation.** No method raises a
+   ceiling: every builder returns a NEW policy and leaves the receiver exactly as
+   strict as it was.
+3. **No human confirmation when the policy already covers the operation.** A
+   divergence from the listing is not, by itself, a refusal: an offer that costs
+   more than the catalog said but sits inside an authorised policy is paid.
+   Halting there would turn every ordinary reprice into a stop, and an agent that
+   halts on ordinary commerce is one nobody can leave running. There is no
+   confirmation hook on this path.
+4. **A different asset is not the same price.** No numbers are compared across
+   assets. An asset with no declared ceiling is **denied by default**; the
+   permissive mode has to be asked for by name.
+5. **Addresses are canonicalised by family, never with `toLowerCase()`.** Hex is
+   folded; base58 (Solana, XRPL) is compared exactly. Folding a base58 address
+   does not produce the same address spelled differently — it produces a string
+   that is not an address, so an allowlist written in the seller's own spelling
+   would never match. And in the dangerous direction, two distinct base58
+   addresses can fold to the same lowercase string, letting in one nobody listed.
+6. **`validUntil` is read from `extensions["offer-receipt/1"].info.validUntil`**,
+   in Unix seconds. Absent means no declared expiry. Unreadable means absent,
+   **never zero**: "the seller said something we could not read" must not become
+   "this offer expired in 1970".
+7. **`validUntil === now` still stands** — it is the last instant the offer is up.
+   And an `accepts` with one unreadable entry **keeps** the readable ones and
+   counts the others by scheme name, so a refusal says what the seller offered:
+   `offered: ["batch-settlement","agent-pay"]`. Discovering a service keeps
+   working even when buying it automatically does not.
+
+Two more worth knowing: **a copy of a policy spends from the same purse** (a
+client is copied per request, and a per-copy total would make a cumulative limit
+meaningless), and **a corrupt purse reports the ceiling, never zero** — for money
+the safe direction is to refuse.
+
+### Deciding without a network stack
+
+`decideOnChallenge(policy, challenge, offer, { now })` runs all six steps and is
+callable directly, which is the point: a decision that can only be exercised by
+driving a real HTTP client is a decision nobody tests. It takes the challenge
+WHOLE — passing the offers alone is exactly what dropped a seller's `validUntil`
+on the floor in Rust for a full commit with every unit test green. `now` is
+passed rather than read, so a money decision can be pinned to an exact instant.
 
 ## `503` is not `402` — read the refusal before you re-sign
 
