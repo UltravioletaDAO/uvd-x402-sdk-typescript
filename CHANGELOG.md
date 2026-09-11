@@ -4,6 +4,31 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.90.0] - 2026-09-11
+
+**El primer clic en "Pagar" ya abre la billetera.** `usePayment().pay()` era un
+`useCallback` cerrado sobre el `isConnected` del render que lo creó: un handler
+que hacía `await connect()` y enseguida `pay()` usaba el `pay` de antes de que
+existiera la billetera, tiraba "Wallet not connected", y solo el segundo clic,
+ya re-renderizado, firmaba. Medido con Rabby en un consumidor real.
+
+### Fixed
+
+- **`usePayment().pay()`** pregunta `client.getState().connected` en el momento
+  de pagar. El cliente es la fuente de verdad; el estado del contexto es una
+  foto del render anterior.
+
+### Docs
+
+- **`docs/fricciones-al-montar-un-cobro.md`**: doce fricciones medidas al montar
+  un cobro completo con este SDK (gateway en Lambda + panel React), con lo que
+  cambiaría en cada una y lo que sí funcionó a la primera. Entre ellas: `pay()`
+  manda dos headers (`X-PAYMENT` y `PAYMENT-SIGNATURE`) y un preflight sin
+  `payment-signature` da "Failed to fetch" sin rastro; un rechazo del
+  facilitador no deja log si el consumidor no lo escribe, y fuera de Base la
+  firma vence en 60 s; desde 2.88 Solana entra por `import()` dinámico y hay que
+  marcar `@solana/web3.js` y `@solana/spl-token` como `external` en esbuild.
+
 ## [2.89.0] - 2026-09-10
 
 **La decisión de comprar se toma contra la oferta en la mano, no contra el
