@@ -148,9 +148,18 @@ export interface PolicyAsset {
   address: string;
 }
 
-/** Stable map key for an asset. Not part of the wire format; comparison only. */
+/**
+ * Stable map key for an asset. Not part of the wire format; comparison only.
+ *
+ * The network is folded to lowercase because SDK chain names and CAIP-2 strings
+ * are lowercase by convention, so `'Base'` and `'base'` are the same network
+ * written two ways -- never two networks. Leaving the case in fails closed
+ * (`asset-not-budgeted`, so no wrong payment), but it trips the operator over a
+ * capital letter and the refusal would point at the budget instead of the typo.
+ * The address keeps its by-family treatment: see {@link canonicalRecipient}.
+ */
 export function assetKey(asset: PolicyAsset): string {
-  return `${asset.network}|${canonicalRecipient(asset.address)}`;
+  return `${asset.network.trim().toLowerCase()}|${canonicalRecipient(asset.address)}`;
 }
 
 /** Human form, for a refusal message. */

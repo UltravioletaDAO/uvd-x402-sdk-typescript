@@ -10,7 +10,7 @@ import {
   OFFER_VALIDITY_EXTENSION,
 } from './policy';
 import type { PolicyAsset, ReadChallenge } from './policy';
-import { X402Client } from './client/X402Client';
+import { X402Client, KNOWN_SCHEMES, CLIENT_PAYABLE_SCHEMES } from './client/X402Client';
 import { X402Error } from './types';
 import type { X402PaymentOffer } from './types';
 
@@ -371,6 +371,25 @@ describe('canonicalRecipient - by family, not by lowercasing', () => {
     expect(impostor.ok === false && impostor.refusal.code).toBe('recipient-not-permitted');
   });
 
+  it('does not let the case of a network name decide anything', () => {
+    // 'Base' and 'base' are one network written two ways. Leaving the case in
+    // fails closed -- `asset-not-budgeted`, so no wrong payment ever -- but it
+    // trips the operator over a capital letter, and the refusal would point at the
+    // budget instead of at the typo.
+    const policy = PurchasePolicy.create().perPayment(
+      { network: 'Base', address: USDC_BASE_ADDRESS },
+      1_000_000n
+    );
+    expect(policy.evaluate(offer(), { now: NOW }).ok).toBe(true);
+    expect(assetKey({ network: 'BASE', address: USDC_BASE_ADDRESS })).toBe(
+      assetKey(USDC_BASE)
+    );
+    // And the purse is the same one, so a spend recorded under one spelling counts
+    // against a ceiling written in the other.
+    policy.recordSpend({ network: 'base', address: USDC_BASE_ADDRESS }, 500n);
+    expect(policy.spent({ network: 'Base', address: USDC_BASE_ADDRESS })).toBe(500n);
+  });
+
   it('keys assets by family too, so a checksummed budget matches a lowercase offer', () => {
     const policy = PurchasePolicy.create().perPayment(
       { network: 'base', address: USDC_BASE_ADDRESS.toLowerCase() },
@@ -505,14 +524,26 @@ describe('X402Client.parse402 - one unreadable accepts entry keeps the readable 
     ).parse402(body, 'usdc');
   }
 
-  it('keeps a payable offer sitting next to a scheme this build cannot read', () => {
+  it('keeps a payable offer sitting next to a WELL-FORMED one in a scheme it cannot pay', () => {
     // `accepts` is a LIST, and a closed scheme enum acting as an open collection
     // made a seller unpayable for offering `exact` next to something else. The
     // buyer never learned there was a perfectly payable offer right there.
+    //
+    // The unpayable entry here is COMPLETE -- amount, payee, network, asset, all
+    // present -- so it is excluded for its SCHEME and nothing else. An entry
+    // missing a field would prove only that missing fields are caught, and that
+    // is the mistake that let `batch-settlement` through: read as payable on the
+    // strength of its other fields, then signed as `exact`.
     const challenge = read({
       x402Version: 1,
       accepts: [
-        { scheme: 'batch-settlement', payTo: PAY_TO },
+        {
+          scheme: 'batch-settlement',
+          network: 'base',
+          maxAmountRequired: '1',
+          payTo: PAY_TO,
+          asset: USDC_BASE_ADDRESS,
+        },
         {
           scheme: 'exact',
           network: 'base',
@@ -523,15 +554,81 @@ describe('X402Client.parse402 - one unreadable accepts entry keeps the readable 
       ],
     });
 
+    // The cheap one is the one we cannot pay, and cheapness does not buy it in.
     expect(challenge.offers).toHaveLength(1);
     expect(challenge.offers[0].amount).toBe('10000');
     expect(challenge.unreadable).toEqual(['batch-settlement']);
   });
 
-  it('names the schemes it could not read when none is payable', () => {
+  it('treats an ABSENT scheme as unreadable, the way Rust does', () => {
+    // Rust requires the field, so a challenge without it does not deserialise
+    // there. A buyer that guessed `exact` would sign under a scheme the seller
+    // never named -- the same hole as signing a named scheme we cannot present,
+    // minus the evidence. Counted without a name, because it has none.
+    //
+    // Deliberately asymmetric with the SELLER side of this SDK, where a missing
+    // scheme reads as `exact`: a seller is lenient about what it accepts, a buyer
+    // is strict about what it signs.
     const challenge = read({
       x402Version: 1,
-      accepts: [{ scheme: 'batch-settlement' }, { scheme: 'agent-pay' }],
+      accepts: [
+        { network: 'base', maxAmountRequired: '10000', payTo: PAY_TO, asset: USDC_BASE_ADDRESS },
+      ],
+    });
+    expect(challenge.offers).toHaveLength(0);
+    expect(challenge.unreadableCount).toBe(1);
+    expect(challenge.unreadable).toEqual([]);
+  });
+
+  it('knows the same five schemes as Rust and Python, and pays only the one it can sign', () => {
+    // KNOWN_SCHEMES is the shared vocabulary -- the closed enum in x402-rs, the
+    // same five in Python's KNOWN_SCHEMES. Recognising one is NOT being able to
+    // pay it: this buyer path stamps `exact` into every payload it builds, so a
+    // well-formed `escrow` offer read as payable would be signed as `exact`, under
+    // a scheme the seller never asked for.
+    expect([...KNOWN_SCHEMES].sort()).toEqual(
+      ['commerce', 'escrow', 'exact', 'fhe-transfer', 'upto'].sort()
+    );
+    expect([...CLIENT_PAYABLE_SCHEMES]).toEqual(['exact']);
+    for (const payable of CLIENT_PAYABLE_SCHEMES) {
+      expect(KNOWN_SCHEMES.has(payable)).toBe(true);
+    }
+
+    const wellFormed = (scheme: string) => ({
+      scheme,
+      network: 'base',
+      maxAmountRequired: '10000',
+      payTo: PAY_TO,
+      asset: USDC_BASE_ADDRESS,
+    });
+
+    // Every known-but-unpayable scheme is excluded AND named, so the caller can go
+    // find a facilitator that implements it.
+    for (const known of ['upto', 'escrow', 'commerce', 'fhe-transfer']) {
+      const challenge = read({ x402Version: 1, accepts: [wellFormed(known)] });
+      expect(challenge.offers, `${known} must not be read as payable`).toHaveLength(0);
+      expect(challenge.unreadable).toEqual([known]);
+    }
+
+    // And the one it can sign goes through.
+    const payable = read({ x402Version: 1, accepts: [wellFormed('exact')] });
+    expect(payable.offers).toHaveLength(1);
+    expect(payable.unreadableCount).toBe(0);
+  });
+
+  it('names the schemes it could not read when none is payable', () => {
+    // Both entries are fully formed and would have sailed through on their
+    // amount/payee/network alone. They are refused for their schemes.
+    const wellFormed = (scheme: string) => ({
+      scheme,
+      network: 'base',
+      maxAmountRequired: '10000',
+      payTo: PAY_TO,
+      asset: USDC_BASE_ADDRESS,
+    });
+    const challenge = read({
+      x402Version: 1,
+      accepts: [wellFormed('batch-settlement'), wellFormed('agent-pay')],
     });
     expect(challenge.offers).toHaveLength(0);
     expect(challenge.unreadable).toEqual(['batch-settlement', 'agent-pay']);
@@ -721,10 +818,28 @@ describe('X402Client.fetch - the policy decides on the path that signs', () => {
 
   it('names the schemes a seller offered when none of them is payable', async () => {
     const client = await clientWith();
-    const { impl } = scriptedFetch([
+    const { impl, calls } = scriptedFetch([
       jsonResponse(402, {
         x402Version: 1,
-        accepts: [{ scheme: 'batch-settlement' }, { scheme: 'agent-pay' }],
+        // Well-formed in every respect except the one that matters: this build
+        // cannot present either scheme, and signing them as `exact` would offer
+        // the seller a payment under a scheme it never asked for.
+        accepts: [
+          {
+            scheme: 'batch-settlement',
+            network: 'base',
+            maxAmountRequired: '10000',
+            payTo: PAY_TO,
+            asset: USDC_BASE_ADDRESS,
+          },
+          {
+            scheme: 'agent-pay',
+            network: 'base',
+            maxAmountRequired: '10000',
+            payTo: PAY_TO,
+            asset: USDC_BASE_ADDRESS,
+          },
+        ],
       }),
     ]);
 
@@ -734,6 +849,9 @@ describe('X402Client.fetch - the policy decides on the path that signs', () => {
       code: 'POLICY_REFUSED',
       refusal: { code: 'no-readable-offer', offered: ['batch-settlement', 'agent-pay'] },
     });
+    // The probe, and nothing else. Nothing was signed for a scheme we cannot
+    // present.
+    expect(calls).toHaveLength(1);
   });
 
   it('still says "no usable payment options" when the seller sent no offers', async () => {
@@ -752,11 +870,61 @@ describe('X402Client.fetch - the policy decides on the path that signs', () => {
 
   it('keeps paying for a caller that never wrote a policy', async () => {
     // The asymmetry, from the consumer's side: no policy means permissive, so an
-    // unbudgeted asset that a written policy would refuse still goes through.
-    // Turning a budget on silently would refuse payments consumers make today.
+    // offer a written policy would refuse for having no budgeted asset still goes
+    // through. Turning a budget on silently would refuse payments consumers make
+    // today.
+    //
+    // The offer declares no `asset`, which is the shape a v1 resource actually
+    // sends and the one `PurchasePolicy.create()` refuses as `asset-not-budgeted`.
+    // (An offer naming a DIFFERENT token is a separate matter and is refused for
+    // everyone now -- see the tokenType alignment test below.)
     const client = await clientWith();
     const { impl, calls } = scriptedFetch([
+      jsonResponse(402, challenge402({ asset: undefined })),
+      jsonResponse(200, { data: 'paid' }),
+    ]);
+
+    const res = await client.fetch('https://api.example.com/data', { fetchImpl: impl });
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('never signs one asset after approving another', async () => {
+    // The policy approves the offer's OWN asset; `createPayment` signs whatever
+    // `tokenType` resolves to on that chain, and reads the price at that token's
+    // decimals. With USDC on both sides they coincide, which is why this never
+    // showed. A seller pricing in another token would have got an approval for
+    // asset A and a signature for asset B -- and the caller would believe a budget
+    // it never enforced.
+    //
+    // Permissive, on purpose: this is not a budget decision, so it has to hold
+    // even for a caller who wrote no policy at all.
+    const client = await clientWith(PurchasePolicy.permissive());
+    const { impl, calls } = scriptedFetch([
       jsonResponse(402, challenge402({ asset: EURC_BASE_ADDRESS })),
+    ]);
+
+    const failure = await client
+      .fetch('https://api.example.com/data', { fetchImpl: impl })
+      .catch((e: unknown) => e as X402Error);
+
+    expect(failure).toBeInstanceOf(X402Error);
+    expect((failure as X402Error).code).toBe('NO_ACCEPTABLE_PAYMENT');
+    // The message has to name both sides, because the fix is the caller's
+    // `tokenType` and not anything about the seller.
+    expect((failure as X402Error).message).toContain(EURC_BASE_ADDRESS);
+    expect((failure as X402Error).message).toContain('usdc');
+    // Nothing signed, no retry.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('pays an offer that names the configured token, checksum or not', async () => {
+    // The alignment check must not refuse a legitimate offer over the spelling of
+    // a hex address: the registry writes USDC checksummed and a seller may send it
+    // lowercase.
+    const client = await clientWith(PurchasePolicy.permissive());
+    const { impl, calls } = scriptedFetch([
+      jsonResponse(402, challenge402({ asset: USDC_BASE_ADDRESS.toLowerCase() })),
       jsonResponse(200, { data: 'paid' }),
     ]);
 

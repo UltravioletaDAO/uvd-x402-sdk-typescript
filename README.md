@@ -982,7 +982,9 @@ for a token and a network it has never seen.
 4. **A different asset is not the same price.** No numbers are compared across
    assets. An asset with no declared ceiling is **denied by default**; the
    permissive mode has to be asked for by name.
-5. **Addresses are canonicalised by family, never with `toLowerCase()`.** Hex is
+5. **A network name's case never decides anything** (`'Base'` and `'base'` are one
+   network written twice), and **addresses are canonicalised by family, never with
+   `toLowerCase()`.** Hex is
    folded; base58 (Solana, XRPL) is compared exactly. Folding a base58 address
    does not produce the same address spelled differently — it produces a string
    that is not an address, so an allowlist written in the seller's own spelling
@@ -1002,6 +1004,33 @@ Two more worth knowing: **a copy of a policy spends from the same purse** (a
 client is copied per request, and a per-copy total would make a cumulative limit
 meaningless), and **a corrupt purse reports the ceiling, never zero** — for money
 the safe direction is to refuse.
+
+### The scheme decides, and so does the asset
+
+Two checks sit beside the policy on the buyer path, because approving a payment you
+cannot honestly present is not an approval:
+
+**Schemes.** `KNOWN_SCHEMES` is the vocabulary shared with the Rust facilitator's
+closed `Scheme` enum and the Python SDK: `exact`, `upto`, `escrow`, `commerce`,
+`fhe-transfer`. `CLIENT_PAYABLE_SCHEMES` is the subset this buyer path can sign —
+`exact` alone, because the payload builder stamps `scheme: 'exact'` into everything
+it produces. **Recognising a scheme is not being able to pay it:** a well-formed
+`escrow` offer read as payable would be signed as `exact`, offering the seller a
+payment under a scheme it never asked for. Either way the entry is excluded and
+counted by its scheme name, which is what lets a refusal say where to go look.
+
+**A missing `scheme` is unreadable, not `exact`.** Rust requires the field, and a
+buyer that guessed would sign under a scheme the seller never named. This is
+deliberately asymmetric with the **seller** side of this SDK, where a missing scheme
+reads as `exact`: a seller is lenient about what it accepts, a buyer is strict about
+what it signs.
+
+**Assets.** The policy judges the offer's own `asset`, but the signature is built for
+whatever `tokenType` resolves to on that chain, at that token's decimals. With USDC on
+both sides they coincide. They do not have to — so an offer naming a different token
+is refused rather than silently re-pointed, because which token to pay with is your
+decision and guessing it from the seller's 402 is how a wallet signs for a token
+nobody chose. Pass the `tokenType` that matches the offer.
 
 ### Deciding without a network stack
 

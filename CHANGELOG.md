@@ -111,6 +111,58 @@ se lleva el default seguro.
 - **`maxAmount` queda intacto** y sigue corriendo **antes** de la política: quien puso
   un techo y ninguna política conserva exactamente el comportamiento que tenía.
 
+- **El `scheme` de la oferta ahora decide, y antes no decidía nada.** `parse402` solo
+  exigía monto, payee y red, así que una oferta **bien formada** pidiendo
+  `batch-settlement` se leía como pagable y después se **firmaba como `exact`**: un
+  pago ofrecido al vendedor bajo un esquema que nunca pidió. Ahora hay dos conjuntos,
+  y son dos preguntas distintas:
+
+  - **`KNOWN_SCHEMES`** — el vocabulario compartido con los otros dos SDK: `exact`,
+    `upto`, `escrow`, `commerce`, `fhe-transfer`. Los mismos cinco del enum cerrado
+    `Scheme` de `x402-rs` y de `KNOWN_SCHEMES` en Python. Un esquema fuera de esos
+    cinco no lo sabe nombrar ninguna implementación del stack.
+  - **`CLIENT_PAYABLE_SCHEMES`** — de esos, los que **este** camino de comprador
+    puede firmar: `exact`, y nada más, porque el constructor de payload estampa
+    `scheme: 'exact'` en todo lo que produce. `escrow` y `commerce` están del lado
+    **vendedor**; `upto` y `fhe-transfer` no están.
+
+  **Reconocer un esquema no es poder pagarlo**, y colapsar los dos conjuntos en uno
+  reabre el agujero exacto: con los cinco como pagables, una oferta `escrow` bien
+  formada se vuelve a firmar como `exact`. Las dos situaciones terminan igual para
+  quien llama — la entrada queda afuera y se cuenta por su nombre de esquema — y
+  `no-readable-offer` dice "no offer in this challenge is one this build **can
+  pay**", que es el marco de las dos.
+
+- **BREAKING (comprador): un `accepts` sin `scheme` ahora es ilegible, no `exact`.**
+  Rust exige el campo, así que allá un desafío sin él no deserializa; un comprador
+  que adivinara `exact` firmaría bajo un esquema que el vendedor nunca nombró — el
+  mismo agujero que firmar uno nombrado que no podemos presentar, pero sin la
+  evidencia. Se cuenta (`unreadableCount`) sin nombre, porque no tiene ninguno que
+  reportar.
+
+  Es **asimétrico a propósito** con el lado vendedor de este mismo SDK, donde un
+  `scheme` ausente se lee como `exact` (`src/backend/index.ts`: "'exact' is the
+  default, not an override"). Un vendedor es indulgente con lo que acepta; un
+  comprador es estricto con lo que firma. Todos los fixtures de la suite declaran
+  `scheme`, así que nada acá se rompió — pero un vendedor real que lo omita se vuelve
+  impagable por este camino, y eso es observable.
+
+- **La política ya no puede aprobar un activo y firmar otro.** `evaluate()` juzga el
+  `asset` de la oferta, pero `createPayment()` firma el token al que resuelve
+  `tokenType` en esa cadena, y lee el precio con **los decimales de ese** token. Con
+  USDC en los dos lados coinciden, que es por lo que nunca se vio. No tienen por qué:
+  un vendedor cotizando en otro token daba aprobación sobre el activo A y firma sobre
+  el activo B, y quien llamaba creía tener un presupuesto que nunca se aplicó.
+
+  Ahora una oferta que nombra un activo distinto al de `tokenType` se **rechaza**
+  (`NO_ACCEPTABLE_PAYMENT`, con los dos addresses en el mensaje), en vez de
+  re-apuntarse en silencio: con qué token pagar es decisión de quien llama, y
+  adivinarlo del `402` del vendedor es cómo una wallet termina firmando por un token
+  que nadie eligió. Corre **después** de la política, así que un activo no
+  presupuestado sigue reportándose como `asset-not-budgeted`, que es la causa útil. La
+  comparación es canonicalizada, así que un USDC en minúscula frente al registro en
+  checksum no es un desalineo.
+
 ### Notas — las reglas que no se negocian
 
 1. **Evaluar no gasta.** Firmar puede fallar y una liquidación puede rechazarse; un
@@ -132,24 +184,30 @@ se lleva el default seguro.
    token y una red que nunca vio. Por eso `asset-not-budgeted` corre **antes** de los
    techos: a quien llama hay que decirle "presupuestá ese activo", no "subí un techo
    que no existe".
-5. **La dirección se canonicaliza por familia, nunca con `toLowerCase()`.** Hex se
+5. **El nombre de red no decide por su caja.** `'Base'` y `'base'` son una red
+   escrita de dos formas, nunca dos redes: la clave del activo pliega la red a
+   minúscula. Dejar la caja adentro falla cerrado (`asset-not-budgeted`, así que
+   ningún pago sale mal) pero tropieza al operador con una mayúscula, y la negativa
+   apuntaría al presupuesto en vez de al typo. La **dirección** conserva su trato por
+   familia.
+6. **La dirección se canonicaliza por familia, nunca con `toLowerCase()`.** Hex se
    pliega; base58 (Solana, XRPL) se compara **exacto**. Bajar una dirección base58 no
    produce la misma dirección escrita distinto, produce una cadena que no es una
    dirección: una lista blanca escrita con la grafía del vendedor no coincidiría nunca
    y todo pago legítimo a ese payee se rechazaría. Y en la dirección peligrosa, dos
    direcciones base58 distintas pueden plegarse a la misma minúscula, lo que dejaría
    entrar a una que nadie puso en la lista.
-6. **`validUntil` ilegible = ausente, NUNCA cero.** "El vendedor dijo algo que no
+7. **`validUntil` ilegible = ausente, NUNCA cero.** "El vendedor dijo algo que no
    pudimos leer" no puede convertirse en "esta oferta venció en 1970". Un string, un
    float, un negativo o algo más grande que `MAX_SAFE_INTEGER`: todos ausentes.
-7. **`validUntil === now` todavía vale**: es el último instante en que la oferta está
+8. **`validUntil === now` todavía vale**: es el último instante en que la oferta está
    en pie.
-8. **Una copia gasta de la misma bolsa.** Un cliente se copia por request; si cada
+9. **Una copia gasta de la misma bolsa.** Un cliente se copia por request; si cada
    copia llevara su propio total, un límite acumulado no significaría nada.
-9. **Estado corrupto reporta el TECHO, nunca cero.** Si algo dejó la bolsa en un valor
+10. **Estado corrupto reporta el TECHO, nunca cero.** Si algo dejó la bolsa en un valor
    que no es un bigint sano, `spent()` devuelve el límite acumulado: para el dinero, la
    dirección segura es negarse, nunca permitir.
-10. **Aritmética en `bigint`, nunca `number`.** Las unidades atómicas de un token de 18
+11. **Aritmética en `bigint`, nunca `number`.** Las unidades atómicas de un token de 18
     decimales pasan `Number.MAX_SAFE_INTEGER` con 0.01 de token, y un techo comparado
     como float es un techo que redondea. Un monto que no se puede leer se compara como
     el valor más grande representable, así que falla todos los techos en vez de pasar

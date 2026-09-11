@@ -38,10 +38,13 @@ La evaluación corre después de seleccionar la oferta y **antes** de
 `createPayment()`, o sea antes de que exista una firma. Sin política configurada, el
 cliente sostiene `PurchasePolicy.permissive()`.
 
-**`parse402` se volvió tolerante (regla 7).** `accepts` es una lista: una entrada
-ilegible ya no hunde la lista, las legibles se conservan y las otras se cuentan por
-nombre de esquema. También lee las `extensions` del desafío, que es donde vive
-`validUntil`, y devuelve el desafío **completo**.
+**`parse402` se volvió tolerante Y estricta a la vez (regla 7).** `accepts` es una
+lista: una entrada ilegible ya no hunde la lista, las legibles se conservan y las otras
+se cuentan por nombre de esquema. Y "ilegible" ahora incluye **el esquema**: una entrada
+bien formada cuyo `scheme` este camino no puede firmar queda afuera en vez de firmarse
+como `exact` (ver "Lo que corrigió la revisión de seguridad"). También lee las
+`extensions` del desafío, que es donde vive `validUntil`, y devuelve el desafío
+**completo**.
 
 **Un error nuevo:** `PolicyRefusedError extends X402Error` con código
 `POLICY_REFUSED` y la causa tipada en `.refusal`. Extiende `X402Error` a propósito:
@@ -65,6 +68,12 @@ donde antes lanzaba `NO_ACCEPTABLE_PAYMENT` con "402 response offered no usable
 payment options" — que es justo el mensaje que manda a alguien a buscar un bug en su
 propio código. Un `402` con `accepts` vacío **conserva** `NO_ACCEPTABLE_PAYMENT`: el
 vendedor no mandó ofertas, que es otro hecho.
+
+**Y un breaking change del comprador que sí hay que leer:** un `accepts` sin `scheme`
+pasó de pagable a **ilegible**, y una entrada bien formada en un esquema que este camino
+no firma (`escrow`, `upto`, `commerce`, `fhe-transfer`) también. Antes las dos se
+firmaban como `exact`. Está detallado abajo, en "Lo que corrigió la revisión de
+seguridad".
 
 ## Donde esta implementación se aparta del Rust, y por qué
 
@@ -113,9 +122,77 @@ Dicho fuerte, porque la sección 9 del plan tiene más puntos que estos:
   vigente presentada): requiere que la oferta vigente le llegue al facilitador, que
   es el punto de la firma otra vez.
 
+## Lo que corrigió la revisión de seguridad
+
+Un revisor independiente dejó el PR en CONDITIONAL con tres hallazgos. **Los tres eran
+ciertos, y dos cambian el comportamiento del dinero.**
+
+**P1 — el `scheme` de la oferta no decidía nada, y el PR publicaba la regla 7 como
+implementada.** `parse402` solo exigía monto, payee y red, así que una oferta **bien
+formada** pidiendo `batch-settlement` se leía como pagable y después se **firmaba como
+`exact`** (el constructor de payload estampa ese literal), o sea un pago ofrecido al
+vendedor bajo un esquema que nunca pidió. Y mis dos tests de ilegibles usaban entradas
+a las que les **faltaban campos**, así que probaban que los campos faltantes se
+detectan — no la regla 7. El revisor tenía razón en las dos mitades: el arreglo y la
+crítica al test.
+
+Es el error inverso al que tuvo Rust. Allá un enum cerrado actuando de colección
+abierta **rechazaba de más** (una entrada ilegible tumbaba la lista entera); acá el
+parseo permisivo **aceptaba de más**. Las dos son la misma confusión entre reconocer y
+poder pagar, en direcciones opuestas.
+
+Ahora hay **dos conjuntos**, y esto es lo que no hay que colapsar:
+
+- `KNOWN_SCHEMES` = `exact`, `upto`, `escrow`, `commerce`, `fhe-transfer` — el
+  vocabulario compartido con el enum cerrado de `x402-rs` y con `KNOWN_SCHEMES` de
+  Python.
+- `CLIENT_PAYABLE_SCHEMES` = `exact` — lo que **este** camino puede firmar.
+
+Con los cinco como pagables, una oferta `escrow` bien formada se vuelve a firmar como
+`exact`. Hay un test que fija los dos conjuntos y que se pone rojo si se colapsan.
+
+**El `scheme` ausente ahora es ilegible, como en Rust** (decisión de c0der, alineación
+de los tres SDK). Rust exige el campo; un comprador que adivinara `exact` firmaría bajo
+un esquema que el vendedor nunca nombró. Se cuenta sin nombre, porque no tiene ninguno.
+**Es asimétrico a propósito con el lado vendedor de este mismo SDK**
+(`src/backend/index.ts:1567`: "'exact' is the default, not an override"): un vendedor es
+indulgente con lo que acepta, un comprador es estricto con lo que firma.
+
+> **Dato para c0der, medido:** los 13 fixtures de `accepts` de la suite declaran
+> `scheme`, así que **nada se rompió** — pero eso no prueba que ningún vendedor real lo
+> omita, y el cambio **es observable**: un `402` sin `scheme` pasa de pagable a
+> impagable por este camino. Si aparece un vendedor así, la reversión es una línea
+> (`accept.scheme ?? 'exact'`) y hay un test que marca la decisión.
+
+**P2 — la política aprobaba un activo y el firmante firmaba otro.** `evaluate()` juzga
+el `asset` de la oferta; `createPayment()` firma el token al que resuelve `tokenType`
+en esa cadena y lee el precio con **los decimales de ese** token. Con USDC en los dos
+lados coinciden, que es por lo que no se vio en ningún test. Un vendedor cotizando en
+otro token daba **aprobación sobre A y firma sobre B**, y quien llamaba creía tener un
+presupuesto que nunca se aplicó.
+
+Ahora una oferta que nombra un activo distinto al de `tokenType` se rechaza
+(`NO_ACCEPTABLE_PAYMENT`, con los dos addresses en el mensaje) en vez de re-apuntarse
+en silencio: con qué token pagar es decisión de quien llama, y adivinarlo del `402` del
+vendedor es cómo una wallet firma por un token que nadie eligió. Corre **después** de
+la política, para que un activo no presupuestado siga reportándose como
+`asset-not-budgeted` — la causa útil. La comparación es canonicalizada: un USDC en
+minúscula frente al registro en checksum no es un desalineo, y hay un test para eso
+porque refutar ahí rompería pagos legítimos.
+
+**P3 — `assetKey` no normalizaba la caja de la red.** `'Base'` contra `'base'` fallaba
+cerrado (`asset-not-budgeted`, ningún pago malo) pero tropieza al operador con una
+mayúscula, y la negativa apuntaría al presupuesto en vez de al typo. La red se pliega a
+minúscula; la **dirección** conserva su trato por familia.
+
+**Se mantiene la resolución CAIP-2 → nombre del SDK al armar la clave del activo** (es
+la que Python va a adoptar): la clave usa `chainName` resuelto, así que una política
+escrita con `'base'` cubre tanto un `402` v1 que dice `base` como uno v2 que dice
+`eip155:8453`.
+
 ## Cómo se probó
 
-**35 tests nuevos** en `src/policy.test.ts`, y **11 probados en rojo por mutación**:
+**40 tests nuevos** en `src/policy.test.ts`, y **17 probados en rojo por mutación**:
 cada propiedad se verificó rompiendo el código a propósito y midiendo que el test
 correspondiente se pone rojo. Las mutaciones y sus veredictos:
 
@@ -132,6 +209,12 @@ correspondiente se pone rojo. Las mutaciones y sus veredictos:
 | `accepts` ilegible no se cuenta por esquema | nombra los esquemas ofrecidos |
 | bolsa corrupta reporta cero | reporta el techo, nunca cero |
 | `recordSpend` negativo devuelve presupuesto | negativo se ignora |
+| no se valida el `scheme` en `parse402` (P1) | oferta bien formada en esquema no pagable |
+| pagable = los cinco conocidos (colapsar los dos sets) | los dos conjuntos de esquemas |
+| `scheme` ausente se adivina como `exact` | ausente es ilegible |
+| no se alinea el activo aprobado con el firmado (P2) | nunca firma un activo tras aprobar otro |
+| el activo se compara sin canonicalizar | paga el token configurado en minúscula |
+| la caja de la red decide (P3) | la caja del nombre de red no decide |
 
 **Dos entran por el camino real** (`client.fetch()` con `fetch` mockeado devolviendo
 el 402), y esa es la lección que el handoff del facilitador dejó explícita: en Rust el
@@ -140,7 +223,8 @@ con **todos los tests unitarios en verde**, así que el vendedor declaraba
 `validUntil`, la política sabía comprobarlo, y entre las dos no había cable. Un test
 que solo ejerce la pieza no ve eso.
 
-**Suite completa: 676/676 verde.** `typecheck` limpio, `lint` limpio, `build` OK.
+**Suite completa: 681/681 verde** (40 en `policy.test.ts`, y **17 mutaciones** probadas
+en rojo contando las seis de la revisión de seguridad). `typecheck` limpio, `lint` limpio, `build` OK.
 
 **`npm run test:xlang` no se pudo correr acá**: el gate necesita el checkout de
 `uvd-x402-sdk-python` al lado, que no existe en este worktree. El CI lo corre en un
@@ -155,8 +239,8 @@ envelopes y precios entre los dos SDK, y esta versión no toca ninguna firma —
 | archivo | qué |
 |---|---|
 | `src/policy.ts` | **nuevo** — `PurchasePolicy`, los seis códigos, `decideOnChallenge`, `offerValidUntil`, `canonicalRecipient` |
-| `src/policy.test.ts` | **nuevo** — 35 tests, 11 probados en rojo por mutación |
-| `src/client/X402Client.ts` | `parse402` tolerante + lee `extensions`; evaluación antes de firmar en `fetch()`; getter `policy` |
+| `src/policy.test.ts` | **nuevo** — 40 tests, 17 probados en rojo por mutación |
+| `src/client/X402Client.ts` | `parse402` tolerante + valida el `scheme` + lee `extensions`; `KNOWN_SCHEMES` y `CLIENT_PAYABLE_SCHEMES`; evaluación antes de firmar y alineación del activo en `fetch()`; getter `policy` |
 | `src/types/index.ts` | `POLICY_REFUSED`; `X402ClientConfig.policy`; `X402FetchOptions.advertised` y `.onPaid` |
 | `src/index.ts` | exports de la política |
 | `package.json` | 2.88.0 → **2.89.0** |
@@ -176,7 +260,9 @@ mergea, hay que resolver el choque de versión ahí, no acá.
   la otra mitad.
 - **Vinculación por input: fuera.** La extensión versionada es el lugar; el perfil
   queda sin definir a propósito hasta que haya un vendedor real que lo necesite.
-- **`upto`: fuera.** Ninguna contabilidad de `upto` en esta versión.
+- **`upto`: fuera.** Está en `KNOWN_SCHEMES` porque es parte del vocabulario
+  compartido, pero **no es pagable por este camino** y no hay ninguna contabilidad de
+  `upto` en esta versión.
 - **Nada se persiste.** La política vive en memoria del comprador y no se escribe.
 - **Ningún payload de pago cambió.** Cero impacto en el facilitador, en los vectores
   ERC-8128 y en el gate cross-language.
