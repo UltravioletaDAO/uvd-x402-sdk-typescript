@@ -26,6 +26,14 @@ import type {
 } from '../types';
 import { X402Error, DEFAULT_CONFIG } from '../types';
 import {
+  PurchasePolicy,
+  PolicyRefusedError,
+  decideOnChallenge,
+  noReadableOffer,
+  canonicalRecipient,
+} from '../policy';
+import type { PolicyApproval, ReadChallenge } from '../policy';
+import {
   SUPPORTED_CHAINS,
   getChainByName,
   getChainById,
@@ -39,6 +47,52 @@ import {
   encodeBase64Json,
   buildTokenMetadata,
 } from '../utils';
+
+/**
+ * The x402 scheme vocabulary, shared by all three implementations.
+ *
+ * The same five the Rust facilitator's closed `Scheme` enum holds and the same
+ * five the Python SDK keys `KNOWN_SCHEMES` on. A scheme outside this set is one
+ * no implementation in the stack can name, so an entry carrying one is unreadable
+ * and is counted by the name the seller used.
+ *
+ * Kept as a set of known NAMES rather than of payable ones because the two are
+ * different questions, and conflating them is what rule 7 is about: naming what a
+ * seller offered is how a caller learns to go find a facilitator that implements
+ * it. See {@link CLIENT_PAYABLE_SCHEMES} for the other question.
+ */
+export const KNOWN_SCHEMES: ReadonlySet<string> = new Set([
+  'exact',
+  'upto',
+  'escrow',
+  'commerce',
+  'fhe-transfer',
+]);
+
+/**
+ * Of those, the ones the BUYER path in this client can actually sign.
+ *
+ * One entry, and that is the point: the payload builder stamps
+ * `scheme: 'exact'` into everything it produces, so `exact` is the only thing
+ * this client can honestly present. `escrow` and `commerce` are implemented on
+ * the SELLER side (`src/backend`) and in the pre-auth builder, and `upto` and
+ * `fhe-transfer` are not implemented here at all.
+ *
+ * # Why this is a SECOND set and not a narrower first one
+ *
+ * `parse402` used to accept any entry carrying an amount, a payee and a network,
+ * so a well-formed offer asking for a scheme this build cannot present was read
+ * as payable and then **signed as `exact`** -- a payment offered to the seller
+ * under a scheme it never asked for. Recognising a scheme is not being able to
+ * pay it. Collapsing these two sets into one re-opens exactly that hole: widen
+ * this one to the five known names and a well-formed `escrow` offer gets signed
+ * as `exact` again.
+ *
+ * Both cases end the same way for the caller -- the entry is excluded and counted
+ * by its scheme name -- and `no-readable-offer` says "no offer in this challenge
+ * is one this build **can pay**", which is the frame both of them sit in.
+ */
+export const CLIENT_PAYABLE_SCHEMES: ReadonlySet<string> = new Set(['exact']);
 
 /**
  * X402Client - Main SDK client for x402 payments
@@ -82,6 +136,17 @@ export class X402Client {
   // Event emitter
   private eventHandlers: Map<X402Event, Set<X402EventHandler<X402Event>>> = new Map();
 
+  /**
+   * What this buyer is allowed to sign, evaluated against the offer in hand
+   * before anything is signed.
+   *
+   * `permissive()` when the caller supplied none, and that asymmetry is
+   * deliberate: this SDK had no budget before 2.89.0, so switching one on
+   * silently would refuse payments consumers are making today, while whoever
+   * sits down to WRITE a policy gets the deny-by-default one.
+   */
+  private readonly purchasePolicy: PurchasePolicy;
+
   constructor(config: X402ClientConfig = {}) {
     this.config = {
       ...DEFAULT_CONFIG,
@@ -106,7 +171,19 @@ export class X402Client {
       }
     }
 
+    this.purchasePolicy = config.policy ?? PurchasePolicy.permissive();
+
     this.log('X402Client initialized', { config: this.config });
+  }
+
+  /**
+   * The policy in force, for a caller that wants to record a settled payment
+   * against it with {@link PurchasePolicy.recordSpend}.
+   *
+   * Nothing on the payment path ever widens it.
+   */
+  get policy(): PurchasePolicy {
+    return this.purchasePolicy;
   }
 
   // ============================================================================
@@ -375,8 +452,19 @@ export class X402Client {
     }
 
     const tokenType: TokenType = options.tokenType || 'usdc';
-    const { version, offers } = this.parse402(body, tokenType);
+    const challenge = this.parse402(body, tokenType);
+    const { version, offers } = challenge;
     if (offers.length === 0) {
+      // Step 1 of the policy contract, and two different facts that used to be
+      // one error. A seller that sent offers none of which this build can read is
+      // asking for a scheme we do not implement; saying so names what it wanted,
+      // where "no usable payment options" sends the caller hunting a bug in its
+      // own code. A seller that sent none at all is the other fact, and keeps the
+      // error it always had.
+      const unreadableCount = challenge.unreadableCount ?? challenge.unreadable.length;
+      if (unreadableCount > 0) {
+        throw new PolicyRefusedError(noReadableOffer(challenge.unreadable));
+      }
       throw new X402Error(
         '402 response offered no usable payment options',
         'NO_ACCEPTABLE_PAYMENT'
@@ -412,10 +500,69 @@ export class X402Client {
       }
     }
 
+    // The policy, evaluated against THIS offer, before anything is signed. An
+    // offer that diverges from a listing but sits inside an authorised policy
+    // proceeds -- stopping to ask would turn every ordinary reprice into a halt --
+    // and one that does not is refused with a concrete cause. The policy is never
+    // widened to fit the offer, and there is no confirmation hook in this path.
+    //
+    // The whole challenge goes in, never just the offer: `validUntil` lives in
+    // the challenge's `extensions`, and a call that takes the parts is how it gets
+    // dropped.
+    const decision = decideOnChallenge(this.purchasePolicy, challenge, chosen, {
+      now: Math.floor(Date.now() / 1000),
+      quote: options.advertised,
+    });
+    if (!decision.ok) {
+      this.log('policy refused this offer', { cause: decision.refusal.code });
+      this.emit('paymentFailed', {
+        error: decision.refusal.message,
+        code: 'POLICY_REFUSED',
+      });
+      throw new PolicyRefusedError(decision.refusal);
+    }
+    const approval: PolicyApproval = decision.approval;
+    this.log('policy approved this offer', {
+      versusQuote: approval.versusQuote.code,
+      amount: String(approval.amount),
+    });
+
     if (!chosen.chainName) {
       throw new X402Error(
         `402 asked for payment on unknown network '${chosen.network}'`,
         'CHAIN_NOT_SUPPORTED'
+      );
+    }
+
+    // The policy just approved the offer's OWN asset, but `createPayment` signs
+    // for whatever token `tokenType` resolves to on this chain -- and reads the
+    // price at that token's decimals. With USDC on both sides they coincide,
+    // which is why this never showed. They do not have to: a seller pricing in a
+    // token that is not the configured one would get an approval for asset A and
+    // a signature for asset B, at B's decimals, and the caller would believe a
+    // budget it never actually enforced.
+    //
+    // Refused rather than silently re-pointed: which token to pay with is the
+    // caller's decision, and guessing it from the seller's 402 is how a wallet
+    // ends up signing for a token nobody chose.
+    const configuredToken = getTokenConfig(chosen.chainName, tokenType);
+    if (
+      chosen.asset &&
+      configuredToken &&
+      canonicalRecipient(configuredToken.address) !== canonicalRecipient(chosen.asset)
+    ) {
+      throw new X402Error(
+        `402 wants ${chosen.asset} on ${chosen.chainName}, but this client signs ` +
+          `${configuredToken.address} (tokenType '${tokenType}'). Pass the tokenType ` +
+          'that matches the offer; signing the configured token would pay a ' +
+          'different asset than the one that was approved.',
+        'NO_ACCEPTABLE_PAYMENT',
+        {
+          offered: chosen.asset,
+          wouldSign: configuredToken.address,
+          tokenType,
+          network: chosen.chainName,
+        }
       );
     }
 
@@ -442,20 +589,43 @@ export class X402Client {
       paidHeaders['PAYMENT-SIGNATURE'] = payment.paymentHeader;
     }
 
-    return doFetch(url, { ...options.init, method, headers: paidHeaders });
+    const paid = await doFetch(url, { ...options.init, method, headers: paidHeaders });
+
+    // Approving did not spend: signing can fail and a settlement can be refused,
+    // and a cumulative limit that counted attempts would lock a caller out of
+    // money it never spent. A retry that came back as anything but another 402 is
+    // the seller accepting the payment, which is the moment a caller records it --
+    // by its own hand, in `onPaid`, never automatically here.
+    if (paid.status !== 402) {
+      options.onPaid?.(approval);
+    }
+    return paid;
   }
 
   /**
-   * Normalise a 402 body into its envelope version and its payment offers.
+   * Normalise a 402 body into its envelope version, its payment offers, the ones
+   * it could not read, and the challenge's `extensions`.
    *
    * Reads both spec shapes -- `{x402Version, accepts: [...]}` and the non-spec
    * one where a lone requirement sits at the top level -- and both dialects of
    * the price field (`maxAmountRequired` in v1, `amount` in v2).
+   *
+   * **`accepts` is a list, so one unreadable entry does not sink the list.** A
+   * seller offering `exact` alongside a scheme this build does not implement used
+   * to be unpayable in the Rust crate, and the buyer never learned there was a
+   * perfectly payable offer right there. The readable ones are kept and the
+   * others are counted by scheme name, so a refusal can say what the seller
+   * offered instead of "could not parse". Discovering the service keeps working
+   * even when buying it automatically does not.
+   *
+   * Returns the WHOLE challenge on purpose: handing `offers` alone downstream is
+   * what dropped the seller's `validUntil` on the floor in Rust for a full commit
+   * with every unit test green.
    */
   private parse402(
     body: unknown,
     tokenType: TokenType
-  ): { version: X402Version; offers: X402PaymentOffer[] } {
+  ): ReadChallenge & { version: X402Version } {
     const doc = (body ?? {}) as Record<string, unknown>;
     const version: X402Version = Number(doc.x402Version) === 2 ? 2 : 1;
 
@@ -466,16 +636,64 @@ export class X402Client {
         : [];
 
     const offers: X402PaymentOffer[] = [];
+    const unreadable: string[] = [];
+    let unreadableCount = 0;
+
+    /** Count an entry this build cannot pay, by scheme name when it has one. */
+    const cannotRead = (accept: Record<string, unknown> | null) => {
+      unreadableCount += 1;
+      const scheme = accept?.scheme;
+      if (typeof scheme === 'string' && scheme) unreadable.push(scheme);
+    };
+
     for (const entry of rawAccepts) {
-      if (!entry || typeof entry !== 'object') continue;
+      if (!entry || typeof entry !== 'object') {
+        cannotRead(null);
+        continue;
+      }
       const accept = entry as Record<string, unknown>;
+
+      // The scheme first, so a well-formed offer in a scheme we cannot pay is
+      // counted by the NAME the seller used -- the informative half of rule 7 --
+      // instead of being reported for whichever field it also happened to omit.
+      //
+      // An ABSENT scheme is unreadable, not `exact`. Rust requires the field, so a
+      // challenge without it fails to deserialise there, and a buyer that guessed
+      // `exact` would sign under a scheme the seller never actually named -- which
+      // is the same hole as signing a named one we cannot present, minus the
+      // evidence. It is counted (`unreadableCount`) without a name, because it has
+      // none to report.
+      //
+      // Note this is deliberately ASYMMETRIC with the seller side of this SDK,
+      // where a missing scheme reads as `exact` ("the default, not an override",
+      // `src/backend/index.ts`). A seller is lenient about what it accepts; a
+      // buyer is strict about what it signs.
+      const declaredScheme = accept.scheme;
+      if (
+        typeof declaredScheme !== 'string' ||
+        !declaredScheme ||
+        !KNOWN_SCHEMES.has(declaredScheme) ||
+        !CLIENT_PAYABLE_SCHEMES.has(declaredScheme)
+      ) {
+        cannotRead(accept);
+        continue;
+      }
 
       const amount = accept.amount ?? accept.maxAmountRequired;
       const payTo = accept.payTo;
       const network = accept.network;
-      if (amount === undefined || amount === null) continue;
-      if (typeof payTo !== 'string' || !payTo) continue;
-      if (typeof network !== 'string' || !network) continue;
+      if (amount === undefined || amount === null) {
+        cannotRead(accept);
+        continue;
+      }
+      if (typeof payTo !== 'string' || !payTo) {
+        cannotRead(accept);
+        continue;
+      }
+      if (typeof network !== 'string' || !network) {
+        cannotRead(accept);
+        continue;
+      }
 
       const chainName = getChainByName(network) ? network : caip2ToChain(network);
 
@@ -490,7 +708,12 @@ export class X402Client {
       });
     }
 
-    return { version, offers };
+    const extensions =
+      doc.extensions && typeof doc.extensions === 'object' && !Array.isArray(doc.extensions)
+        ? (doc.extensions as Record<string, unknown>)
+        : undefined;
+
+    return { version, offers, unreadable, unreadableCount, extensions };
   }
 
   /**
