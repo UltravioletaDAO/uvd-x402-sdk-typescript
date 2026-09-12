@@ -34,3 +34,6 @@ coverage/
 
 # Local scratch / IRC logs
 .unused/
+.claude/irc-config.json
+.claude/skills/
+mempalace.yaml

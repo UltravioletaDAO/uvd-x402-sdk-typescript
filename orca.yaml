@@ -1,0 +1,22 @@
+# Generado por c0der (PM del stack Ultravioleta DAO) para Orca.
+# Deja un worktree nuevo utilizable sin intervencion: node_modules compartido + reconcile idempotente.
+
+scripts:
+  setup: npm install --no-audit --no-fund --prefer-offline
+
+setupAgentStartupPolicy: start-immediately
+
+defaultTabs:
+  - title: tests
+    color: "#a855f7"
+    command: npm run test:run
+  - title: gates
+    color: "#737373"
+    command: npm run typecheck && npm run lint
+  - title: build
+    color: "#737373"
+    command: npm run build
+
+worktree:
+  sharedDirectories:
+    - node_modules
