@@ -46,6 +46,8 @@ import {
   caip2ToChain,
   encodeBase64Json,
   buildTokenMetadata,
+  resolveValiditySeconds,
+  clampValiditySeconds,
 } from '../utils';
 
 /**
@@ -148,6 +150,11 @@ export class X402Client {
   private readonly purchasePolicy: PurchasePolicy;
 
   constructor(config: X402ClientConfig = {}) {
+    // A window that cannot be signed is refused while the client is built, not
+    // on its first payment with a user waiting -- and before the RPC and chain
+    // overrides below touch the shared registry.
+    resolveValiditySeconds(undefined, config.validitySeconds);
+
     this.config = {
       ...DEFAULT_CONFIG,
       ...config,
@@ -570,12 +577,21 @@ export class X402Client {
       await this.switchChain(chosen.chainName);
     }
 
+    // The window: the seller's declared `maxTimeoutSeconds` when its 402 carried
+    // one, clamped to the payer's ceiling; otherwise this client's own. The
+    // facilitator never rejects a long window, so signing LESS than the seller
+    // declared is the failure that bites -- an authorization that dies before the
+    // seller's own settle and revokes a payment that was made.
     const payment = await this.createPayment({
       recipient: chosen.payTo,
       amount: ethers.formatUnits(chosen.amount, chosen.decimals),
       tokenType,
       network: chosen.chainName,
       x402Version: version,
+      validitySeconds:
+        chosen.maxTimeoutSeconds !== undefined
+          ? clampValiditySeconds(chosen.maxTimeoutSeconds)
+          : undefined,
     });
 
     // v1 servers read `X-PAYMENT`; v2 ones read `PAYMENT-SIGNATURE`. Both carry
@@ -697,6 +713,15 @@ export class X402Client {
 
       const chainName = getChainByName(network) ? network : caip2ToChain(network);
 
+      // The seller's settlement window, when it declared a usable one. Anything
+      // that is not a finite number counts as NOT declared instead of making the
+      // offer unreadable: price, payee and network are intact, and the client's
+      // own window still applies.
+      const declaredTimeout =
+        typeof accept.maxTimeoutSeconds === 'number' && Number.isFinite(accept.maxTimeoutSeconds)
+          ? accept.maxTimeoutSeconds
+          : undefined;
+
       offers.push({
         network,
         chainName,
@@ -704,6 +729,7 @@ export class X402Client {
         amount: String(amount),
         decimals: X402Client.offerDecimals(chainName, tokenType),
         payTo,
+        ...(declaredTimeout !== undefined ? { maxTimeoutSeconds: declaredTimeout } : {}),
         raw: accept,
       });
     }
@@ -1069,9 +1095,13 @@ export class X402Client {
     }
     const nonce = ethers.hexlify(nonceBytes);
 
-    // Set validity window (5 minutes for congested networks, 1 minute otherwise)
+    // How long this authorization stays settleable. Per payment first, then the
+    // client's default, then 300 s -- see `resolveValiditySeconds`.
     const validAfter = 0;
-    const validityWindowSeconds = chain.name === 'base' ? 300 : 60;
+    const validityWindowSeconds = resolveValiditySeconds(
+      paymentInfo.validitySeconds,
+      this.config.validitySeconds
+    );
     const validBefore = Math.floor(Date.now() / 1000) + validityWindowSeconds;
 
     // EIP-712 domain of the token being charged

@@ -4,6 +4,74 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.91.0] - 2026-09-13
+
+**La autorización EIP-3009 vive 300 s en todas las redes, y ahora se puede
+cambiar.** Hasta 2.90.0 la ventana (`validBefore = now + N`) era 300 s en Base y
+**60 s en las otras once redes EVM**, escrita dos veces y sin forma de
+sobreescribirla. Un vendedor que liquida async (verificar → entregar → liquidar)
+tenía que cerrar el `settle` en esos 60 s, menos los 6 s de gracia del
+facilitador, o la autorización expiraba sola y el vendedor revocaba un acceso
+que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
+
+### Changed
+
+- **Default de 300 s en todas las redes EVM** (antes 300 en Base, 60 en el
+  resto). 300 no es a ojo, y tampoco es algo que el facilitador publique como
+  suyo: su `/supported` no trae ningún timeout. Es el timeout que anuncia por
+  default el lado **vendedor de este mismo SDK**
+  (`DEFAULT_PAYMENT_TIMEOUT_SECONDS`, `src/backend/index.ts:1520`), así que
+  comprador y vendedor de `uvd-x402-sdk` coinciden sin configurar nada. Es lo
+  que anuncia MeshRelay Turnstile, el vendedor async que destapó el problema
+  (`turnstile/payments.js:121` y `:357`, meshrelay `d4015a2`). Y es el fallback
+  que el catálogo del facilitador le pone a una entrada que omite el campo
+  (`DEFAULT_MAX_TIMEOUT_SECS`, x402-rs `src/discovery_price.rs:143`, `d8a3360`).
+  El facilitador solo rechaza ventanas **cortas**: `assert_time` (x402-rs
+  `src/chain/evm.rs:1782-1810`) exige `valid_before >= now + 6 s`, en verify y
+  en settle, y no pone techo. Por eso ampliar la ventana no hace que un pago que
+  antes pasaba ahora falle. Base no cambia.
+- **`X402Client.fetch()` firma la ventana que declara el vendedor.** Si el 402
+  trae `maxTimeoutSeconds`, la ventana es ese valor acotado a `[1, 3600]`; si no
+  lo trae, la del cliente (default 300). Antes el comprador ignoraba el campo, y
+  un vendedor que anunciara más de 300 recibía una firma que vencía antes de su
+  propio `settle`.
+- **Una config inválida se rechaza al construir el cliente**, no en el primer
+  pago: `new X402Client({ validitySeconds: -300 })` lanza `INVALID_CONFIG`.
+
+### Added
+
+- **`validitySeconds`** en `PaymentInfo` (por pago) y en `X402ClientConfig`
+  (default del cliente). Precedencia: el pago, después el cliente, después 300.
+  Un valor que no es un entero positivo se rechaza con `INVALID_CONFIG` **antes**
+  de firmar, en vez de caer en silencio al default.
+- **Techo de 3600 s (`MAX_VALIDITY_SECONDS`)**, que es el default del SDK Python
+  y lo más largo que firma hoy cualquier SDK de la casa. Existe porque
+  `PaymentInfo` tiene la forma de un 402 parseado: quien le pase la respuesta del
+  vendedor tal cual a `createPayment()` estaría dejando que **el vendedor** elija
+  cuánto vive la autorización del pagador. Una ventana de un año es un derecho de
+  cobro en pie: el comprador la da por vencida y se liquida meses después.
+  El facilitador no pone techo —solo rechaza ventanas cortas—, y por eso lo pone
+  el SDK del pagador.
+- **`X402PaymentOffer.maxTimeoutSeconds`**: `parse402` mapea el campo del 402 al
+  tipo (antes solo quedaba dentro de `raw`). Un valor que no es un número finito
+  cuenta como no declarado: la oferta sigue siendo legible y aplica la ventana
+  del cliente.
+- **Sección «Validity window» en el README**, con los tres lugares de donde sale
+  la ventana y la precedencia.
+- **`DEFAULT_VALIDITY_SECONDS`**, **`MAX_VALIDITY_SECONDS`**,
+  **`resolveValiditySeconds()`** y **`clampValiditySeconds()`** exportados
+  (`src/utils/validity.ts`): una sola definición que leen los dos caminos de
+  firma, `X402Client.createPayment()` y `EVMProvider.signPayment()`. Un test
+  verifica que los dos firman la misma ventana, red por red.
+
+### Notes
+
+- El SDK Python sigue con `valid_duration = 3600`. Los dos SDK ya son
+  configurables; el default de TypeScript es el que anuncia el lado vendedor de
+  este mismo SDK. El lado **vendedor** de Python anuncia 60 por default, y
+  execution-market lo sobreescribe a mano: es una fila aparte para
+  `uvd-x402-sdk-python`.
+
 ## [2.90.0] - 2026-09-11
 
 **El primer clic en "Pagar" ya abre la billetera.** `usePayment().pay()` era un
