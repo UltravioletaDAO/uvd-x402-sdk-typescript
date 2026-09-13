@@ -181,6 +181,11 @@ pagador. (2) `validityWindowSeconds` en `PaymentInfo` o en `X402Config`, con el 
 default. (3) Un mapa `invalidReason → texto para la persona` exportado, para que cada consumidor
 no invente el suyo.
 
+**Estado en 2.91.0.** El punto (2) quedó resuelto, con una diferencia: el campo se llama
+`validitySeconds` (el nombre que ya usaba el adaptador de wagmi), vive en `PaymentInfo` y en
+`X402ClientConfig`, y el default es **300 s en todas las redes**, no 60/300, porque 300 es el
+`max_timeout_seconds` que publica el facilitador. (1) y (3) siguen abiertos.
+
 ---
 
 ## 12. Solana entra por import dinámico y rompe el bundle de Lambda

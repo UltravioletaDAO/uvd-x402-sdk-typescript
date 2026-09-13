@@ -46,6 +46,7 @@ import {
   caip2ToChain,
   encodeBase64Json,
   buildTokenMetadata,
+  resolveValiditySeconds,
 } from '../utils';
 
 /**
@@ -1069,9 +1070,13 @@ export class X402Client {
     }
     const nonce = ethers.hexlify(nonceBytes);
 
-    // Set validity window (5 minutes for congested networks, 1 minute otherwise)
+    // How long this authorization stays settleable. Per payment first, then the
+    // client's default, then 300 s -- see `resolveValiditySeconds`.
     const validAfter = 0;
-    const validityWindowSeconds = chain.name === 'base' ? 300 : 60;
+    const validityWindowSeconds = resolveValiditySeconds(
+      paymentInfo.validitySeconds,
+      this.config.validitySeconds
+    );
     const validBefore = Math.floor(Date.now() / 1000) + validityWindowSeconds;
 
     // EIP-712 domain of the token being charged

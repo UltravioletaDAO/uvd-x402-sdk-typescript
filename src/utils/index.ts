@@ -41,3 +41,9 @@ export {
   recoverPersonalSignAddress,
   verifyPersonalSign,
 } from './personal-sign';
+
+export {
+  DEFAULT_VALIDITY_SECONDS,
+  MAX_VALIDITY_SECONDS,
+  resolveValiditySeconds,
+} from './validity';

@@ -246,6 +246,10 @@ export {
   encodeBase64Json,
   // Multi-token payloads
   buildTokenMetadata,
+  // EIP-3009 validity window (`validBefore = now + validitySeconds`)
+  DEFAULT_VALIDITY_SECONDS,
+  MAX_VALIDITY_SECONDS,
+  resolveValiditySeconds,
 } from './utils';
 
 // Types

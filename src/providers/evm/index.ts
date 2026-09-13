@@ -38,6 +38,7 @@ import {
   chainToCAIP2,
   encodeBase64Json,
   buildTokenMetadata,
+  resolveValiditySeconds,
 } from '../../utils';
 import type { X402Version } from '../../types';
 
@@ -300,9 +301,10 @@ export class EVMProvider implements WalletAdapter {
     }
     const nonce = ethers.hexlify(nonceBytes);
 
-    // Set validity window
+    // How long this authorization stays settleable. This path has no client
+    // config, so it is the payment's own window or the 300 s default.
     const validAfter = 0;
-    const validityWindowSeconds = chainConfig.name === 'base' ? 300 : 60;
+    const validityWindowSeconds = resolveValiditySeconds(paymentInfo.validitySeconds);
     const validBefore = Math.floor(Date.now() / 1000) + validityWindowSeconds;
 
     // EIP-712 domain using the selected token's configuration

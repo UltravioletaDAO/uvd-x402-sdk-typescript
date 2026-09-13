@@ -285,6 +285,25 @@ export interface PaymentInfo {
    * decides, exactly as before.
    */
   x402Version?: X402Version;
+  /**
+   * Seconds this EIP-3009 authorization stays settleable
+   * (`validBefore = now + validitySeconds`).
+   *
+   * Set it when the seller settles **async** -- verify, hand over the resource,
+   * settle afterwards -- and needs the authorization alive for longer than the
+   * default. Left undefined, `X402ClientConfig.validitySeconds` decides, and
+   * failing that {@link DEFAULT_VALIDITY_SECONDS} (300 s, the
+   * `max_timeout_seconds` the facilitator publishes).
+   *
+   * Must be a whole number of seconds between 1 and `MAX_VALIDITY_SECONDS`
+   * (3600); anything else is refused with `INVALID_CONFIG` before anything is
+   * signed. The ceiling is here because this type is shaped like a parsed 402:
+   * a caller that hands a seller's response straight to `createPayment` would
+   * otherwise let the SELLER decide how long the payer's authorization stays
+   * claimable. The facilitator also keeps a 6 s clock-skew grace, so the payer
+   * really has `validitySeconds - 6` to sign.
+   */
+  validitySeconds?: number;
 }
 
 /**
@@ -874,6 +893,18 @@ export interface X402ClientConfig {
    * stays byte-identical to previous versions.
    */
   includeTokenMetadata?: boolean;
+  /**
+   * Seconds every EIP-3009 authorization this client signs stays settleable
+   * (`validBefore = now + validitySeconds`).
+   *
+   * The per-payment {@link PaymentInfo.validitySeconds} overrides it; with
+   * neither, `DEFAULT_VALIDITY_SECONDS` (300 s) applies, and `MAX_VALIDITY_SECONDS`
+   * (3600 s) is the ceiling for both. Until 2.91.0 this
+   * was not configurable at all: the window was 300 s on Base and 60 s on every
+   * other EVM network, decided by the payer's SDK, which is exactly the party
+   * that does not know how long the seller's settlement takes.
+   */
+  validitySeconds?: number;
 }
 
 /**

@@ -4,6 +4,49 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.91.0] - 2026-09-13
+
+**La autorización EIP-3009 vive 300 s en todas las redes, y ahora se puede
+cambiar.** Hasta 2.90.0 la ventana (`validBefore = now + N`) era 300 s en Base y
+**60 s en las otras once redes EVM**, escrita dos veces y sin forma de
+sobreescribirla. Un vendedor que liquida async (verificar → entregar → liquidar)
+tenía que cerrar el `settle` en esos 60 s, menos los 6 s de gracia del
+facilitador, o la autorización expiraba sola y el vendedor revocaba un acceso
+que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
+
+### Changed
+
+- **Default de 300 s en todas las redes EVM** (antes 300 en Base, 60 en el
+  resto). 300 no es a ojo: es el `max_timeout_seconds` que el propio facilitador
+  publica en su discovery. El facilitador solo rechaza ventanas **cortas**
+  (`valid_before < now + 6 s`) y no pone techo, así que ampliar la ventana no
+  hace que un pago que antes pasaba ahora falle. Base no cambia.
+
+### Added
+
+- **`validitySeconds`** en `PaymentInfo` (por pago) y en `X402ClientConfig`
+  (default del cliente). Precedencia: el pago, después el cliente, después 300.
+  Un valor que no es un entero positivo se rechaza con `INVALID_CONFIG` **antes**
+  de firmar, en vez de caer en silencio al default.
+- **Techo de 3600 s (`MAX_VALIDITY_SECONDS`)**, que es el default del SDK Python
+  y lo más largo que firma hoy cualquier SDK de la casa. Existe porque
+  `PaymentInfo` tiene la forma de un 402 parseado: quien le pase la respuesta del
+  vendedor tal cual a `createPayment()` estaría dejando que **el vendedor** elija
+  cuánto vive la autorización del pagador. Una ventana de un año es un derecho de
+  cobro en pie: el comprador la da por vencida y se liquida meses después.
+  El facilitador no pone techo —solo rechaza ventanas cortas—, y por eso lo pone
+  el SDK del pagador.
+- **`DEFAULT_VALIDITY_SECONDS`**, **`MAX_VALIDITY_SECONDS`** y
+  **`resolveValiditySeconds()`** exportados
+  (`src/utils/validity.ts`): una sola definición que leen los dos caminos de
+  firma, `X402Client.createPayment()` y `EVMProvider.signPayment()`. Un test
+  verifica que los dos firman la misma ventana, red por red.
+
+### Notes
+
+- El SDK Python sigue con `valid_duration = 3600`. Los dos SDK ya son
+  configurables; el default de TypeScript es el que publica el facilitador.
+
 ## [2.90.0] - 2026-09-11
 
 **El primer clic en "Pagar" ya abre la billetera.** `usePayment().pay()` era un
