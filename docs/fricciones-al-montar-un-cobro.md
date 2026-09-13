@@ -183,8 +183,9 @@ no invente el suyo.
 
 **Estado en 2.91.0.** El punto (2) quedó resuelto, con una diferencia: el campo se llama
 `validitySeconds` (el nombre que ya usaba el adaptador de wagmi), vive en `PaymentInfo` y en
-`X402ClientConfig`, y el default es **300 s en todas las redes**, no 60/300, porque 300 es el
-`max_timeout_seconds` que publica el facilitador. (1) y (3) siguen abiertos.
+`X402ClientConfig`, y el default es **300 s en todas las redes**, no 60/300: es el timeout que
+anuncia por default el lado vendedor de este mismo SDK. Además `client.fetch()` firma el
+`maxTimeoutSeconds` que declare el 402 (acotado a 1–3600 s). (1) y (3) siguen abiertos.
 
 ---
 

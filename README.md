@@ -670,6 +670,38 @@ getSupportedTokens('base');     // ['usdc', 'eurc']
 isTokenSupported('base', 'eurc'); // true
 ```
 
+## Validity window (`validitySeconds`)
+
+An EIP-3009 authorization can only be settled until `validBefore = now + validitySeconds`. A seller that settles **after** handing over the resource needs the authorization alive long enough for that settlement to land.
+
+| Where | Scope | Default |
+|---|---|---|
+| `X402ClientConfig.validitySeconds` | every payment this client signs | `300` |
+| `PaymentInfo.validitySeconds` | one payment; wins over the client | — |
+| `maxTimeoutSeconds` in the seller's 402 | `client.fetch()` signs the seller's declared window | — |
+
+```typescript
+import { X402Client, DEFAULT_VALIDITY_SECONDS, MAX_VALIDITY_SECONDS } from 'uvd-x402-sdk';
+
+// Every payment from this client stays settleable for 10 minutes...
+const client = new X402Client({ defaultChain: 'avalanche', validitySeconds: 600 });
+
+// ...except this one, which the seller settles in batches
+const result = await client.createPayment({
+  recipient: '0x...',
+  amount: '1.00',
+  validitySeconds: 1800,
+});
+
+DEFAULT_VALIDITY_SECONDS; // 300
+MAX_VALIDITY_SECONDS;     // 3600
+```
+
+- A value that is not a whole number between 1 and `MAX_VALIDITY_SECONDS` throws `INVALID_CONFIG`: from the constructor for the client config, and before anything is signed for a single payment.
+- `client.fetch()` signs the `maxTimeoutSeconds` the seller's 402 declares, clamped to 1–3600 s. When the 402 declares none, the client's window applies.
+- The facilitator keeps a 6 s clock-skew grace, so the payer really has `validitySeconds - 6` seconds. It never rejects a window for being long.
+- Before 2.91.0 the window was 300 s on Base and 60 s on every other EVM network, and there was no way to change it.
+
 ## AUSD on Solana (Token2022)
 
 ```typescript

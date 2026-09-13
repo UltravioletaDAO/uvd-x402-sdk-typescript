@@ -21,11 +21,15 @@ import type { PaymentInfo } from './types';
  * SDK was the one deciding the number.
  *
  * These tests pin the three things that fix it:
- *   - the default is 300 s on EVERY network, which is the `max_timeout_seconds`
- *     the facilitator publishes in its own discovery document;
- *   - it is overridable per client and per payment, the payment winning;
+ *   - the default is 300 s on EVERY network, the same timeout this SDK's own
+ *     seller side announces by default;
+ *   - it is overridable per client and per payment, the payment winning, and a
+ *     client configured with an unsignable window refuses to be built;
  *   - both signing paths read the SAME parameter, so the two surfaces cannot
- *     drift apart again.
+ *     drift apart again;
+ *   - `fetch()` signs the `maxTimeoutSeconds` the seller's 402 declares, clamped
+ *     to the payer's ceiling, because signing less than the seller asked for is
+ *     an authorization that dies before its settle.
  *
  * La llave se genera en memoria en cada corrida: lo unico que se mide aca son
  * timestamps, ninguna asercion depende de una direccion concreta, y asi el repo
@@ -140,12 +144,19 @@ describe('X402Client — EIP-3009 validity window', () => {
     }
   });
 
-  it('refuses a client configured with a window that is not a positive whole number', async () => {
-    const client = await connectedClient('avalanche', { validitySeconds: -300 });
+  it('refuses to BUILD a client configured with an unsignable window, not on its first payment', () => {
+    for (const bad of [-300, 0, 1.5, Number.NaN, MAX_VALIDITY_SECONDS + 1]) {
+      let thrown: unknown;
+      try {
+        new X402Client({ validitySeconds: bad });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toMatchObject({ code: 'INVALID_CONFIG' });
+    }
 
-    await expect(client.createPayment(payment())).rejects.toMatchObject({
-      code: 'INVALID_CONFIG',
-    });
+    expect(() => new X402Client({ validitySeconds: MAX_VALIDITY_SECONDS })).not.toThrow();
+    expect(() => new X402Client({})).not.toThrow();
   });
 
   it('signs the longest window it allows', async () => {
@@ -240,5 +251,88 @@ describe('the two signing paths read the same parameter', () => {
         expectWindow(signedValidBefore(viaClient.paymentHeader), seconds);
       }
     }
+  });
+});
+
+describe('X402Client.fetch — the window the seller declares in its 402', () => {
+  /**
+   * The facilitator never rejects a window for being long (`assert_time` only
+   * refuses `valid_before < now + 6 s`), so the failure that bites is signing
+   * LESS than the seller declared: an authorization that dies before its settle.
+   * The seller's `maxTimeoutSeconds` therefore wins over the client's window,
+   * clamped to the payer's ceiling.
+   *
+   * `validAfter` is always 0 in this SDK, so "the window" is measured as
+   * `validBefore - now`.
+   */
+  function jsonResponse(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  /** Pay a 402 on avalanche that carries `declared`, return the signed `validBefore`. */
+  async function paidValidBefore(
+    declared: Record<string, unknown>,
+    config: ConstructorParameters<typeof X402Client>[0] = {}
+  ): Promise<string> {
+    const client = await connectedClient('avalanche', config);
+    const responses = [
+      jsonResponse(402, {
+        x402Version: 1,
+        accepts: [
+          {
+            scheme: 'exact',
+            network: 'avalanche',
+            maxAmountRequired: '10000', // 0.01 USDC
+            payTo: PAY_TO,
+            ...declared,
+          },
+        ],
+      }),
+      jsonResponse(200, { ok: true }),
+    ];
+    const inits: Array<RequestInit | undefined> = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      inits.push(init);
+      const next = responses.shift();
+      if (!next) throw new Error('unexpected extra call');
+      return next;
+    }) as unknown as typeof globalThis.fetch;
+
+    await client.fetch('https://api.example.com/data', { maxAmount: '1.00', fetchImpl });
+
+    expect(inits).toHaveLength(2);
+    const headers = inits[1]?.headers as Record<string, string>;
+    return signedValidBefore(headers['X-PAYMENT']);
+  }
+
+  it('signs the 120 s the seller declared, not the 300 s default', async () => {
+    expectWindow(await paidValidBefore({ maxTimeoutSeconds: 120 }), 120);
+  });
+
+  it('signs the 900 s the seller declared: signing 300 would expire before its settle', async () => {
+    expectWindow(await paidValidBefore({ maxTimeoutSeconds: 900 }), 900);
+  });
+
+  it('signs the 300 s default when the 402 declares no window', async () => {
+    expectWindow(await paidValidBefore({}), DEFAULT_VALIDITY_SECONDS);
+  });
+
+  it("uses the client's configured window only when the 402 declares none", async () => {
+    expectWindow(await paidValidBefore({}, { validitySeconds: 900 }), 900);
+    expectWindow(
+      await paidValidBefore({ maxTimeoutSeconds: 120 }, { validitySeconds: 900 }),
+      120
+    );
+  });
+
+  it("clamps a declaration above the payer's ceiling instead of refusing to pay", async () => {
+    expectWindow(await paidValidBefore({ maxTimeoutSeconds: 7200 }), MAX_VALIDITY_SECONDS);
+  });
+
+  it('treats a declaration that is not a number as not declared', async () => {
+    expectWindow(await paidValidBefore({ maxTimeoutSeconds: 'soon' }), DEFAULT_VALIDITY_SECONDS);
   });
 });

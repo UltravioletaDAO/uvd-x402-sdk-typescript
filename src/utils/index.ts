@@ -46,4 +46,5 @@ export {
   DEFAULT_VALIDITY_SECONDS,
   MAX_VALIDITY_SECONDS,
   resolveValiditySeconds,
+  clampValiditySeconds,
 } from './validity';

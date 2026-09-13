@@ -292,8 +292,9 @@ export interface PaymentInfo {
    * Set it when the seller settles **async** -- verify, hand over the resource,
    * settle afterwards -- and needs the authorization alive for longer than the
    * default. Left undefined, `X402ClientConfig.validitySeconds` decides, and
-   * failing that {@link DEFAULT_VALIDITY_SECONDS} (300 s, the
-   * `max_timeout_seconds` the facilitator publishes).
+   * failing that `DEFAULT_VALIDITY_SECONDS` (300 s, the timeout this SDK's own
+   * seller side announces by default). `X402Client.fetch()` fills it from the
+   * seller's `maxTimeoutSeconds` when the 402 declares one.
    *
    * Must be a whole number of seconds between 1 and `MAX_VALIDITY_SECONDS`
    * (3600); anything else is refused with `INVALID_CONFIG` before anything is
@@ -327,6 +328,15 @@ export interface X402PaymentOffer {
   decimals: number;
   /** Recipient of the payment. */
   payTo: string;
+  /**
+   * The seller's `maxTimeoutSeconds`, when its 402 entry declared a finite number.
+   *
+   * `X402Client.fetch()` signs this window -- clamped to `1..MAX_VALIDITY_SECONDS`
+   * -- instead of the client's own, because the seller is the one party that
+   * knows how long its settlement takes. Undefined when the entry declared none,
+   * or declared something that is not a number.
+   */
+  maxTimeoutSeconds?: number;
   /** The accept object verbatim -- echoed back for v2. */
   raw: Record<string, unknown>;
 }

@@ -17,10 +17,26 @@ que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
 ### Changed
 
 - **Default de 300 s en todas las redes EVM** (antes 300 en Base, 60 en el
-  resto). 300 no es a ojo: es el `max_timeout_seconds` que el propio facilitador
-  publica en su discovery. El facilitador solo rechaza ventanas **cortas**
-  (`valid_before < now + 6 s`) y no pone techo, así que ampliar la ventana no
-  hace que un pago que antes pasaba ahora falle. Base no cambia.
+  resto). 300 no es a ojo, y tampoco es algo que el facilitador publique como
+  suyo: su `/supported` no trae ningún timeout. Es el timeout que anuncia por
+  default el lado **vendedor de este mismo SDK**
+  (`DEFAULT_PAYMENT_TIMEOUT_SECONDS`, `src/backend/index.ts:1520`), así que
+  comprador y vendedor de `uvd-x402-sdk` coinciden sin configurar nada. Es lo
+  que anuncia MeshRelay Turnstile, el vendedor async que destapó el problema
+  (`turnstile/payments.js:121` y `:357`, meshrelay `d4015a2`). Y es el fallback
+  que el catálogo del facilitador le pone a una entrada que omite el campo
+  (`DEFAULT_MAX_TIMEOUT_SECS`, x402-rs `src/discovery_price.rs:143`, `d8a3360`).
+  El facilitador solo rechaza ventanas **cortas**: `assert_time` (x402-rs
+  `src/chain/evm.rs:1782-1810`) exige `valid_before >= now + 6 s`, en verify y
+  en settle, y no pone techo. Por eso ampliar la ventana no hace que un pago que
+  antes pasaba ahora falle. Base no cambia.
+- **`X402Client.fetch()` firma la ventana que declara el vendedor.** Si el 402
+  trae `maxTimeoutSeconds`, la ventana es ese valor acotado a `[1, 3600]`; si no
+  lo trae, la del cliente (default 300). Antes el comprador ignoraba el campo, y
+  un vendedor que anunciara más de 300 recibía una firma que vencía antes de su
+  propio `settle`.
+- **Una config inválida se rechaza al construir el cliente**, no en el primer
+  pago: `new X402Client({ validitySeconds: -300 })` lanza `INVALID_CONFIG`.
 
 ### Added
 
@@ -36,8 +52,14 @@ que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
   cobro en pie: el comprador la da por vencida y se liquida meses después.
   El facilitador no pone techo —solo rechaza ventanas cortas—, y por eso lo pone
   el SDK del pagador.
-- **`DEFAULT_VALIDITY_SECONDS`**, **`MAX_VALIDITY_SECONDS`** y
-  **`resolveValiditySeconds()`** exportados
+- **`X402PaymentOffer.maxTimeoutSeconds`**: `parse402` mapea el campo del 402 al
+  tipo (antes solo quedaba dentro de `raw`). Un valor que no es un número finito
+  cuenta como no declarado: la oferta sigue siendo legible y aplica la ventana
+  del cliente.
+- **Sección «Validity window» en el README**, con los tres lugares de donde sale
+  la ventana y la precedencia.
+- **`DEFAULT_VALIDITY_SECONDS`**, **`MAX_VALIDITY_SECONDS`**,
+  **`resolveValiditySeconds()`** y **`clampValiditySeconds()`** exportados
   (`src/utils/validity.ts`): una sola definición que leen los dos caminos de
   firma, `X402Client.createPayment()` y `EVMProvider.signPayment()`. Un test
   verifica que los dos firman la misma ventana, red por red.
@@ -45,7 +67,10 @@ que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
 ### Notes
 
 - El SDK Python sigue con `valid_duration = 3600`. Los dos SDK ya son
-  configurables; el default de TypeScript es el que publica el facilitador.
+  configurables; el default de TypeScript es el que anuncia el lado vendedor de
+  este mismo SDK. El lado **vendedor** de Python anuncia 60 por default, y
+  execution-market lo sobreescribe a mano: es una fila aparte para
+  `uvd-x402-sdk-python`.
 
 ## [2.90.0] - 2026-09-11
 

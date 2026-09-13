@@ -16,16 +16,30 @@
  * on the other eleven EVM networks the buyer had 60 s, minus the facilitator's
  * 6 s clock-skew grace, to open a wallet and sign.
  *
- * Why 300 and not 60 or 3600: 300 is what the facilitator publishes as
- * `max_timeout_seconds` in its own discovery document (`x402-rs`,
- * `src/discovery.rs`), so it is the vendor's number, not a guess. The
- * facilitator only ever rejects a window for being too SHORT — `assert_time`
- * refuses `valid_before < now + 6 s` (`x402-rs`, `src/chain/evm.rs`) — and puts
- * no ceiling on it, which is why a caller may raise this as far as it likes.
+ * Why 300 and not 60 or 3600 — where the number actually comes from:
+ *   - it is the timeout the seller side of THIS SDK announces by default
+ *     (`DEFAULT_PAYMENT_TIMEOUT_SECONDS` in `src/backend/index.ts`), so a buyer
+ *     and a seller both built on `uvd-x402-sdk` agree without configuring
+ *     anything;
+ *   - it is what MeshRelay Turnstile, the async seller that surfaced this,
+ *     announces (`timeoutSeconds: 300` in its `turnstile/payments.js`);
+ *   - it is the fallback the facilitator's catalog applies to a seller entry
+ *     that omits the field (`DEFAULT_MAX_TIMEOUT_SECS` in `x402-rs`
+ *     `src/discovery_price.rs`). That is a catalog default, not a timeout the
+ *     facilitator enforces or advertises for itself: its `/supported` carries
+ *     no timeout at all.
+ *
+ * The facilitator only ever rejects a window for being too SHORT — `assert_time`
+ * (`x402-rs`, `src/chain/evm.rs`), which runs in both verify and settle, refuses
+ * `valid_before < now + 6 s` — and compares `valid_before` against no ceiling.
+ * That is why the ceiling below lives in the payer's SDK, and why signing LESS
+ * than a seller declared is the failure that bites.
+ *
+ * When the seller's 402 declares `maxTimeoutSeconds`, `X402Client.fetch()` signs
+ * that window instead of the client's own; see {@link clampValiditySeconds}.
  *
  * The Python SDK's equivalent (`valid_duration`, 3600 s) stays where it is: the
- * two SDKs still differ, but now both are configurable and the TypeScript
- * default is the one the facilitator advertises.
+ * two SDKs still differ, but both are configurable now.
  */
 
 import { X402Error } from '../types';
@@ -41,19 +55,18 @@ export const DEFAULT_VALIDITY_SECONDS = 300;
 /**
  * Longest window this SDK will sign, one hour.
  *
- * A ceiling exists because {@link PaymentInfo} is shaped like "what the backend
- * returned on its 402", and a caller that hands a parsed 402 body straight to
- * `createPayment` would let the SELLER pick how long the buyer's authorization
- * stays alive. A year-long window is a standing claim on the payer's balance:
- * the resource is never delivered, the authorization looks expired to a buyer
- * who assumed minutes, and it settles months later against a funded wallet.
+ * A ceiling exists because the seller gets a say in the window: `fetch()`
+ * honours the `maxTimeoutSeconds` a 402 declares, and {@link PaymentInfo} is
+ * shaped like "what the backend returned on its 402", so a caller that hands a
+ * parsed 402 body straight to `createPayment` lets the seller pick too. Without
+ * a limit, a year-long window is a standing claim on the payer's balance: the
+ * resource is never delivered, the authorization looks expired to a buyer who
+ * assumed minutes, and it settles months later against a funded wallet.
  * Cancelling one costs gas and knowing the nonce.
  *
  * 3600 and not something rounder: it is the largest window anything in this
  * stack signs today — the Python SDK's `valid_duration` default — so nothing
- * that works now is refused by this limit. The facilitator itself puts no
- * ceiling on `validBefore` (it only rejects windows that are too short), which
- * is precisely why the payer's SDK has to.
+ * that works now is refused by this limit.
  */
 export const MAX_VALIDITY_SECONDS = 3600;
 
@@ -102,4 +115,21 @@ export function resolveValiditySeconds(
   }
 
   return chosen;
+}
+
+/**
+ * The window to sign when a seller's 402 declared `maxTimeoutSeconds`.
+ *
+ * The seller's number wins over the client's configured window: it is the one
+ * party that knows how long its settlement takes, and since the facilitator
+ * never rejects a window for being long, signing less than it declared only
+ * produces an authorization that dies before the seller's own settle.
+ *
+ * Clamped to `[1, MAX_VALIDITY_SECONDS]` rather than refused, because a 402 is
+ * the seller's declaration and not the buyer's config: a seller asking for a
+ * day still gets paid, inside the payer's ceiling. A fractional declaration is
+ * floored.
+ */
+export function clampValiditySeconds(maxTimeoutSeconds: number): number {
+  return Math.min(MAX_VALIDITY_SECONDS, Math.max(1, Math.floor(maxTimeoutSeconds)));
 }
