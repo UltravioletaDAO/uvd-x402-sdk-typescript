@@ -1,6 +1,6 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 25 blockchain networks using the x402 protocol.
+Gasless crypto payments across 26 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
@@ -723,7 +723,7 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 
 ## Supported Networks
 
-### EVM (15)
+### EVM (16)
 
 | Network | Chain ID | Tokens |
 |---------|----------|--------|
@@ -742,6 +742,20 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | SKALE Base Sepolia | 324705682 | USDC.e |
 | Robinhood Chain | 4663 | USDG |
 | Robinhood Chain Testnet | 46630 | USDG |
+| Arc Testnet | 5042002 | USDC |
+
+> **Arc Testnet / two precisions, one balance:** on Circle's Arc the native gas
+> asset *is* USDC, and the same balance is readable at **18 decimals** natively
+> (`eth_getBalance`, EIP-1559 fees) and at **6 decimals** through the ERC-20
+> interface (`balanceOf`, `transferWithAuthorization`), the ERC-20 view being
+> `floor(native / 10^12)`. An x402 payment is an EIP-3009 authorization against
+> the ERC-20 interface, so its `value` is **always** in 6 decimals — that is
+> what `tokens.usdc.decimals` carries, and what the SDK scales prices with.
+> Signing a price at 18 charges 10^12 times too much: `$0.01` would leave as
+> `10000000000000000` units. Arc is **testnet only**: Circle's contract list
+> still marks these addresses testnet and publishes no mainnet deployment. EURC
+> exists on the same chain and is deliberately not registered until it has its
+> own end-to-end proof.
 
 > **Robinhood Chain / USDG:** Robinhood Chain has no USDC — the settlement stablecoin is Paxos **USDG** (Global Dollar, 6 decimals, EIP-3009). Its on-chain `version()` getter reverts, so the EIP-712 domain `{ name: "Global Dollar", version: "1" }` can never be resolved on-chain. The SDK carries this domain in the chain config; when constructing `PaymentRequirements` yourself, send it in `extra`: `{ "name": "Global Dollar", "version": "1" }`. Use `tokenType: 'usdg'` (or the default, which resolves to USDG on these networks).
 
