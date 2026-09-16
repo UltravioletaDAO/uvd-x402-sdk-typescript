@@ -81,6 +81,31 @@ Node v25.4.0, npm 11.7.0.
 
 El gate `test:xlang` necesita el checkout del SDK de Python al lado; se corrió
 contra la rama `0xultravioleta/sdk-py-arc`, que es la que trae Arc del otro lado.
+En un worktree de Orca no está al lado, así que va por env:
+`UVD_X402_PY_ROOT=/…/uvd-x402-sdk-python/sdk-py-arc npm run test:xlang`. Sin esa
+variable el gate **falla** (no se saltea) — es a propósito: un runtime ausente
+significa que las dos implementaciones quedaron sin contrastar.
+
+### Ronda 2 — lockfile
+
+`package-lock.json` había quedado en `2.91.0` con `package.json` ya en `2.92.0`.
+Esa misma deriva la había cerrado 2.91.0 (919d580) y esta rama la reabría. Se
+sincronizó como lo hace el repo, con npm regenerando el lock
+(`npm install --package-lock-only`), no a mano: el diff son **exactamente** los
+dos campos `version` (raíz y `packages.""`), sin movimiento de dependencias,
+porque 2.92.0 no agrega ninguna. Es la misma forma que el hunk de versión de
+919d580.
+
+Los seis gates de arriba se volvieron a correr enteros sobre `node_modules`
+reinstalado desde el lock ya sincronizado, y todos siguen en verde. Además:
+
+| Job | Comando | Resultado |
+|---|---|---|
+| install limpio | `rm -rf node_modules && npm ci` | ✅ PASS desde cero, y **deja el lock intacto** (`git diff` del lock vacío después de correr) |
+| empaquetado | `npm pack --dry-run` | ✅ PASS — `uvd-x402-sdk-2.92.0.tgz`, 153 archivos, 2.5 MB |
+
+Sin deriva entre `package.json` y el lock: los dos dicen `2.92.0`, y el tarball
+que sale de `npm pack` también.
 
 Demostración del criterio 2 (el test se pone rojo con 18), corrida y revertida:
 
@@ -127,7 +152,9 @@ tiene este lado, que la toma del plan; no cambia ningún valor.
    es testnet. Es preexistente y ya afecta a `skale-base-sepolia` y
    `robinhood-testnet`; Arc entra al mismo comportamiento. **No se tocó** — la
    tabla de fee payers estaba explícitamente fuera de alcance — y el test fija la
-   conducta actual para que un arreglo futuro sea deliberado.
+   conducta actual para que un arreglo futuro sea deliberado. Ficha completa, con
+   archivo, línea y alcance, en *Defectos preexistentes que esta rama hereda, no
+   causa*.
 3. **`buildPaymentRequirements()` no emite `extra`.** El dominio EIP-712 de Arc
    es `USDC`/`2` y no el `USD Coin` habitual, así que quien arme los requisitos a
    mano tiene que mandarlo en `extra`. Es el mismo trato que ya tiene Robinhood,
@@ -138,13 +165,33 @@ tiene este lado, que la toma del plan; no cambia ningún valor.
    facilitador, no de este registro, así que puede ser correcto en su propio
    marco. No se tocó. Arc es testnet y no mueve ese número.
 
+## Defectos preexistentes que esta rama hereda, no causa
+
+No se tocan acá: arreglarlos cambia conducta de redes que esta rama no agrega, y
+el arreglo tiene que ser deliberado y con su propia prueba. Quedan como filas
+para que se puedan seguir.
+
+| Defecto | Dónde | Alcance hoy | Estado en esta rama |
+|---|---|---|---|
+| `getFacilitatorAddress()` devuelve el fee payer de **MAINNET** para toda testnet EVM: el fallback por familia va a `FACILITATOR_ADDRESSES.evm` y nunca consulta la entrada `evm-testnet`, que existe y queda muerta | `src/facilitator.ts:163` (fallback), `:44` (`evm-testnet` sin uso) | `skale-base-sepolia`, `robinhood-testnet` y ahora `arc-testnet` — las tres testnets EVM del registro | Preexistente: `src/facilitator.ts` no se modificó acá (último cambio, 5d0fed7, muy anterior a esta rama). `src/arc-testnet.test.ts:286-296` **fija la conducta actual**, no la correcta: afirma que Arc recibe `FACILITATOR_ADDRESSES.evm`. Ese test es el que se va a poner en rojo cuando alguien arregle el fallback, y ese rojo es la señal esperada, no una regresión |
+
 ## Lo que queda
 
 **Para cerrar testnet:**
 
-- El facilitador tiene que anunciar Arc en `/supported`. El SDK ya la ofrece
-  habilitada; hasta que el facilitador la publique, un pago a Arc va a fallar del
-  lado del facilitador, no del SDK. Va atado a la rama del facilitador.
+- **Orden de merge: el facilitador primero. Lo decide c0der, no esta rama.**
+  Arc entra con `enabled: true`, así que cae sola en la lista por default del
+  cliente (`getEnabledChains()`, `getEVMChainIds()`, `NetworkPicker`) **desde el
+  momento en que este SDK se publique**. Si este SDK sale antes que la rama del
+  facilitador, la ventana entre ambos merges es real: el cliente ofrece Arc, el
+  usuario la elige, firma una autorización EIP-3009 válida, y el pago falla del
+  lado del **facilitador** — que todavía no anuncia Arc en `/supported` — con
+  toda la pinta de ser un bug del SDK. No es un defecto de este código: es una
+  consecuencia de publicar en el orden inverso. Mergear la rama del facilitador
+  primero cierra la ventana; publicar este SDK primero la abre. La alternativa,
+  si el orden tuviera que invertirse, es entrar con `enabled: false` y hacer un
+  segundo cambio de una línea cuando el facilitador esté — pero eso es decisión
+  de c0der y esta rama **no** la toma.
 - Un E2E real: cliente → vendedor → facilitador → recibo en Arc, con cuentas
   financiadas por el faucet. Nada de lo entregado acá firmó un pago válido ni
   movió fondos; los tests firman con una llave generada en memoria por corrida.
