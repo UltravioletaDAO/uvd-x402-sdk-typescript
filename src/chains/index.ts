@@ -1,8 +1,9 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 25 supported blockchain networks.
- * EVM chains (15): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet)
+ * Complete configuration for all 26 supported blockchain networks.
+ * EVM chains (16): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet, Arc testnet)
+ * BSC is registered but disabled (Binance-Peg USDC has no ERC-3009), so it is not in those counts.
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
  * NEAR (1): Uses NEP-366 meta-transactions
@@ -28,7 +29,7 @@ export const DEFAULT_FACILITATOR_URL = 'https://facilitator.ultravioletadao.xyz'
  */
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // ============================================================================
-  // EVM CHAINS (15 networks)
+  // EVM CHAINS (16 enabled + BSC, disabled)
   // ============================================================================
 
   base: {
@@ -647,6 +648,55 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'Global Dollar',  // on-chain version() reverts; domain must be supplied off-chain
         version: '1',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
+  // Arc testnet (Circle). The stablecoin IS the chain's native asset, so the SAME
+  // balance is readable at TWO precisions:
+  //   - native / gas, via eth_getBalance and EIP-1559 fees: 18 decimals
+  //   - ERC-20 interface, via balanceOf and transferWithAuthorization: 6 decimals
+  //     (the ERC-20 view is floor(native / 10^12))
+  // An x402 payment is an EIP-3009 authorization against the ERC-20 interface, so
+  // its `value` is ALWAYS in the 6 of `tokens.usdc.decimals`. Scaling a price with
+  // `nativeCurrency.decimals` instead charges 10^12 times the amount: $0.01 would
+  // be signed as 10000000000000000 units, i.e. 10 billion USDC. `nativeCurrency`
+  // below is correct where it is actually used -- the wallet_addEthereumChain
+  // params -- and must never reach `parseUnits` for a payment.
+  // Pinned by src/arc-testnet.test.ts.
+  //
+  // Testnet only: Circle's contract list still marks these addresses testnet and
+  // publishes no mainnet deployment. EURC (0x89B5...D72a) exists on the same chain
+  // and is deliberately NOT registered until it has its own end-to-end proof.
+  'arc-testnet': {
+    chainId: 5042002,
+    chainIdHex: '0x4cef52',
+    name: 'arc-testnet',
+    displayName: 'Arc Testnet',
+    networkType: 'evm',
+    rpcUrl: 'https://rpc.testnet.arc.io',
+    explorerUrl: 'https://testnet.arcscan.app',
+    nativeCurrency: {
+      name: 'USD Coin',
+      symbol: 'USDC',
+      decimals: 18, // gas precision ONLY -- never the scale of a payment
+    },
+    usdc: {
+      address: '0x3600000000000000000000000000000000000000',
+      decimals: 6, // ERC-20 interface, which is what an EIP-3009 value is denominated in
+      name: 'USDC', // on-chain name(); must match the EIP-712 domain exactly
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x3600000000000000000000000000000000000000',
+        decimals: 6,
+        name: 'USDC',
+        version: '2',
       },
     },
     x402: {
