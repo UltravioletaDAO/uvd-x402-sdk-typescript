@@ -1,3 +1,5 @@
+> Historical testnet-only handoff. Superseded on 2026-09-16 by [Arc mainnet/testnet integration](../networks/arc.md); statements below about mainnet being unavailable no longer apply.
+
 # Arc testnet en el SDK de TypeScript
 
 **Fecha:** 2026-09-15. **Versión:** 2.92.0. **Base:** `919d580` (2.91.0).

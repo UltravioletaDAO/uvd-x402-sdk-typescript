@@ -633,6 +633,7 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   'skale-base-sepolia': 'eip155:324705682',
   robinhood: 'eip155:4663',
   'robinhood-testnet': 'eip155:46630',
+  arc: 'eip155:5042',
   'arc-testnet': 'eip155:5042002',
   // SVM chains
   solana: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',

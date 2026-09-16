@@ -42,14 +42,13 @@ import type { ChainConfig } from './types';
  * it is what `wallet_addEthereumChain` needs -- which is precisely why the two
  * numbers sit next to each other and why this file pins both.
  *
- * Everything asserted here is testnet. Circle's contract list still marks these
- * addresses testnet and publishes no mainnet deployment, so there is no
- * `arc`/`arc-mainnet` entry to add until it does.
+ * The same payment/signing invariants run independently for mainnet and testnet.
  */
 
-const ARC = 'arc-testnet';
-const ARC_CHAIN_ID = 5042002;
-const ARC_CAIP2 = 'eip155:5042002';
+describe.each([
+  { ARC: 'arc', ARC_CHAIN_ID: 5042, ARC_CAIP2: 'eip155:5042' },
+  { ARC: 'arc-testnet', ARC_CHAIN_ID: 5042002, ARC_CAIP2: 'eip155:5042002' },
+])('$ARC payments', ({ ARC, ARC_CHAIN_ID, ARC_CAIP2 }) => {
 const ARC_USDC = '0x3600000000000000000000000000000000000000';
 
 /** A key per run, in memory: nothing here depends on a particular address. */
@@ -109,9 +108,8 @@ describe('Arc testnet — registry entry', () => {
     expect(getChainByName(ARC)?.name).toBe(ARC);
     expect(isChainSupported(ARC)).toBe(true);
     // Case-insensitive lookup, like every other chain.
-    expect(getChainByName('Arc-Testnet')?.name).toBe(ARC);
-    // No mainnet is being claimed: Circle has not published one.
-    expect(SUPPORTED_CHAINS.arc).toBeUndefined();
+    expect(getChainByName(ARC.toUpperCase())?.name).toBe(ARC);
+    expect(SUPPORTED_CHAINS.arc.chainId).not.toBe(SUPPORTED_CHAINS['arc-testnet'].chainId);
     expect(SUPPORTED_CHAINS['arc-mainnet']).toBeUndefined();
   });
 
@@ -119,7 +117,7 @@ describe('Arc testnet — registry entry', () => {
     const chain = getChainByName(ARC)!;
 
     expect(chain.chainId).toBe(ARC_CHAIN_ID);
-    expect(chain.chainIdHex).toBe('0x4cef52');
+    expect(chain.chainIdHex).toBe(`0x${ARC_CHAIN_ID.toString(16)}`);
     expect(parseInt(chain.chainIdHex, 16)).toBe(chain.chainId);
     expect(getChainById(ARC_CHAIN_ID)?.name).toBe(ARC);
   });
@@ -128,9 +126,9 @@ describe('Arc testnet — registry entry', () => {
     const chain = getChainByName(ARC)!;
 
     expect(chain.networkType).toBe('evm');
-    expect(chain.displayName).toBe('Arc Testnet');
-    expect(chain.rpcUrl).toBe('https://rpc.testnet.arc.io');
-    expect(chain.explorerUrl).toBe('https://testnet.arcscan.app');
+    expect(chain.displayName).toBe(ARC === 'arc' ? 'Arc' : 'Arc Testnet');
+    expect(chain.rpcUrl).toBe(ARC === 'arc' ? 'https://rpc.mainnet.arc.io' : 'https://rpc.testnet.arc.io');
+    expect(chain.explorerUrl).toBe(ARC === 'arc' ? 'https://explorer.arc.io' : 'https://explorer.testnet.arc.io');
   });
 
   it('registers USDC at the ERC-20 precision with the on-chain EIP-712 domain', () => {
@@ -283,6 +281,25 @@ describe('Arc testnet — one balance, two precisions', () => {
   });
 });
 
+it('a real signature verifies only in the selected Arc network', async () => {
+  const chain = getChainByName(ARC)!;
+  const provider = providerWithWallet();
+  const raw = await provider.signPayment({ recipient: PAY_TO, amount: '0.000001' }, chain);
+  const header = JSON.parse(atob(provider.encodePaymentHeader(raw, chain)));
+  const { authorization, signature } = header.payload;
+  const types = { TransferWithAuthorization: [
+    { name: 'from', type: 'address' }, { name: 'to', type: 'address' },
+    { name: 'value', type: 'uint256' }, { name: 'validAfter', type: 'uint256' },
+    { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },
+  ] };
+  const domain = { name: 'USDC', version: '2', chainId: ARC_CHAIN_ID, verifyingContract: ARC_USDC };
+  const address = new ethers.Wallet(PRIVATE_KEY).address;
+  expect(authorization.value).toBe('1');
+  expect(ethers.verifyTypedData(domain, types, authorization, signature)).toBe(address);
+  domain.chainId = ARC_CHAIN_ID === 5042 ? 5042002 : 5042;
+  expect(ethers.verifyTypedData(domain, types, authorization, signature)).not.toBe(address);
+});
+
 describe('Arc testnet — fee payers', () => {
   it('adds no entry of its own: EVM chains share the EVM signer', () => {
     // EVM networks do not carry a per-chain fee payer, and Arc does not change
@@ -293,4 +310,6 @@ describe('Arc testnet — fee payers', () => {
       getFacilitatorAddress('robinhood-testnet', 'evm')
     );
   });
+});
+
 });

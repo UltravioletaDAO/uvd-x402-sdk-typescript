@@ -1,8 +1,8 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 26 supported blockchain networks.
- * EVM chains (16): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet, Arc testnet)
+ * Complete configuration for all 27 supported blockchain networks.
+ * EVM chains (17): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet, Arc mainnet + testnet)
  * BSC is registered but disabled (Binance-Peg USDC has no ERC-3009), so it is not in those counts.
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
@@ -669,9 +669,41 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // params -- and must never reach `parseUnits` for a payment.
   // Pinned by src/arc-testnet.test.ts.
   //
-  // Testnet only: Circle's contract list still marks these addresses testnet and
-  // publishes no mainnet deployment. EURC (0x89B5...D72a) exists on the same chain
-  // and is deliberately NOT registered until it has its own end-to-end proof.
+  // Mainnet (5042) and testnet (5042002) were verified independently against
+  // their official RPCs on 2026-09-16. EURC is not registered without its E2E proof.
+  arc: {
+    chainId: 5042,
+    chainIdHex: '0x13b2',
+    name: 'arc',
+    displayName: 'Arc',
+    networkType: 'evm',
+    rpcUrl: 'https://rpc.mainnet.arc.io',
+    explorerUrl: 'https://explorer.arc.io',
+    nativeCurrency: {
+      name: 'USD Coin',
+      symbol: 'USDC',
+      decimals: 18, // gas precision ONLY -- never the scale of a payment
+    },
+    usdc: {
+      address: '0x3600000000000000000000000000000000000000',
+      decimals: 6, // ERC-20 interface, which is what an EIP-3009 value is denominated in
+      name: 'USDC', // on-chain name(); must match the EIP-712 domain exactly
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x3600000000000000000000000000000000000000',
+        decimals: 6,
+        name: 'USDC',
+        version: '2',
+      },
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: true,
+    },
+  },
+
   'arc-testnet': {
     chainId: 5042002,
     chainIdHex: '0x4cef52',
@@ -679,7 +711,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     displayName: 'Arc Testnet',
     networkType: 'evm',
     rpcUrl: 'https://rpc.testnet.arc.io',
-    explorerUrl: 'https://testnet.arcscan.app',
+    explorerUrl: 'https://explorer.testnet.arc.io',
     nativeCurrency: {
       name: 'USD Coin',
       symbol: 'USDC',

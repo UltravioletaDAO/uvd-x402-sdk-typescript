@@ -4,62 +4,12 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
-## [2.92.0] - 2026-09-15
+## [2.92.0] - 2026-09-16
 
-**Arc testnet de Circle (`eip155:5042002`) entra como red EVM soportada, y con
-ella la trampa de las dos precisiones.** En Arc la stablecoin **es** el activo
-nativo de gas, asi que el MISMO saldo se lee de dos maneras: nativo, para gas y
-fees EIP-1559 (`eth_getBalance`), con **18 decimales**; y por la interfaz ERC-20
-(`balanceOf`, `transferWithAuthorization`), con **6**, siendo la vista ERC-20
-`floor(nativo / 10^12)`. Un pago x402 es una autorizacion EIP-3009 contra la
-interfaz ERC-20: **el importe viaja siempre en 6**. Escribir 18 ahi -- el numero
-que la documentacion de gas de Arc pone al lado de "USDC nativo" -- no falla en
-ningun lado: firma una autorizacion perfectamente valida por 10^12 veces el
-precio. `$0.01` saldria como `10000000000000000` unidades, o sea diez mil
-millones de USDC.
-
-### Added
-
-- **Red `arc-testnet`** en `SUPPORTED_CHAINS`: chain id `5042002` / `0x4cef52`,
-  USDC en `0x3600000000000000000000000000000000000000` con **6 decimales** y
-  dominio EIP-712 `{ name: "USDC", version: "2" }` -- `USDC`, no el `USD Coin`
-  de la mayoria de los despliegues. RPC `https://rpc.testnet.arc.io`, explorer
-  `https://testnet.arcscan.app`. Habilitada, asi que entra sola en la lista por
-  default del cliente (`getEnabledChains()`, `getEVMChainIds()`, y con eso el
-  `NetworkPicker`).
-- **Par nombre <-> CAIP-2**: `arc-testnet` <-> `eip155:5042002` en
-  `CAIP2_IDENTIFIERS` y su inverso. Mismo par que registra el SDK de Python.
-- **`src/arc-testnet.test.ts`**, que fija las dos precisiones lado a lado y
-  **monta el estado malo a proposito**: parchea el registro con `decimals: 18` y
-  mide lo que se firmaria. Seis tests se ponen en rojo con 18, en cuatro
-  superficies independientes (el registro, `generatePaymentOptions`,
-  `buildPaymentRequirements` y la firma EIP-3009 real).
-- `nativeCurrency` de Arc queda en 18 **a proposito**: es lo que necesita
-  `wallet_addEthereumChain`, es el unico lugar donde el SDK lo usa, y nunca toca
-  `parseUnits` en el camino de pago.
-
-### Changed
-
-- Los conteos en prosa pasan de 25 a **26 redes** y de 15 a **16 EVM** (README,
-  `package.json`, `src/index.ts`, cabecera del registro). Cuentan redes
-  **habilitadas**: BSC esta registrada pero con `enabled: false` porque
-  Binance-Peg USDC no implementa ERC-3009, y por eso no suma. Eso ahora esta
-  escrito en la cabecera del registro, que era donde faltaba.
-
-### Notes
-
-- **Solo testnet.** La lista de contratos de Circle sigue marcando estas
-  direcciones como testnet y no publica direcciones de mainnet, asi que no hay
-  entrada `arc` que inferir. Cuando Circle publique mainnet hay que revalidar
-  chain id, contratos, dominios, minimos de gas, RPC y explorer antes de
-  anunciarla.
-- **EURC no se registra.** Existe en la misma cadena
-  (`0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a`, dominio `EURC`/`2`) y queda
-  fuera hasta que pase su propia prueba E2E: cotiza en euros y tratar un precio
-  en dolares como conversion 1:1 seria inventar un tipo de cambio.
-- **Las redes EVM no llevan fee payer propio**: Arc cae en el firmante EVM
-  compartido, igual que las otras dos testnets EVM. `FACILITATOR_ADDRESSES` no
-  cambia.
+- Add Arc mainnet (`arc`, `eip155:5042`) and testnet (`arc-testnet`, `eip155:5042002`) to the enabled chain registry, wallet selection, signing and v1/v2 payment requirements.
+- USDC payments use `0x3600000000000000000000000000000000000000`, 6 decimals, and EIP-712 domain `USDC` / `2`. Native USDC gas retains 18 decimals on the same balance.
+- Run the Arc payment/signing tests for both networks, including the 18-versus-6 decimal regression. Add [Arc integration examples](docs/networks/arc.md).
+- 27 enabled networks, including 17 EVM networks. BSC remains disabled. Arc covers direct USDC `exact` EOA payments.
 
 ## [2.91.0] - 2026-09-13
 
