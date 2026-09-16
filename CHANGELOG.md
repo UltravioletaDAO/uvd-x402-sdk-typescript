@@ -4,6 +4,13 @@ All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
+## [2.92.0] - 2026-09-16
+
+- Add Arc mainnet (`arc`, `eip155:5042`) and testnet (`arc-testnet`, `eip155:5042002`) to the enabled chain registry, wallet selection, signing and v1/v2 payment requirements.
+- USDC payments use `0x3600000000000000000000000000000000000000`, 6 decimals, and EIP-712 domain `USDC` / `2`. Native USDC gas retains 18 decimals on the same balance.
+- Run the Arc payment/signing tests for both networks, including the 18-versus-6 decimal regression. Add [Arc integration examples](docs/networks/arc.md).
+- 27 enabled networks, including 17 EVM networks. BSC remains disabled. Arc covers direct USDC `exact` EOA payments.
+
 ## [2.91.0] - 2026-09-13
 
 **La autorización EIP-3009 vive 300 s en todas las redes, y ahora se puede
