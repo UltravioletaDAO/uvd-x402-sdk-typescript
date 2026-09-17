@@ -1,0 +1,47 @@
+{
+  "sdk": "typescript",
+  "version": "2.94.0",
+  "source": "npm, new directory",
+  "offline_signatures": [
+    {
+      "network": "arc",
+      "protocol": 1,
+      "atomic_amount": "1",
+      "signature_recovered": true,
+      "domain_matches_rpc": true
+    },
+    {
+      "network": "arc",
+      "protocol": 2,
+      "atomic_amount": "1",
+      "signature_recovered": true,
+      "domain_matches_rpc": true
+    },
+    {
+      "network": "arc-testnet",
+      "protocol": 1,
+      "atomic_amount": "1",
+      "signature_recovered": true,
+      "domain_matches_rpc": true
+    },
+    {
+      "network": "arc-testnet",
+      "protocol": 2,
+      "atomic_amount": "1",
+      "signature_recovered": true,
+      "domain_matches_rpc": true
+    }
+  ],
+  "funded_payments": "pending; none executed",
+  "checked_at": "2026-09-17T04:32:42.321142+00:00",
+  "tests_passed": 762,
+  "cross_language_checks_passed": 430,
+  "publication_workflow": "https://github.com/UltravioletaDAO/uvd-x402-sdk-typescript/actions/runs/35181722884",
+  "release_commit": "4d2d4beb4b72821afa9612606ffb607c46fb7501",
+  "published_artifact": {
+    "version": "2.94.0",
+    "tarball_integrity": "sha512-+qaFNuvMI9F7tAwp5if3D8R25fuqoGsgfYVwSytbNDPnlWsVAQ/QPkLa2muaSzo7qL9uOZBVzi21/AnqFvXWfQ==",
+    "installed_dist_files_matching_registry_tarball": 102,
+    "source": "https://registry.npmjs.org/uvd-x402-sdk/-/uvd-x402-sdk-2.94.0.tgz"
+  }
+}
