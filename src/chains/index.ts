@@ -36,7 +36,6 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     usdc: { address: '0.0.456858', decimals: 6, name: 'USDC', version: '' },
     tokens: {
       usdc: { address: '0.0.456858', decimals: 6, name: 'USDC', version: '' },
-      hbar: { address: '0.0.0', decimals: 8, name: 'HBAR', version: '', usdPegged: false },
     },
     x402: { facilitatorUrl: DEFAULT_FACILITATOR_URL, enabled: true },
   },
@@ -48,7 +47,6 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     usdc: { address: '0.0.429274', decimals: 6, name: 'USDC', version: '' },
     tokens: {
       usdc: { address: '0.0.429274', decimals: 6, name: 'USDC', version: '' },
-      hbar: { address: '0.0.0', decimals: 8, name: 'HBAR', version: '', usdPegged: false },
     },
     x402: { facilitatorUrl: DEFAULT_FACILITATOR_URL, enabled: true },
   },

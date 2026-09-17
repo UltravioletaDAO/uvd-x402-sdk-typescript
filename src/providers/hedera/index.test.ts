@@ -16,11 +16,11 @@ describe('native Hedera', () => {
   it.each(['hedera:mainnet', 'hedera:testnet'] as const)('registers native IDs and distinct units on %s', network => {
     expect(getChainByName(network)?.chainId).toBe(0);
     expect(getChainByName(network)?.usdc.address).toBe(network === 'hedera:mainnet' ? '0.0.456858' : '0.0.429274');
-    expect(getTokenConfig(network, 'hbar')).toMatchObject({ address: '0.0.0', decimals: 8, usdPegged: false });
+    expect(getTokenConfig(network, 'hbar')).toBeUndefined();
+    expect(Object.keys(getChainByName(network)!.tokens!)).toEqual(['usdc']);
   });
   it.each([
-    ['hedera:mainnet', 'hbar'], ['hedera:mainnet', 'usdc'],
-    ['hedera:testnet', 'hbar'], ['hedera:testnet', 'usdc'],
+    ['hedera:mainnet', 'usdc'], ['hedera:testnet', 'usdc'],
   ] as const)('signs exact principal and all node variants on %s %s', async (network, asset) => {
     const { key, signer } = provider(network);
     const r = offer(network, asset, '9007199254740993');
@@ -31,13 +31,9 @@ describe('native Hedera', () => {
     expect(tx.nodeAccountIds?.map(x => x.toString())).toEqual(['0.0.3', '0.0.4', network === 'hedera:mainnet' ? '0.0.7' : '0.0.5']);
     expect(tx.transactionId?.accountId?.toString()).toBe(r.extra.feePayer);
     expect(tx.maxTransactionFee?.toTinybars().toString()).toBe('100000000');
-    if (asset === 'hbar') {
-      expect(tx.hbarTransfers.get('0.0.111')?.toTinybars().toString()).toBe('-9007199254740993');
-      expect(tx.hbarTransfers.get('0.0.222')?.toTinybars().toString()).toBe('9007199254740993');
-    } else {
-      expect(tx.tokenTransfers.get(r.asset)?.get('0.0.111')?.toString()).toBe('-9007199254740993');
-      expect(tx.tokenTransfers.get(r.asset)?.get('0.0.222')?.toString()).toBe('9007199254740993');
-    }
+    expect(tx.hbarTransfers.size).toBe(0);
+    expect(tx.tokenTransfers.get(r.asset)?.get('0.0.111')?.toString()).toBe('-9007199254740993');
+    expect(tx.tokenTransfers.get(r.asset)?.get('0.0.222')?.toString()).toBe('9007199254740993');
     expect(buildHederaRequest(p, r).paymentRequirements).toEqual(r);
     expect(JSON.stringify(signer)).not.toContain(key.toStringDer());
   });
@@ -65,11 +61,11 @@ describe('native Hedera', () => {
     expect(r.maxAmountRequired).toBe('1000');
     expect(() => resolveEnvelopeVersion({ x402Version: 2, accepted: offer(), payload: { transaction: '' }, resource: { url: options.resource, description: '', mimeType: 'application/json' } }, r, 1)).toThrow('v2');
   });
-  it.each(['hbar', 'usdc'] as const)('pays a 402 through the connected native adapter (%s)', async asset => {
+  it.each(['usdc'] as const)('pays a 402 through the connected native adapter (%s)', async asset => {
     const { signer } = provider();
     const client = new X402Client();
     await client.connectWithAdapter(signer, 'hedera:testnet');
-    const r = offer('hedera:testnet', asset, asset === 'hbar' ? '10000' : '1000');
+    const r = offer('hedera:testnet', asset, '1000');
     let calls = 0;
     const doFetch: typeof fetch = async (_url, init) => {
       calls++;
@@ -81,8 +77,15 @@ describe('native Hedera', () => {
       return new Response(JSON.stringify({ paid: true }));
     };
     const response = await client.fetch('https://merchant.example/paid', {
-      tokenType: asset, maxAmount: asset === 'hbar' ? '0.0001' : '0.001', fetchImpl: doFetch,
+      tokenType: asset, maxAmount: '0.001', fetchImpl: doFetch,
     });
     expect(response.status).toBe(200); expect(calls).toBe(2);
+  });
+  it.each(['hedera:mainnet', 'hedera:testnet'] as const)('rejects HBAR and custom tokens before signing on %s', async network => {
+    const { signer } = provider(network);
+    for (const asset of ['hbar', '0.0.0', '0.0.1234']) {
+      expect(() => offer(network, asset)).toThrow('native USDC only');
+      await expect(signer.createPaymentPayload({ ...offer(network), asset })).rejects.toThrow('native USDC only');
+    }
   });
 });
