@@ -62,8 +62,7 @@ export interface TokenConfig {
    * Whether one whole unit of this token IS one dollar.
    *
    * Absent means yes, so every stablecoin entry in the registry keeps the
-   * behaviour it had. It is `false` for exactly one thing today: the native
-   * XRP that XRPL settles in.
+   * behaviour it had. It is `false` for EURC (euros), native XRP and HBAR.
    *
    * **The distinction is unit, not scale.** `decimals` already handles scale --
    * BSC USDC has 18 of them and prices correctly. But scaling a price by the
@@ -258,8 +257,8 @@ export interface PaymentInfo {
   /**
    * Amount in whole units of the settlement asset (e.g., "10.00").
    *
-   * For every dollar-pegged token that is dollars, which is all of them but
-   * one. On XRPL it is **XRP**, because XRPL settles in its own native asset:
+   * For dollar-pegged tokens that is dollars; for EURC it is **euros**.
+   * On XRPL it is **XRP**, because XRPL settles in its own native asset:
    * the provider spends this through `xrpToDrops` and bills whole XRP
    * (`src/providers/xrpl/index.ts`). This used to be documented as USD, which
    * made the type and its only XRPL consumer disagree about the unit -- and the

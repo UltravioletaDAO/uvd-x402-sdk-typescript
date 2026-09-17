@@ -1,6 +1,6 @@
 # Arc mainnet and testnet
 
-Direct USDC `exact` payments are supported by the Ultravioleta facilitator in both x402 v1 and v2. This release adds the network definitions to the SDK's normal signing and payment paths.
+Direct USDC and EURC `exact` payments are supported by the Ultravioleta facilitator in both x402 v1 and v2. USDC has funded payment receipts; EURC has contract and offline signing validation, with funded acceptance pending.
 
 | Setting | Mainnet | Testnet |
 |---|---|---|
@@ -14,7 +14,68 @@ Both networks use USDC `0x3600000000000000000000000000000000000000` with EIP-712
 
 The chain ID is part of the signature domain. An authorization signed on mainnet cannot be reused on testnet. The SDK preserves their distinct registry entries and CAIP-2 identifiers.
 
-The facilitator URL is `https://facilitator.ultravioletadao.xyz`. Check `/supported` at runtime when using another facilitator. EURC/USYC, Gateway, contract-wallet signatures/EIP-6492, `upto`, escrow and ERC-8004 writes are outside this Arc release.
+The facilitator URL is `https://facilitator.ultravioletadao.xyz`. Check `/supported` at runtime when using another facilitator. USYC, Gateway, contract-wallet signatures/EIP-6492, `upto`, escrow and ERC-8004 writes are outside this Arc release.
+
+## EURC: prices in euros
+
+EURC is registered for direct EOA `exact` payments in x402 v1/v2. Circle publishes
+different contracts for each network:
+
+| Network | EURC contract | Payment decimals | EIP-712 name / version |
+|---|---|---|---|
+| Arc mainnet | `0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1` | 6 | `EURC` / `2` |
+| Arc testnet | `0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a` | 6 | `EURC` / `2` |
+
+**0.01 EURC is 10000 atomic units and is a euro price.** No USD/EUR exchange rate
+is applied. EURC has its own balance; the facilitator still pays gas in **USDC**.
+Select the EURC address explicitly and keep USDC as the default dollar asset.
+Do not pass a dollar quote into the EURC signing path.
+
+Contract metadata and EIP-712 domain separators were checked through both live
+RPCs on 2026-09-17. Offline signatures and network/token isolation are tested.
+**Funded EURC verify/settle acceptance remains pending on both networks**, as
+requested by the operator. Existing Arc payment receipts below are **USDC only**;
+they do not prove EURC settlement. No EURC payment hashes are claimed.
+[Assessment](../reports/2026-09-17-arc-eurc-assessment.json).
+[Official Circle contract list](https://developers.circle.com/stablecoins/eurc-contract-addresses).
+
+### EURC payer and merchant (TypeScript)
+
+Install `npm install uvd-x402-sdk@^2.94.0`. Use explicit atomic requirements for
+EURC; `buildPaymentRequirements` is a dollar-price convenience helper.
+
+```typescript
+import { getChainByName, getTokenConfig } from 'uvd-x402-sdk';
+import { EVMProvider } from 'uvd-x402-sdk/evm';
+import { FacilitatorClient, parsePaymentHeader } from 'uvd-x402-sdk/backend';
+
+const chain = getChainByName('arc-testnet')!; // 'arc' for mainnet
+const eurc = getTokenConfig(chain.name, 'eurc')!;
+const requirements = {
+  scheme: 'exact', network: `eip155:${chain.chainId}`, asset: eurc.address,
+  maxAmountRequired: '10000', // 0.01 EURC, no USD conversion
+  payTo: merchantAddress, resource: 'https://your-service.example/paid',
+  maxTimeoutSeconds: 300, extra: { name: eurc.name, version: eurc.version },
+};
+const wallet = new EVMProvider();
+await wallet.connect(chain.name);
+const signed = await wallet.signPayment({
+  recipient: requirements.payTo, amount: '0.01', tokenType: 'eurc',
+}, chain);
+const header = wallet.encodePaymentHeader(signed, chain, 2, { includeTokenMetadata: true });
+const facilitator = new FacilitatorClient({ x402Version: 2 });
+// Merchant: use YOUR stored requirements, not a price copied from the buyer.
+const payment = parsePaymentHeader(header);
+const verified = await facilitator.verify(payment, requirements);
+if (!verified.isValid) throw new Error('Payment verification failed');
+const settled = await facilitator.settle(payment, requirements);
+if (!settled.success) throw new Error('Payment settlement failed');
+// Deliver only after confirmed settlement; preserve an uncertain transaction ID.
+```
+
+For v1 use `chain.name` for `network` and version 1 in the encoder/client. Both
+versions use the same six-decimal EURC amount and token-specific signing domain.
+
 
 ## Usage
 
