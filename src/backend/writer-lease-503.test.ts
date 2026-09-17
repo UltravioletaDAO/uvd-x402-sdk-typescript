@@ -313,7 +313,7 @@ describe('Hono middleware', () => {
     const sent: { code?: number; body?: any; headers: Record<string, string> } = { headers: {} };
     return {
       c: {
-        req: { header: () => encodeHeader(), url: 'https://example.test/thing' },
+        req: { header: (name: string) => name.toLowerCase() === "x-payment" ? encodeHeader() : undefined, url: 'https://example.test/thing' },
         json: (body: unknown, status?: number) => {
           sent.body = body;
           sent.code = status;

@@ -6,6 +6,7 @@
  */
 
 import { ethers } from 'ethers';
+import { fetchWithReceipt, type ReceiptFetchOptions, type FetchReceiptResult } from '../receipts';
 import type {
   ChainConfig,
   NetworkType,
@@ -445,6 +446,10 @@ export class X402Client {
    * const data = await res.json();
    * ```
    */
+  async fetchWithReceipt(url: string, options: ReceiptFetchOptions): Promise<FetchReceiptResult> {
+    return fetchWithReceipt((target, init) => this.fetch(target, init), url, options);
+  }
+
   async fetch(url: string, options: X402FetchOptions = {}): Promise<Response> {
     if (!this.connectedAddress) {
       throw new X402Error('Wallet not connected', 'WALLET_NOT_CONNECTED');

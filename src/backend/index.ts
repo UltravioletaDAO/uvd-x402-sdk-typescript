@@ -1,3 +1,5 @@
+import { parseFacilitatorReceipt, receiptFromErrorBody, paymentResponseHeaders, validatePurchaseContext, type FacilitatorReceipt } from "../receipts";
+export * from "../receipts";
 import { parseUnits } from 'ethers';
 import { buildHederaRequirements, type HederaNetwork } from '../providers/hedera';
 /**
@@ -195,6 +197,7 @@ export interface SettleRequest {
  * Verify response from the facilitator
  */
 export interface VerifyResponse extends FacilitatorFailureFields {
+  receipt?: FacilitatorReceipt | null;
   isValid: boolean;
   /**
    * Why the payment is not valid.
@@ -213,6 +216,7 @@ export interface VerifyResponse extends FacilitatorFailureFields {
  * Settle response from the facilitator
  */
 export interface SettleResponse extends FacilitatorFailureFields {
+  receipt?: FacilitatorReceipt | null;
   success: boolean;
   transactionHash?: string;
   network?: string;
@@ -892,7 +896,7 @@ export function buildSettleRequestForVersion(
  */
 export const X402_CORS_HEADERS = {
   'Access-Control-Allow-Headers':
-    'Content-Type, X-PAYMENT, PAYMENT-SIGNATURE, Authorization',
+    'Content-Type, X-PAYMENT, PAYMENT-SIGNATURE, X-UVD-Purchase, Authorization',
   'Access-Control-Expose-Headers':
     'X-PAYMENT-RESPONSE, PAYMENT-RESPONSE, PAYMENT-REQUIRED',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -907,6 +911,7 @@ export const X402_HEADER_NAMES = [
   'X-PAYMENT-RESPONSE',
   'PAYMENT-RESPONSE',
   'PAYMENT-REQUIRED',
+  'X-UVD-Purchase',
 ] as const;
 
 /**
@@ -1038,7 +1043,8 @@ export class FacilitatorClient {
    */
   async verify(
     paymentHeader: X402Header,
-    requirements: PaymentRequirements
+    requirements: PaymentRequirements,
+    options: { receiptContext?: string } = {},
   ): Promise<VerifyResponse> {
     // Not `buildVerifyRequest` any more. That one only speaks v1, so a seller
     // advertising CAIP-2 -- which this SDK's own Hono middleware does by itself
@@ -1055,7 +1061,7 @@ export class FacilitatorClient {
         `${this.baseUrl}/verify`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(options.receiptContext ? { 'X-UVD-Purchase': options.receiptContext } : {}) },
           body: JSON.stringify(body),
         },
         { timeoutMs: this.timeout, retries: this.retries },
@@ -1071,10 +1077,12 @@ export class FacilitatorClient {
           isValid: false,
           invalidReason: error.error,
           ...failureFields(error),
+          receipt: receiptFromErrorBody(error.body),
         };
       }
 
-      return await response.json();
+      const result = await response.json();
+      return { ...result, receipt: parseFacilitatorReceipt(result.receipt) };
     } catch (error) {
       // A thrown error is a transport failure (timeout, DNS, connection reset).
       // No verdict was reached either, so it is retryable for exactly the same
@@ -1100,7 +1108,8 @@ export class FacilitatorClient {
    */
   async settle(
     paymentHeader: X402Header,
-    requirements: PaymentRequirements
+    requirements: PaymentRequirements,
+    options: { receiptContext?: string } = {},
   ): Promise<SettleResponse> {
     const body = buildSettleRequestForVersion(
       paymentHeader,
@@ -1121,7 +1130,7 @@ export class FacilitatorClient {
         `${this.baseUrl}/settle`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(options.receiptContext ? { 'X-UVD-Purchase': options.receiptContext } : {}) },
           body: JSON.stringify(body),
         },
         { timeoutMs: settleTimeout, retries: this.retries },
@@ -1132,6 +1141,7 @@ export class FacilitatorClient {
           success: false,
           error: error.error,
           ...failureFields(error),
+          receipt: receiptFromErrorBody(error.body),
         };
       }
 
@@ -1186,6 +1196,9 @@ export class FacilitatorClient {
         // using the SDK end to end could only ever produce provisional anchors.
         proofOfPayment: result.proofOfPayment ?? result.proof_of_payment,
         payer: result.payer,
+        receipt: parseFacilitatorReceipt(result.receipt),
+        paymentId: result.paymentId,
+        ...(result.receipt?.status === "unknown" || result.receipt?.status === "pending" ? { retryable: true, safeToReplay: false } : {}),
       };
     } catch (error) {
       // Timeout or connection failure. The write may have landed -- this is the
@@ -1791,7 +1804,9 @@ function createVerifiedPaymentState(
   client: FacilitatorClient,
   payment: X402Header,
   requirements: PaymentRequirements,
-  verifyResult: VerifyResponse
+  verifyResult: VerifyResponse,
+  receiptContext?: string,
+  onSettled?: (result: SettleResponse) => void,
 ): VerifiedPaymentState {
   let settlePromise: Promise<SettleResponse> | null = null;
   return {
@@ -1800,7 +1815,7 @@ function createVerifiedPaymentState(
     verifyResult,
     settle: () => {
       if (!settlePromise) {
-        settlePromise = client.settle(payment, requirements);
+        settlePromise = client.settle(payment, requirements, { receiptContext }).then(result => { onSettled?.(result); return result; });
       }
       return settlePromise;
     },
@@ -1948,8 +1963,8 @@ export function createPaymentMiddleware(
   getRequirements: (req: { headers: Record<string, string | string[] | undefined> }) => PaymentRequirementsOptions,
   options: PaymentMiddlewareOptions = {}
 ): (
-  req: { headers: Record<string, string | string[] | undefined>; x402?: VerifiedPaymentState },
-  res: { status: (code: number) => { json: (body: unknown) => void; set: (headers: Record<string, string>) => { json: (body: unknown) => void } } },
+  req: { headers: Record<string, string | string[] | undefined>; x402?: VerifiedPaymentState; method?: string; url?: string; originalUrl?: string; rawBody?: Uint8Array },
+  res: { set?: (headers: Record<string, string>) => unknown; status: (code: number) => { json: (body: unknown) => void; set: (headers: Record<string, string>) => { json: (body: unknown) => void } } },
   next: () => void
 ) => Promise<void> {
   const client = new FacilitatorClient({
@@ -1974,7 +1989,18 @@ export function createPaymentMiddleware(
     // Build requirements and verify
     const reqOptions = getRequirements(req);
     const requirements = buildPaymentRequirements(reqOptions);
-    const verifyResult = await client.verify(payment, requirements);
+    let receiptContext: string | undefined;
+    try {
+      const entry = Object.entries(req.headers).find(([name]) => name.toLowerCase() === 'x-uvd-purchase')?.[1];
+      if (entry !== undefined) {
+        if (typeof entry !== 'string' || !req.method || (!['GET', 'HEAD'].includes(req.method.toUpperCase()) && !req.rawBody)) throw new Error('receipt context requires method and exact raw body');
+        const actualUrl = new URL(req.originalUrl || req.url || reqOptions.resource, reqOptions.resource).toString();
+        receiptContext = validatePurchaseContext(entry, req.method, actualUrl, req.rawBody || new Uint8Array());
+        requirements.resource = actualUrl;
+      }
+    } catch { res.status(400).json({ error: 'receipt_context_mismatch' }); return; }
+    const verifyResult = await client.verify(payment, requirements, { receiptContext });
+    if (verifyResult.receipt) res.set?.(paymentResponseHeaders({ ...verifyResult }));
 
     if (!verifyResult.isValid) {
       // 402 says "your payment was REJECTED, sign a new authorization". Sending
@@ -1993,7 +2019,9 @@ export function createPaymentMiddleware(
       return;
     }
 
-    req.x402 = createVerifiedPaymentState(client, payment, requirements, verifyResult);
+    req.x402 = createVerifiedPaymentState(client, payment, requirements, verifyResult, receiptContext, result => {
+      if (result.receipt) res.set?.(paymentResponseHeaders({ ...result }));
+    });
 
     if (settlementStrategy === 'before-handler') {
       const settleResult = await req.x402.settle();
@@ -2121,7 +2149,7 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
 
   return async (
     c: {
-      req: { header: (name: string) => string | undefined; url: string };
+      req: { header: (name: string) => string | undefined; url: string; method?: string; raw?: Request };
       json: (body: unknown, status?: number) => unknown;
       set?: (key: string, value: unknown) => void;
       /** Hono's response-header setter. Optional so older context doubles still fit. */
@@ -2129,7 +2157,7 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
     },
     next: () => Promise<void>
   ) => {
-    const paymentHeader = c.req.header('X-PAYMENT') || c.req.header('x-payment');
+    const paymentHeader = c.req.header('PAYMENT-SIGNATURE') || c.req.header('X-PAYMENT') || c.req.header('x-payment');
     const advertisedVersion = resolveAdvertisedVersion(options.accepts, options.x402Version);
     const advertisedRequirements = options.accepts.map((accept) =>
       buildRequirementFromAcceptance(accept, c.req.url, advertisedVersion)
@@ -2165,7 +2193,18 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
       }, 402);
     }
 
-    const verifyResult = await client.verify(parsed, requirement);
+    let receiptContext: string | undefined;
+    try {
+      const header = c.req.header('X-UVD-Purchase');
+      if (header) {
+        const method = c.req.method || c.req.raw?.method;
+        if (!method || (!['GET', 'HEAD'].includes(method) && !c.req.raw)) throw new Error('raw request required');
+        const bytes = c.req.raw ? new Uint8Array(await c.req.raw.clone().arrayBuffer()) : new Uint8Array();
+        receiptContext = validatePurchaseContext(header, method, c.req.url, bytes);
+      }
+    } catch { return c.json({ error: 'receipt_context_mismatch' }, 400); }
+    const verifyResult = await client.verify(parsed, requirement, { receiptContext });
+    if (verifyResult.receipt) for (const [name, value] of Object.entries(paymentResponseHeaders({ ...verifyResult }))) c.header?.(name, value);
     if (!verifyResult.isValid) {
       // See respondUnavailable: 402 here would tell the buyer to sign again for
       // an authorization the facilitator never rejected.
@@ -2178,7 +2217,9 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
       }, 402);
     }
 
-    const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult);
+    const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult, receiptContext, result => {
+      if (result.receipt) for (const [name, value] of Object.entries(paymentResponseHeaders({ ...result }))) c.header?.(name, value);
+    });
     c.set?.('x402', verifiedPayment);
 
     if (settlementStrategy === 'before-handler') {
