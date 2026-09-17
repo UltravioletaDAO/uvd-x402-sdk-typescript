@@ -4,6 +4,8 @@ Gasless crypto payments across 29 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
+**New in v2.94.0**: EURC on Arc mainnet and testnet, six-decimal euro amounts and token-specific signatures. Gas remains USDC. Contract metadata and offline tests verified; funded EURC payments pending. [Arc EURC guide](docs/networks/arc.md#eurc-prices-in-euros).
+
 **New in v2.93.0**: Native Hedera mainnet and testnet with sponsored HBAR/USDC payments, offline signing and buyer/merchant helpers. [Hedera guide](docs/networks/hedera.md). Arc USDC remains supported on mainnet and testnet.
 
 ## Features

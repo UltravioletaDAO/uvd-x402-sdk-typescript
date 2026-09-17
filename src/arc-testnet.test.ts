@@ -156,11 +156,11 @@ describe('Arc testnet — registry entry', () => {
     });
   });
 
-  it('does not announce EURC, which has no end-to-end proof yet', () => {
+  it('announces EURC in euro units with live settlement acceptance pending', () => {
     const chain = getChainByName(ARC)!;
 
-    expect(Object.keys(chain.tokens ?? {})).toEqual(['usdc']);
-    expect(getTokenConfig(ARC, 'eurc')).toBeUndefined();
+    expect(Object.keys(chain.tokens ?? {})).toEqual(['usdc', 'eurc']);
+    expect(getTokenConfig(ARC, 'eurc')?.usdPegged).toBe(false);
   });
 
   it('keeps the native gas asset at 18 decimals, where 18 is the right answer', () => {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.94.0 — 2026-09-17
+
+- Register EURC for Arc mainnet/testnet with six-decimal euro units and EIP-712 EURC/2.
+- Add signature/domain isolation tests and explicit atomic merchant examples.
+- Mark EURC as non-USD; live funded EURC payments remain pending by operator decision.
+
+
 All notable changes to `uvd-x402-sdk` are documented here, starting at v2.47.0.
 For earlier versions see the git history (each release commit carries its
 version in the subject, e.g. `feat(stats): ... (v2.46.0)`).

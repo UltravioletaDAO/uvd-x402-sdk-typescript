@@ -320,7 +320,9 @@ export function generatePaymentOptions(
       // at once -- so throwing would take the whole response down over a single
       // unpriceable pair and cost the seller the chains that were fine.
       // `buildPaymentRequirements` names one chain and therefore throws there.
-      if (!isUsdPegged(token)) continue;
+      // EURC is available only through an explicitly named token: the caller
+      // has chosen euros here. The default USDC path still excludes native XRP.
+      if (!isUsdPegged(token) && tokenType !== 'eurc') continue;
 
       // Atomic units in THIS token's decimals -- BSC USDC has 18, not 6.
       const atomicAmount = Math.floor(

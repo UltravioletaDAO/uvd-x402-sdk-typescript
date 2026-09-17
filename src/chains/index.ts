@@ -88,6 +88,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'EURC',
         version: '2',
+        usdPegged: false,
       },
     },
     x402: {
@@ -127,6 +128,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'EURC',
         version: '2',
+        usdPegged: false,
       },
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
@@ -172,6 +174,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'Euro Coin',
         version: '2',
+        usdPegged: false,
       },
       ausd: {
         address: '0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a',
@@ -695,7 +698,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // Pinned by src/arc-testnet.test.ts.
   //
   // Mainnet (5042) and testnet (5042002) were verified independently against
-  // their official RPCs on 2026-09-16. EURC is not registered without its E2E proof.
+  // their official RPCs on 2026-09-16. EURC domains checked on 2026-09-17; live payments pending.
   arc: {
     chainId: 5042,
     chainIdHex: '0x13b2',
@@ -721,6 +724,13 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'USDC',
         version: '2',
+      },
+      eurc: {
+        address: '0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1',
+        decimals: 6,
+        name: 'EURC',
+        version: '2',
+        usdPegged: false,
       },
     },
     x402: {
@@ -754,6 +764,13 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         decimals: 6,
         name: 'USDC',
         version: '2',
+      },
+      eurc: {
+        address: '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a',
+        decimals: 6,
+        name: 'EURC',
+        version: '2',
+        usdPegged: false,
       },
     },
     x402: {
