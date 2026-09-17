@@ -89,3 +89,8 @@ const body = buildHederaRequest(decodedPayment, requirements);
 For offline signing use `provider.createPaymentPayload(requirements)`.
 This signs three current node variants sharing one immutable transaction ID;
 it does not broadcast or query consensus nodes.
+
+
+## Released-package acceptance
+
+[Four real payments from the published package](../reports/2026-09-16-hedera-sdk-release-acceptance.json) cover HBAR and USDC on both networks. Each completed the buyer 402 loop against the public facilitator, preserved the original transaction on retry and rejected replay. Mirror receipts reconcile exact principal and sponsor fees against the persisted signed hash.
