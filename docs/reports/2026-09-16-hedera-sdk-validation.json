@@ -70,5 +70,6 @@
     }
   ],
   "preverify_note": "Read-only verification; these checks do not broadcast or spend. Post-publication settlement receipts will be recorded separately.",
-  "signing_dependencies": "@hiero-ledger/sdk 2.85.0"
+  "signing_dependencies": "@hiero-ledger/sdk 2.85.0",
+  "published_package_acceptance": "2026-09-16-hedera-sdk-release-acceptance.json"
 }
