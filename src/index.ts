@@ -3,7 +3,7 @@
  *
  * x402 Payment SDK - Gasless crypto payments using the Ultravioleta facilitator.
  *
- * Supports 27 blockchain networks:
+ * Supports 29 blockchain networks:
  * - EVM (17): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad, Scroll, SKALE Base (mainnet + Sepolia), Robinhood Chain (mainnet + testnet), Arc mainnet + testnet
  * - SVM (2): Solana, Fogo
  * - Stellar (1): Stellar
@@ -484,3 +484,7 @@ export type {
   ParsedFacilitatorErrorBody,
   WriterLeaseReason,
 } from './backend';
+
+// Native Hedera; the optional signing peer remains lazily loaded.
+export { HederaProvider, buildHederaRequirements, buildHederaRequest, validateHederaRequirements, HEDERA_NETWORKS } from './providers/hedera';
+export type { HederaNetwork, HederaRequirements, HederaPaymentPayload } from './providers/hedera';

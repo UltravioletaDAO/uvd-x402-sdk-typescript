@@ -1,7 +1,7 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 27 supported blockchain networks.
+ * Complete configuration for all 29 supported blockchain networks.
  * EVM chains (17): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet, Arc mainnet + testnet)
  * BSC is registered but disabled (Binance-Peg USDC has no ERC-3009), so it is not in those counts.
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
@@ -28,6 +28,31 @@ export const DEFAULT_FACILITATOR_URL = 'https://facilitator.ultravioletadao.xyz'
  * 3. Test on testnet first before enabling
  */
 export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
+  'hedera:mainnet': {
+    chainId: 0, chainIdHex: '0x0', name: 'hedera:mainnet',
+    displayName: 'Hedera', networkType: 'hedera',
+    rpcUrl: 'https://mainnet-public.mirrornode.hedera.com', explorerUrl: 'https://hashscan.io/mainnet',
+    nativeCurrency: { name: 'HBAR', symbol: 'HBAR', decimals: 8 },
+    usdc: { address: '0.0.456858', decimals: 6, name: 'USDC', version: '' },
+    tokens: {
+      usdc: { address: '0.0.456858', decimals: 6, name: 'USDC', version: '' },
+      hbar: { address: '0.0.0', decimals: 8, name: 'HBAR', version: '', usdPegged: false },
+    },
+    x402: { facilitatorUrl: DEFAULT_FACILITATOR_URL, enabled: true },
+  },
+  'hedera:testnet': {
+    chainId: 0, chainIdHex: '0x0', name: 'hedera:testnet',
+    displayName: 'Hedera Testnet', networkType: 'hedera',
+    rpcUrl: 'https://testnet.mirrornode.hedera.com', explorerUrl: 'https://hashscan.io/testnet',
+    nativeCurrency: { name: 'HBAR', symbol: 'HBAR', decimals: 8 },
+    usdc: { address: '0.0.429274', decimals: 6, name: 'USDC', version: '' },
+    tokens: {
+      usdc: { address: '0.0.429274', decimals: 6, name: 'USDC', version: '' },
+      hbar: { address: '0.0.0', decimals: 8, name: 'HBAR', version: '', usdPegged: false },
+    },
+    x402: { facilitatorUrl: DEFAULT_FACILITATOR_URL, enabled: true },
+  },
+
   // ============================================================================
   // EVM CHAINS (16 enabled + BSC, disabled)
   // ============================================================================
@@ -1090,6 +1115,8 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
  * Mirrors `_NETWORK_ALIASES` in the Python SDK (`networks/base.py:199`).
  */
 export const CHAIN_ALIASES: Record<string, string> = {
+  hedera: 'hedera:mainnet',
+  'hedera-testnet': 'hedera:testnet',
   // Renamed in 2.85.0: the facilitator advertises the mainnet as `xrpl`.
   'xrpl-mainnet': 'xrpl',
 };
@@ -1210,6 +1237,8 @@ export function getExplorerTxUrl(chainName: string, txHash: string): string | nu
       return `${chain.explorerUrl}/tx/${txHash}`;
     case 'sui':
       return `${chain.explorerUrl}/tx/${txHash}`;
+    case 'hedera':
+      return `${chain.explorerUrl}/transaction/${txHash.replace(/^(0\.0\.\d+)@(\d+)\.(\d+)$/, '$1-$2-$3')}`;
     case 'xrpl':
       return `${chain.explorerUrl}/transactions/${txHash}`;
     default:
@@ -1237,6 +1266,8 @@ export function getExplorerAddressUrl(chainName: string, address: string): strin
     case 'algorand':
       return `${chain.explorerUrl}/account/${address}`;
     case 'sui':
+      return `${chain.explorerUrl}/account/${address}`;
+    case 'hedera':
       return `${chain.explorerUrl}/account/${address}`;
     case 'xrpl':
       return `${chain.explorerUrl}/accounts/${address}`;

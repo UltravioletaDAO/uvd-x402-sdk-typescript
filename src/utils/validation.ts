@@ -47,7 +47,7 @@ const XRPL_ADDRESS_REGEX = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
  */
 export function validateRecipient(
   recipient: string | undefined | null,
-  networkType?: 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'xrpl'
+  networkType?: 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'xrpl' | 'hedera'
 ): asserts recipient is string {
   // Check for null, undefined, or empty
   if (!recipient) {
@@ -109,6 +109,12 @@ export function validateRecipient(
             'Expected a valid NEAR account ID.',
             'INVALID_RECIPIENT'
           );
+        }
+        break;
+
+      case 'hedera':
+        if (!/^0\.0\.[1-9][0-9]*$/.test(trimmed)) {
+          throw new X402Error('Hedera recipient must be a native numeric account ID', 'INVALID_RECIPIENT');
         }
         break;
 

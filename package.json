@@ -1,7 +1,7 @@
 {
   "name": "uvd-x402-sdk",
-  "version": "2.92.0",
-  "description": "x402 Payment SDK - Gasless crypto payments across 27 blockchains via Ultravioleta facilitator. Supports EVM (including Scroll, SKALE Base, Robinhood Chain, Arc mainnet + testnet), Solana, Fogo, Stellar, NEAR, Algorand, Sui, and XRP Ledger. Features: ERC-8004 Trustless Agents, Escrow/Refunds, multi-stablecoin (USDC, EURC, AUSD, PYUSD, USDT, USDG).",
+  "version": "2.93.0",
+  "description": "x402 Payment SDK - Gasless crypto payments across 29 networks via Ultravioleta facilitator. Supports EVM (including Scroll, SKALE Base, Robinhood Chain, Arc mainnet + testnet), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, and native Hedera mainnet + testnet. Features: ERC-8004 Trustless Agents, Escrow/Refunds, multi-stablecoin (USDC, EURC, AUSD, PYUSD, USDT, USDG).",
   "author": "Ultravioleta DAO <ultravioletadao@gmail.com>",
   "license": "MIT",
   "repository": {
@@ -44,7 +44,9 @@
     "erc-8128",
     "trustless-agents",
     "escrow",
-    "refund"
+    "refund",
+    "hedera",
+    "hbar"
   ],
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -124,6 +126,11 @@
       "types": "./dist/erc8128/index.d.ts",
       "import": "./dist/erc8128/index.mjs",
       "require": "./dist/erc8128/index.js"
+    },
+    "./hedera": {
+      "types": "./dist/providers/hedera/index.d.ts",
+      "import": "./dist/providers/hedera/index.mjs",
+      "require": "./dist/providers/hedera/index.js"
     }
   },
   "typesVersions": {
@@ -166,6 +173,9 @@
       ],
       "erc8128": [
         "./dist/erc8128/index.d.ts"
+      ],
+      "hedera": [
+        "./dist/providers/hedera/index.d.ts"
       ]
     }
   },
@@ -200,10 +210,10 @@
     "ethers": "^6.13.0"
   },
   "peerDependencies": {
-    "@open-wallet-standard/core": "^0.1.0 || ^1.0.0",
     "@mysten/sui": "^1.0.0",
     "@near-wallet-selector/core": "^8.0.0 || ^9.0.0 || ^10.0.0",
     "@near-wallet-selector/my-near-wallet": "^8.0.0 || ^9.0.0 || ^10.0.0",
+    "@open-wallet-standard/core": "^0.1.0 || ^1.0.0",
     "@perawallet/connect": "^1.0.0",
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.87.0",
@@ -213,7 +223,8 @@
     "algosdk": "^2.0.0 || ^3.0.0",
     "lute-connect": "^1.0.0",
     "react": "^18.0.0 || ^19.0.0",
-    "xrpl": "^3.0.0 || ^4.0.0"
+    "xrpl": "^3.0.0 || ^4.0.0",
+    "@hiero-ledger/sdk": "^2.85.0"
   },
   "peerDependenciesMeta": {
     "@open-wallet-standard/core": {
@@ -257,9 +268,13 @@
     },
     "react": {
       "optional": true
+    },
+    "@hiero-ledger/sdk": {
+      "optional": true
     }
   },
   "devDependencies": {
+    "@hiero-ledger/sdk": "^2.85.0",
     "@hono/node-server": "^1.19.11",
     "@mysten/sui": "^1.45.2",
     "@near-wallet-selector/core": "^10.1.4",

@@ -135,6 +135,12 @@ export const FACILITATOR_ADDRESSES = {
    */
   xrpl: 'rfADKkVXBNqK3z72tVSS3LVzAR3psYkonp',
 
+  // Native Hedera sponsors (canonical ledger IDs and input aliases).
+  'hedera:mainnet': '0.0.10868300',
+  'hedera:testnet': '0.0.10576385',
+  hedera: '0.0.10868300',
+  'hedera-testnet': '0.0.10576385',
+
   /**
    * XRPL facilitator address (testnet)
    */
