@@ -1,14 +1,16 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 27 blockchain networks using the x402 protocol.
+Gasless crypto payments across 29 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
+**New in v2.93.0**: Native Hedera mainnet and testnet with sponsored HBAR/USDC payments, offline signing and buyer/merchant helpers. [Hedera guide](docs/networks/hedera.md). Arc USDC remains supported on mainnet and testnet.
+
 ## Features
 
-- **25 Networks**: EVM (15 including Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger (mainnet + testnet)
+- **29 Networks**: EVM (17 including Arc, Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, Hedera (mainnet + testnet)
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT, USDG (Robinhood Chain)
-- **x402 v1 & v2**: Both protocol versions with auto-detection
+- **x402 v1 & v2**: Protocol auto-detection; native Hedera supports v2/exact only
 - **Gasless**: Facilitator pays all network fees
 - **Buyer Policy**: Per-payment and cumulative budgets, payee allowlist and offer expiry, evaluated against the offer in hand **before signing** — six closed refusal codes in a fixed order
 - **Type-Safe**: Full TypeScript support

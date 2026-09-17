@@ -202,6 +202,7 @@ export function createX402V1Header(
   network: string,
   payload: X402PayloadData
 ): X402HeaderV1 {
+  if (getChainByName(network)?.networkType === 'hedera') throw new Error('Native Hedera supports only x402 v2');
   return {
     x402Version: 1,
     scheme: 'exact',

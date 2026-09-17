@@ -25,7 +25,7 @@ import type { AdvertisedQuote, PolicyApproval, PurchasePolicy } from '../policy'
  *
  * @deprecated 'solana' type is deprecated, use 'svm' instead
  */
-export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui' | 'xrpl';
+export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui' | 'xrpl' | 'hedera';
 
 /**
  * Supported x402 payment schemes
@@ -44,7 +44,7 @@ export type X402Scheme = 'exact' | 'escrow' | 'commerce';
  * - usdt: Tether USD (USDT0 omnichain via LayerZero) - 6 decimals
  * - usdg: Global Dollar (Paxos) - 6 decimals; settlement stablecoin on Robinhood Chain
  */
-export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'usdt' | 'usdg';
+export type TokenType = 'usdc' | 'eurc' | 'ausd' | 'pyusd' | 'usdt' | 'usdg' | 'hbar';
 
 /**
  * Token configuration for EIP-712 signing and transfers
@@ -236,6 +236,10 @@ export interface EIP712Types {
  * Payment information returned by backend on 402 response
  */
 export interface PaymentInfo {
+  /** Exact v2 offer/resource, required by native Hedera. */
+  accepted?: Record<string, unknown>;
+  resource?: { url: string; description?: string; mimeType?: string };
+  extensions?: Record<string, unknown>;
   /** Default recipient address */
   recipient: string;
   /** Network-specific recipient addresses */
@@ -247,6 +251,7 @@ export interface PaymentInfo {
     algorand?: string;
     sui?: string;
     xrpl?: string;
+    hedera?: string;
   };
   /** Facilitator address (for Solana fee payer) */
   facilitator?: string;
@@ -616,6 +621,8 @@ export type X402Version = 1 | 2;
  * @see https://github.com/ChainAgnostic/CAIPs/blob/master/CAIPs/caip-2.md
  */
 export const CAIP2_IDENTIFIERS: Record<string, string> = {
+  'hedera:mainnet': 'hedera:mainnet',
+  'hedera:testnet': 'hedera:testnet',
   // EVM chains
   base: 'eip155:8453',
   ethereum: 'eip155:1',

@@ -1,3 +1,5 @@
+import { parseUnits } from 'ethers';
+import { buildHederaRequirements, type HederaNetwork } from '../providers/hedera';
 /**
  * uvd-x402-sdk - Backend Utilities
  *
@@ -430,6 +432,16 @@ export function buildPaymentRequirements(
     throw new Error(`Unsupported chain: ${chainName}`);
   }
 
+  if (chain.networkType === 'hedera') {
+    if (options.x402Version !== 2) throw new Error('Native Hedera supports only x402 v2');
+    const native = buildHederaRequirements({ network: chain.name as HederaNetwork,
+      payTo: recipient, amountAtomic: parseUnits(amount, 6).toString(),
+      maxTimeoutSeconds: Math.min(options.timeoutSeconds ?? 180, 180) });
+    return { scheme: 'exact', network: native.network, asset: native.asset,
+      maxAmountRequired: native.amount, payTo: recipient, resource, description, mimeType,
+      maxTimeoutSeconds: native.maxTimeoutSeconds, extra: native.extra };
+  }
+
   // Convert amount to atomic units.
   //
   // Scaling by the decimals only turns dollars into base units when one whole
@@ -806,6 +818,9 @@ export function resolveEnvelopeVersion(
   requirements: PaymentRequirements,
   requested: X402Version | 'auto' = 'auto'
 ): X402Version {
+  if (requirements.network?.startsWith('hedera:') && requested === 1) {
+    throw new Error('Native Hedera supports only x402 v2');
+  }
   if (requested !== 'auto') {
     return requested;
   }

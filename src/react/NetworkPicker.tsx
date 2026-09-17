@@ -54,6 +54,7 @@ export const FAMILY_LABEL: Record<string, string> = {
   algorand: 'Algorand',
   sui: 'Sui',
   xrpl: 'XRP Ledger',
+  hedera: 'Hedera',
 };
 
 export interface NetworkOption {

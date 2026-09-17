@@ -234,6 +234,8 @@ export class X402Client {
           'NEAR support requires importing from "uvd-x402-sdk/near"',
           'CHAIN_NOT_SUPPORTED'
         );
+      case 'hedera':
+        throw new X402Error('Use HederaProvider from "uvd-x402-sdk/hedera" with connectWithAdapter()', 'CHAIN_NOT_SUPPORTED');
       case 'xrpl':
         throw new X402Error(
           'XRPL support requires importing from "uvd-x402-sdk/xrpl"',
@@ -244,9 +246,24 @@ export class X402Client {
     }
   }
 
-  /**
-   * Connect using a private key (Node.js / server-side, no browser wallet needed)
-   */
+  /** Connect a native-chain adapter, e.g. HederaProvider, without an EVM wallet. */
+  async connectWithAdapter(adapter: WalletAdapter, chainName: string): Promise<string> {
+    const chain = getChainByName(chainName);
+    if (!chain?.x402.enabled || chain.networkType !== adapter.networkType) {
+      throw new X402Error('Adapter does not support the selected chain', 'CHAIN_NOT_SUPPORTED');
+    }
+    await this.disconnect();
+    const address = await adapter.connect(chain.name);
+    this.walletAdapter = adapter;
+    this.connectedAddress = address;
+    this.currentChainName = chain.name;
+    this.currentChainId = chain.chainId;
+    this.currentNetwork = chain.networkType;
+    this.emit('connect', this.getState());
+    return address;
+  }
+
+  /** Connect using a private key (Node.js / server-side, no browser wallet needed). */
   async connectWithPrivateKey(privateKey: string, chainName?: string): Promise<string> {
     const targetChain = chainName || this.config.defaultChain;
     const chain = getChainByName(targetChain);
@@ -583,6 +600,9 @@ export class X402Client {
     // declared is the failure that bites -- an authorization that dies before the
     // seller's own settle and revokes a payment that was made.
     const payment = await this.createPayment({
+      accepted: chosen.raw,
+      resource: { url },
+      extensions: challenge.extensions as Record<string, unknown> | undefined,
       recipient: chosen.payTo,
       amount: ethers.formatUnits(chosen.amount, chosen.decimals),
       tokenType,
@@ -1226,8 +1246,8 @@ export class X402Client {
       );
     }
 
-    const signed = await adapter.signPayment(paymentInfo, chain);
-    const version = paymentInfo.x402Version ?? (this.config.x402Version === 2 ? 2 : 1);
+    const version = paymentInfo.x402Version ?? (chain.networkType === 'hedera' ? 2 : this.config.x402Version === 2 ? 2 : 1);
+    const signed = await adapter.signPayment({ ...paymentInfo, x402Version: version }, chain);
     const paymentHeader = encode.call(adapter, signed, chain, version);
 
     this.emit('paymentSigned', { paymentHeader });
