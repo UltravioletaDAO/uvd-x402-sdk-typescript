@@ -6,7 +6,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 
 **New in v2.94.0**: EURC on Arc mainnet and testnet, six-decimal euro amounts and token-specific signatures. Gas remains USDC. Contract metadata and offline tests verified; funded EURC payments pending. [Arc EURC guide](docs/networks/arc.md#eurc-prices-in-euros).
 
-**New in v2.93.0**: Native Hedera mainnet and testnet with sponsored HBAR/USDC payments, offline signing and buyer/merchant helpers. [Hedera guide](docs/networks/hedera.md). Arc USDC remains supported on mainnet and testnet.
+**New in v2.95.0**: Hedera mainnet and testnet accept native USDC payments only, with offline signing and buyer/merchant helpers. HBAR funds sponsor network fees and is rejected as payment. [Hedera guide](docs/networks/hedera.md). Arc USDC/EURC remains supported on mainnet and testnet.
 
 ## Features
 

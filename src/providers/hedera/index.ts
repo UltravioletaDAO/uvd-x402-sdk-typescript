@@ -8,6 +8,7 @@ export const HEDERA_NETWORKS = {
   'hedera:testnet': { usdc: '0.0.429274', feePayer: '0.0.10576385', mirror: 'https://testnet.mirrornode.hedera.com' },
 } as const;
 export type HederaNetwork = keyof typeof HEDERA_NETWORKS;
+/** Historical identifier; HBAR is for network fees, not supported payments. */
 export const HBAR_ASSET = '0.0.0';
 const MAX_AMOUNT = (1n << 63n) - 1n;
 
@@ -39,7 +40,7 @@ export function validateHederaRequirements(input: unknown): HederaRequirements {
     throw new Error('Hedera requires exact v2 requirements without extensions');
   }
   const info = networkInfo(r.network);
-  if (![HBAR_ASSET, info.usdc].includes(r.asset)) throw new Error("Only native HBAR and this network's USDC are supported");
+  if (r.asset !== info.usdc) throw new Error('Hedera payments support native USDC only; HBAR is for network fees');
   if (typeof r.amount !== 'string' || !/^[1-9][0-9]*$/.test(r.amount) || r.amount.length > 19 || BigInt(r.amount) > MAX_AMOUNT) {
     throw new Error('amount must be a positive canonical atomic integer string within int64');
   }
@@ -53,15 +54,15 @@ export function validateHederaRequirements(input: unknown): HederaRequirements {
   if (r.payTo === r.extra.feePayer) throw new Error('The fee payer must be distinct from the merchant');
   return { ...r, extra: { ...r.extra } };
 }
-/** Atomic amounts: HBAR 8 decimals, USDC 6. No implicit USD/HBAR conversion. */
+/** Native USDC amounts have 6 decimals. HBAR is used only for network fees. */
 export function buildHederaRequirements(options: {
-  network: HederaNetwork; payTo: string; amountAtomic: string; asset?: 'hbar' | 'usdc' | string;
+  network: HederaNetwork; payTo: string; amountAtomic: string; asset?: 'usdc' | string;
   feePayer?: string; maxTimeoutSeconds?: number;
 }): HederaRequirements {
   const info = networkInfo(options.network);
   return validateHederaRequirements({
     scheme: 'exact', network: options.network,
-    asset: options.asset === 'hbar' ? HBAR_ASSET : !options.asset || options.asset === 'usdc' ? info.usdc : options.asset,
+    asset: !options.asset || options.asset === 'usdc' ? info.usdc : options.asset,
     amount: options.amountAtomic, payTo: options.payTo, maxTimeoutSeconds: options.maxTimeoutSeconds ?? 180,
     extra: { feePayer: options.feePayer ?? info.feePayer },
   });
@@ -130,12 +131,7 @@ export class HederaProvider implements WalletAdapter {
       .setTransactionValidDuration(r.maxTimeoutSeconds)
       .setMaxTransactionFee(sdk.Hbar.fromTinybars('100000000'))
       .setRegenerateTransactionId(false);
-    if (r.asset === HBAR_ASSET) {
-      tx.addHbarTransfer(this.accountId, sdk.Hbar.fromTinybars('-' + r.amount))
-        .addHbarTransfer(r.payTo, sdk.Hbar.fromTinybars(r.amount));
-    } else {
-      tx.addTokenTransfer(r.asset, this.accountId, '-' + r.amount).addTokenTransfer(r.asset, r.payTo, r.amount);
-    }
+    tx.addTokenTransfer(r.asset, this.accountId, '-' + r.amount).addTokenTransfer(r.asset, r.payTo, r.amount);
     await tx.freeze().sign(key);
     // Browser-safe encoding; protobuf TransactionList, NOT a single Transaction.
     let binary = '';
@@ -151,8 +147,8 @@ export class HederaProvider implements WalletAdapter {
     if (!paymentInfo.accepted) throw new Error('Hedera signing requires the exact accepted offer from the 402');
     const r = validateHederaRequirements(paymentInfo.accepted);
     const tokenType = paymentInfo.tokenType ?? 'usdc';
-    const asset = tokenType === 'hbar' ? HBAR_ASSET : tokenType === 'usdc' ? networkInfo(this.network).usdc : '';
-    if (r.asset !== asset || r.payTo !== paymentInfo.recipient || parseUnits(paymentInfo.amount, tokenType === 'hbar' ? 8 : 6).toString() !== r.amount) {
+    const asset = tokenType === 'usdc' ? networkInfo(this.network).usdc : '';
+    if (r.asset !== asset || r.payTo !== paymentInfo.recipient || parseUnits(paymentInfo.amount, 6).toString() !== r.amount) {
       throw new Error('Offer does not match the approved recipient, asset and amount');
     }
     return JSON.stringify(await this.createPaymentPayload(r, paymentInfo.resource));

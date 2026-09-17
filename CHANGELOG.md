@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.95.0 — 2026-09-17
+
+Hedera mainnet/testnet payment policy is native USDC only. HBAR and custom token offers are rejected before signing; HBAR remains the sponsor fee currency.
+
+Migration: replace HBAR requirements with the network-specific USDC token and six-decimal atomic amounts. There is no automatic currency conversion. Historical transaction evidence is retained. Arc USDC/EURC support is unchanged.
+
+
 ## 2.94.0 — 2026-09-17
 
 - Register EURC for Arc mainnet/testnet with six-decimal euro units and EIP-712 EURC/2.
