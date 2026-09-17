@@ -134,3 +134,15 @@ Primary references: [Arc connection parameters](https://docs.arc.io/arc/referenc
 | arc | v2 | [0x02f2a82166369ca63d752a988df93e6210be113e63c6e47bca220aa4e1ae4d08](https://explorer.arc.io/tx/0x02f2a82166369ca63d752a988df93e6210be113e63c6e47bca220aa4e1ae4d08) |
 
 These are controlled operator canaries through the SDK and public facilitator. They do not constitute customer sales or a browser/merchant UI acceptance test.
+
+## EURC release acceptance (2026-09-17)
+
+Version **2.94.0** is published and was installed into a clean environment.
+The full suite passed **762 tests** and the existing cross-language suite
+passed **430 checks**. Four offline signatures from the installed package cover
+both Arc networks and both protocol versions; recovered signers and domains
+match the independently measured contracts. Package integrity was checked against
+the registry. [Release evidence](../reports/2026-09-17-arc-eurc-release-acceptance.json).
+
+Funded EURC payments remain pending by operator instruction. These signature and
+installation checks are not settlement receipts.
