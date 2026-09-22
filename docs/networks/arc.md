@@ -167,5 +167,5 @@ were signed with the published Python SDK (0.88.0). This SDK (2.96.0) signed the
 same 0.01 EURC with `signPayment({ amount: '0.01', tokenType: 'eurc' })` →
 `value: '10000'`, and the facilitator answered `isValid: true` for v1 and v2 against
 the funded wallet (verify only, no third settlement). Replaying each settle body
-returned the original settlement and did not debit the payer again. Arc testnet
-remains pending.
+did not debit the payer again (measured by payer balance); in v1 the replay
+returned the original transaction hash. Arc testnet remains pending.
