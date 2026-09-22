@@ -4,7 +4,7 @@ Gasless crypto payments across 29 blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
-**New in v2.94.0**: EURC on Arc mainnet and testnet, six-decimal euro amounts and token-specific signatures. Gas remains USDC. Contract metadata and offline tests verified; funded EURC payments pending. [Arc EURC guide](docs/networks/arc.md#eurc-prices-in-euros).
+**New in v2.94.0**: EURC on Arc mainnet and testnet, six-decimal euro amounts and token-specific signatures. Gas remains USDC. Funded EURC payments confirmed on Arc mainnet (x402 v1 and v2, 2026-09-22); Arc testnet funded acceptance pending. [Arc EURC guide](docs/networks/arc.md#eurc-prices-in-euros).
 
 **New in v2.95.0**: Hedera mainnet and testnet accept native USDC payments only, with offline signing and buyer/merchant helpers. HBAR funds sponsor network fees and is rejected as payment. [Hedera guide](docs/networks/hedera.md). Arc USDC/EURC remains supported on mainnet and testnet.
 
@@ -746,10 +746,10 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | SKALE Base Sepolia | 324705682 | USDC.e |
 | Robinhood Chain | 4663 | USDG |
 | Robinhood Chain Testnet | 46630 | USDG |
-| Arc | 5042 | USDC |
-| Arc Testnet | 5042002 | USDC |
+| Arc | 5042 | USDC, EURC |
+| Arc Testnet | 5042002 | USDC, EURC |
 
-> **Arc mainnet and testnet:** payment amounts use 6 decimals and the `USDC` / `2` domain. Native gas uses 18 decimals on the same balance. Use `arc` / `eip155:5042` for mainnet and `arc-testnet` / `eip155:5042002` for testnet. See [Arc usage and validation](docs/networks/arc.md).
+> **Arc mainnet and testnet:** payment amounts use 6 decimals. USDC signs with the `USDC` / `2` domain; EURC (`0xbEf5…21c1` mainnet, `0x89B5…D72a` testnet) signs with `EURC` / `2` and its amounts are **euros**, not dollars (`tokenType: 'eurc'`, `usdPegged: false`). Native gas uses 18 decimals on the same balance. Use `arc` / `eip155:5042` for mainnet and `arc-testnet` / `eip155:5042002` for testnet. See [Arc usage and validation](docs/networks/arc.md).
 
 > **Robinhood Chain / USDG:** Robinhood Chain has no USDC — the settlement stablecoin is Paxos **USDG** (Global Dollar, 6 decimals, EIP-3009). Its on-chain `version()` getter reverts, so the EIP-712 domain `{ name: "Global Dollar", version: "1" }` can never be resolved on-chain. The SDK carries this domain in the chain config; when constructing `PaymentRequirements` yourself, send it in `extra`: `{ "name": "Global Dollar", "version": "1" }`. Use `tokenType: 'usdg'` (or the default, which resolves to USDG on these networks).
 
@@ -1986,4 +1986,4 @@ facilitator receipts: network, asset, atomic amount, payTo, request hash,
 settlement ID, status and refusal reason. Persist purchase context before sending
 the authorization and reuse it after uncertainty. Payment confirmation does not
 prove merchant delivery. See [the receipt guide](docs/facilitator-receipts.md).
-Live EURC acceptance remains pending.
+Funded EURC payments settled on Arc mainnet (x402 v1/v2, 2026-09-22); Arc testnet funded acceptance is pending.

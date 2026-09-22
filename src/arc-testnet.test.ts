@@ -156,7 +156,7 @@ describe('Arc testnet — registry entry', () => {
     });
   });
 
-  it('announces EURC in euro units with live settlement acceptance pending', () => {
+  it('announces EURC in euro units (usdPegged false)', () => {
     const chain = getChainByName(ARC)!;
 
     expect(Object.keys(chain.tokens ?? {})).toEqual(['usdc', 'eurc']);

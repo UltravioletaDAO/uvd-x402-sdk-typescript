@@ -696,7 +696,8 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   // Pinned by src/arc-testnet.test.ts.
   //
   // Mainnet (5042) and testnet (5042002) were verified independently against
-  // their official RPCs on 2026-09-16. EURC domains checked on 2026-09-17; live payments pending.
+  // their official RPCs on 2026-09-16. EURC domains checked on 2026-09-17; funded EURC payments settled on Arc mainnet on
+  // 2026-09-22 (x402 v1/v2, docs/networks/arc.md); testnet pending.
   arc: {
     chainId: 5042,
     chainIdHex: '0x13b2',
