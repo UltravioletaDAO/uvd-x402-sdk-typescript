@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Docs: EURC on Arc mainnet is confirmed with funded payments through the public facilitator (x402 v1 and v2, 2026-09-22, hashes in `docs/networks/arc.md`); Arc testnet funded acceptance stays pending. The README network table listed Arc and Arc Testnet as USDC-only since 2.94.0 added EURC: fixed, and `src/readme-eurc-table.test.ts` now pins the table's EURC column to the registry in both directions. No runtime change.
+
 ## [2.96.0] - 2026-09-17
 
 - Add portable signed facilitator receipts for Arc exact USDC/EURC and Hedera USDC, including both mainnet and testnet.

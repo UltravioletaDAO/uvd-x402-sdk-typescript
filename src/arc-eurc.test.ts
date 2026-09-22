@@ -9,7 +9,7 @@ describe.each([
     '25fe3beaae16ef5c1cb9757c6efc1bf33f81ecd4c7dae191320372013b7d2175'],
   ['arc-testnet', 5042002, '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a',
     '649ec6b0634bd74f28684781d2c9ae49dff14ba3d5f9bb5d70c1e1f0e1ebf160'],
-] as const)('EURC on %s (offline; live settlement pending)', (network, chainId, address, separator) => {
+] as const)('EURC on %s (offline signing and domain isolation)', (network, chainId, address, separator) => {
   it.each([1, 2] as const)('signs euro units and preserves the asset in v%s', async (version) => {
     const chain = getChainByName(network)!;
     const token = getTokenConfig(network, 'eurc')!;
