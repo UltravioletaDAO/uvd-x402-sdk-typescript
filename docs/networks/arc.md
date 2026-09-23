@@ -14,7 +14,7 @@ Both networks use USDC `0x3600000000000000000000000000000000000000` with EIP-712
 
 The chain ID is part of the signature domain. An authorization signed on mainnet cannot be reused on testnet. The SDK preserves their distinct registry entries and CAIP-2 identifiers.
 
-The facilitator URL is `https://facilitator.ultravioletadao.xyz`. Check `/supported` at runtime when using another facilitator. USYC, Gateway, contract-wallet signatures/EIP-6492, `upto`, escrow and ERC-8004 writes are outside this Arc release.
+The facilitator URL is `https://facilitator.ultravioletadao.xyz`. Check `/supported` at runtime when using another facilitator. USYC, Gateway, contract-wallet signatures/EIP-6492, `upto` and escrow are outside this Arc release. ERC-8004 identity and reputation are covered since 2.98.0: see [ERC-8004 on Arc](#erc-8004-on-arc-2980).
 
 ## EURC: prices in euros
 
@@ -169,3 +169,52 @@ same 0.01 EURC with `signPayment({ amount: '0.01', tokenType: 'eurc' })` →
 the funded wallet (verify only, no third settlement). Replaying each settle body
 did not debit the payer again (measured by payer balance); in v1 the replay
 returned the original transaction hash. Arc testnet remains pending.
+
+## ERC-8004 on Arc (2.98.0)
+
+`arc` and `arc-testnet` are `Erc8004Network`s with the canonical registries, and
+`arc` is in `RELAYED_FEEDBACK_NETWORKS`, where the rating is recorded under the
+rater's own address. `arc-testnet` has reads only: the facilitator serves
+identity and reputation there, but no `FeedbackDelegate` is deployed, so
+`supportsRelayedFeedback('arc-testnet')` is `false`.
+
+| | `arc` (5042) | `arc-testnet` (5042002) |
+|---|---|---|
+| Identity Registry | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
+| Reputation Registry | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
+| Validation Registry | `0x8004Cc8439f36fd5F9F049D9fF86523Df6dAAB58` | `0x8004Cb1BF31DAf7788923b405b754f57acEB4272` |
+| Relayed feedback | yes: v4 delegate `0x955Cc9fB9aB95FC0821ae74197D273dde5dA84f1` | no (`prepare` answers 400) |
+
+These are the addresses the facilitator names in `ARC_MAINNET_CONTRACTS` and
+`ARC_TESTNET_CONTRACTS` (x402-rs 2.39.0). Measured on 2026-09-23:
+
+- Every registry has code: a 130-byte EIP-1967 proxy whose implementation slot
+  holds the same address as on Base (mainnet) and Base Sepolia (testnet), with
+  `getVersion()` = `2.0.0`. Mainnet was read on `rpc.mainnet.arc.io`, testnet on
+  both `rpc.testnet.arc.io` and `rpc.testnet.arc.network`.
+- The delegate has code on mainnet (5857 bytes), `VERSION()` = 4 and
+  `REPUTATION_REGISTRY()` = the mainnet registry. The address has no code on
+  testnet.
+- The facilitator (2.39.0) lists both networks in `GET /feedback` →
+  `supportedNetworks`, and `GET /identity/{arc,arc-testnet}/1` answers 200.
+  `POST /feedback/evm/prepare` answers 200 on `arc` and offers that delegate
+  and chain 5042. On `arc-testnet` it answers 400 `relayed feedback is not
+  available on arc-testnet: no FeedbackDelegate is deployed there yet`.
+- The first relayed rating on Arc is
+  [0x0f8c7f7548382885d7674b5773823d560dd242596725acea4c8b4af92674bb2d](https://explorer.arc.io/tx/0x0f8c7f7548382885d7674b5773823d560dd242596725acea4c8b4af92674bb2d)
+  (type 4, block 22313930). Its `NewFeedback` names the rater, not the
+  facilitator, as the client.
+
+```typescript
+import { Erc8004Client, supportsRelayedFeedback } from 'uvd-x402-sdk/backend';
+
+const erc8004 = new Erc8004Client();
+const identity = await erc8004.getIdentity('arc', 1);
+const reputation = await erc8004.getReputation('arc', 1);
+
+supportsRelayedFeedback('arc');         // true  -> prepareRelayedFeedback / submitRelayedFeedback
+supportsRelayedFeedback('arc-testnet'); // false -> no delegate on testnet
+```
+
+Gas on Arc is USDC. The facilitator pays it for the relayed rating, as it does
+for payments.

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.98.0] - 2026-09-23
+
+- ERC-8004 on Arc. `arc` and `arc-testnet` are now `Erc8004Network`s, and `ERC8004_CONTRACTS` carries the canonical registries for both: identity, reputation and validation. On `arc` these are `0x8004A169…a432`, `0x8004BAa1…9b63` and `0x8004Cc84…AB58`; on `arc-testnet`, `0x8004A818…BD9e`, `0x8004B663…8713` and `0x8004Cb1B…4272`. These are the addresses the facilitator names in `ARC_MAINNET_CONTRACTS` / `ARC_TESTNET_CONTRACTS`. Each was read on-chain on 2026-09-23: an EIP-1967 proxy with the same implementation as Base / Base Sepolia, and `getVersion()` = 2.0.0.
+- `arc` joins `RELAYED_FEEDBACK_NETWORKS`, so `supportsRelayedFeedback('arc')` is `true`. Its v4 `FeedbackDelegate` is `0x955Cc9fB9aB95FC0821ae74197D273dde5dA84f1` (facilitator 2.38.0+), and the rating is recorded under the rater's address. `arc-testnet` stays out: the facilitator serves ERC-8004 reads there, but `POST /feedback/evm/prepare` answers 400 because no delegate is deployed.
+- No other network changed. `src/erc8004-arc.test.ts` pins the three exported lists as 2.97.0 built them: the 2.97.0 table entries must stay byte-identical, the only additions to the table are `arc` / `arc-testnet`, the only addition to the relayed rail is `arc`, and the Solana rail is untouched.
+- Docs: the README's ERC-8004 network list is 23 (21 EVM + 2 Solana). It had also been missing `scroll`, and it named Base `base-mainnet`, a spelling the facilitator rejects. `docs/networks/arc.md` gains an ERC-8004 section with the measurements.
+
 ## [2.97.0] - 2026-09-23
 
 - One purchase binding per payment: every `/verify` and `/settle` call now carries an `Idempotency-Key`, the same one for both calls of a payment and for every retry. `verifyAndSettle` and the Express/Hono middlewares create one per payment; `verify`/`settle`/`verifyAndSettle` accept `{ idempotencyKey }` and report the key they sent. New `createIdempotencyKey()` (random, never derived from the X-PAYMENT).
