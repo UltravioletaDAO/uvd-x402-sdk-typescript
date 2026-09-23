@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import vectors from './fixtures/facilitator-receipts-v1.json';
-import { createPurchaseContext, fetchWithReceipt, parseFacilitatorReceipt, paymentResponseHeaders,
-  receiptCommitment, receiptFromResponse, validatePurchaseContext, verifyFacilitatorReceipt } from './receipts';
+import { createPurchaseContext, fetchWithReceipt, mergeHeaderList, mergePaymentResponseHeaders, parseFacilitatorReceipt,
+  paymentResponseHeaders, receiptCommitment, receiptFromResponse, validatePurchaseContext, verifyFacilitatorReceipt } from './receipts';
 import type { X402FetchOptions } from './types';
 
 describe('portable facilitator receipts', () => {
@@ -71,5 +71,25 @@ describe('portable facilitator receipts', () => {
     headers.append('PAYMENT-RESPONSE', headers.get('PAYMENT-RESPONSE')!);
     expect(() => receiptFromResponse(new Response('untouched', { headers }))).toThrow('ambiguous');
     expect(() => parseFacilitatorReceipt({ ...vectors.cases[0].receipt, schemaVersion: 2 })).toThrow('unsupported');
+  });
+});
+
+describe('payment response headers on a response that already has CORS and cache headers', () => {
+  it('adds list entries without dropping or repeating the ones already there', () => {
+    expect(mergeHeaderList(undefined, 'PAYMENT-RESPONSE, X-PAYMENT-RESPONSE')).toBe('PAYMENT-RESPONSE, X-PAYMENT-RESPONSE');
+    expect(mergeHeaderList('X-Request-Id', 'PAYMENT-RESPONSE, X-PAYMENT-RESPONSE')).toBe('X-Request-Id, PAYMENT-RESPONSE, X-PAYMENT-RESPONSE');
+    expect(mergeHeaderList('payment-response,X-Trace', 'PAYMENT-RESPONSE, X-PAYMENT-RESPONSE')).toBe('payment-response, X-Trace, X-PAYMENT-RESPONSE');
+    expect(mergeHeaderList('*', 'PAYMENT-RESPONSE')).toBe('*, PAYMENT-RESPONSE');
+    expect(mergeHeaderList('private, max-age=60', 'no-store')).toBe('private, max-age=60, no-store');
+    expect(mergeHeaderList('No-Store, max-age=0', 'no-store')).toBe('No-Store, max-age=0');
+  });
+
+  it('merges only the list headers; the payment result itself is always the new one', () => {
+    const existing: Record<string, string> = { 'access-control-expose-headers': 'X-Request-Id', 'cache-control': 'public', 'payment-response': 'stale' };
+    const merged = mergePaymentResponseHeaders({ success: true }, name => existing[name.toLowerCase()]);
+    expect(merged['Access-Control-Expose-Headers']).toBe('X-Request-Id, PAYMENT-RESPONSE, X-PAYMENT-RESPONSE');
+    expect(merged['Cache-Control']).toBe('public, no-store');
+    expect(merged['PAYMENT-RESPONSE']).toBe(paymentResponseHeaders({ success: true })['PAYMENT-RESPONSE']);
+    expect(mergePaymentResponseHeaders({ success: true }, () => undefined)).toEqual(paymentResponseHeaders({ success: true }));
   });
 });

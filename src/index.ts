@@ -466,6 +466,17 @@ export {
   SETTLEMENT_UNCONFIRMED,
   isSettlementUnconfirmed,
   parseFacilitatorErrorBody,
+  // One purchase binding per payment. An authorization the facilitator already
+  // admitted is answered 409 to a resend without it: the X-PAYMENT was used.
+  IDEMPOTENCY_KEY_HEADER,
+  IDEMPOTENT_REPLAYED_HEADER,
+  createIdempotencyKey,
+  AUTHORIZATION_ALREADY_SETTLED,
+  AUTHORIZATION_IN_FLIGHT,
+  RECEIPT_REQUEST_CONFLICT,
+  isAuthorizationAlreadyUsed,
+  isAuthorizationInFlight,
+  buildPaymentConflictResponse,
 } from './backend';
 export type {
   ResourceInfoV2,
@@ -483,6 +494,11 @@ export type {
   FacilitatorFetchOptions,
   ParsedFacilitatorErrorBody,
   WriterLeaseReason,
+  VerifyResponse,
+  SettleResponse,
+  FacilitatorCallOptions,
+  AdmittedAuthorizationCode,
+  PaymentConflictResponse,
 } from './backend';
 
 // Native Hedera; the optional signing peer remains lazily loaded.

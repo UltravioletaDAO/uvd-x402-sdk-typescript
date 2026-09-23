@@ -1,7 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [2.97.0] - 2026-09-23
 
+- One purchase binding per payment: every `/verify` and `/settle` call now carries an `Idempotency-Key`, the same one for both calls of a payment and for every retry. `verifyAndSettle` and the Express/Hono middlewares create one per payment; `verify`/`settle`/`verifyAndSettle` accept `{ idempotencyKey }` and report the key they sent. New `createIdempotencyKey()` (random, never derived from the X-PAYMENT).
+- Facilitators with durable receipts return an admitted payment's original answer only to the binding that admitted it. The SDK now reads their refusals as data instead of a `500`: `authorization_already_settled` and `receipt_request_conflict` (`/settle` 409, `/verify` `isValid: false`) are not retryable, and `authorization_in_flight` is `retryable` to learn the verdict. New `AUTHORIZATION_ALREADY_SETTLED`, `AUTHORIZATION_IN_FLIGHT`, `RECEIPT_REQUEST_CONFLICT`, `isAuthorizationAlreadyUsed`, `isAuthorizationInFlight`, `buildPaymentConflictResponse`.
+- `SettleResponse.replayed` reports `Idempotent-Replayed: true`. A replay reached with a fresh key and no purchase context (older facilitators replay to any resend) is answered as `authorization_already_settled` / `authorization_in_flight`, without the success fields a caller could deliver on. A replay bound by the caller's key or the buyer's `X-UVD-Purchase` is kept. A `2xx` body `error` (e.g. `settlement_in_progress`) is now `errorCode`.
+- Express and Hono middlewares: an X-PAYMENT already used is answered `409` (or `503` + `Retry-After` while in flight) and the handler does not run, never `402` or `500`; `PAYMENT-RESPONSE` is added to an existing `Access-Control-Expose-Headers` and `no-store` to an existing `Cache-Control` instead of replacing them (`mergePaymentResponseHeaders`, `mergeHeaderList`); in `'manual'` mode a `settle()` after the handler answered no longer sets headers on the sent response (Express threw `ERR_HTTP_HEADERS_SENT` and `settle()` rejected). The merchant's key is not propagated to the buyer.
+- Facilitators and networks without receipts: responses are read exactly as before (tests with facilitator doubles). They receive the new header; the facilitator's own settle cache only matches a retry of the same payment's settle.
 - Docs: EURC on Arc mainnet is confirmed with funded payments through the public facilitator (x402 v1 and v2, 2026-09-22, hashes in `docs/networks/arc.md`); Arc testnet funded acceptance stays pending. The README network table listed Arc and Arc Testnet as USDC-only since 2.94.0 added EURC: fixed, and `src/readme-eurc-table.test.ts` now pins the table's EURC column to the registry in both directions. No runtime change.
 
 ## [2.96.0] - 2026-09-17

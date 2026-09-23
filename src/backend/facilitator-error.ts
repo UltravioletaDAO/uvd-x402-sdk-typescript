@@ -67,7 +67,31 @@
  * (`uvd_x402_sdk/client.py`, `_is_retryable_settle_error`) while this one had
  * only the status to go on.
  *
- * Source of the shape: x402-rs `src/handlers.rs` `writer_lease_unavailable()`
+ * # The `409`s of an authorization the facilitator already admitted
+ *
+ * On networks with durable receipts the facilitator answers a resend of an
+ * admitted authorization with its ORIGINAL answer only when the resend carries
+ * the purchase binding that admitted it: the same `Idempotency-Key`, or the
+ * same `X-UVD-Purchase` capability. That answer is marked
+ * `Idempotent-Replayed: true`. Possession of the signed payment alone is not a
+ * binding, so a resend without one is refused:
+ *
+ * | code (`/settle` 409 `error`, `/verify` `invalidReason`) | payment state      | serve it? | retry?                                   |
+ * |-----------------------------------|--------------------|-----------|------------------------------------------|
+ * | `authorization_already_settled`   | confirmed          | **no**    | no — this X-PAYMENT was already used     |
+ * | `authorization_in_flight`         | pending / unknown  | **no**    | yes, the SAME request, to learn the verdict; only the admitting binding gets the original answer |
+ * | `receipt_request_conflict`        | another purchase   | **no**    | no                                       |
+ *
+ * None of them is a rejection of the signature, so none may be answered `402`
+ * (the buyer would sign a second payment for a purchase whose first payment
+ * settled or is settling), and none is a server fault, so none is a `500`.
+ * The facilitator never admits a replacement payment for any of them.
+ *
+ * Read from x402-rs `src/receipts/mod.rs` (`replay`, `verify`,
+ * `admitted_reason`) and `docs/facilitator-receipts.md`, "Replays of an
+ * admitted authorization" (facilitator 2.39.0).
+ *
+ * Source of the other shapes: x402-rs `src/handlers.rs` `writer_lease_unavailable()`
  * and `require_writer_lease()`; `SettlementUnconfirmedResponse` in
  * `src/types.rs`, built in the `IntoResponse` of `FacilitatorLocalError`.
  */
@@ -123,6 +147,33 @@ export const AMBIGUOUS_LEASE_REASONS: readonly WriterLeaseReason[] = ['forward_f
  * never be retried; reconcile with `transaction` / `paymentId` instead.
  */
 export const SETTLEMENT_UNCONFIRMED = 'settlement_unconfirmed';
+
+/**
+ * The authorization was already admitted and its payment is confirmed; this
+ * request does not carry the binding that admitted it. This X-PAYMENT was
+ * used: do not serve the purchase again and do not ask for a new signature.
+ */
+export const AUTHORIZATION_ALREADY_SETTLED = 'authorization_already_settled';
+
+/**
+ * The authorization was already admitted and its payment is still pending or
+ * unknown; this request does not carry the binding that admitted it. Resend
+ * the SAME request later to learn the verdict, never a new signature. Only the
+ * admitting `Idempotency-Key` or `X-UVD-Purchase` gets the original answer.
+ */
+export const AUTHORIZATION_IN_FLIGHT = 'authorization_in_flight';
+
+/**
+ * The authorization, purchase capability or idempotency key already belongs
+ * to a different request. Nothing was admitted and nothing will be.
+ */
+export const RECEIPT_REQUEST_CONFLICT = 'receipt_request_conflict';
+
+/** The codes of an authorization the facilitator admitted for another request. */
+export type AdmittedAuthorizationCode =
+  | typeof AUTHORIZATION_ALREADY_SETTLED
+  | typeof AUTHORIZATION_IN_FLIGHT
+  | typeof RECEIPT_REQUEST_CONFLICT;
 
 /**
  * Ceiling, in seconds, on how long an automatic retry will wait.
@@ -366,6 +417,31 @@ export function isSettlementUnconfirmed(failure: {
 }
 
 /**
+ * This payment authorization was already used for another request.
+ *
+ * True for {@link AUTHORIZATION_ALREADY_SETTLED} and
+ * {@link RECEIPT_REQUEST_CONFLICT}, on `/settle` and on `/verify` alike. Do not
+ * serve the purchase again, and do not answer `402`: the buyer's payment was
+ * not refused, and a new signature would pay a second time.
+ */
+export function isAuthorizationAlreadyUsed(failure: { errorCode?: string }): boolean {
+  return (
+    failure.errorCode === AUTHORIZATION_ALREADY_SETTLED ||
+    failure.errorCode === RECEIPT_REQUEST_CONFLICT
+  );
+}
+
+/**
+ * This payment authorization is being settled for another request.
+ *
+ * `retryable` is true: the same request may be resent to learn the verdict.
+ * The purchase is served only to the binding that admitted it.
+ */
+export function isAuthorizationInFlight(failure: { errorCode?: string }): boolean {
+  return failure.errorCode === AUTHORIZATION_IN_FLIGHT;
+}
+
+/**
  * Turn a non-2xx facilitator response into {@link FacilitatorErrorInfo}.
  *
  * Reads the body exactly once. The `error` string keeps the historical format
@@ -397,7 +473,16 @@ export async function readFacilitatorError(response: {
   // Only ever DOWNGRADES. A body claiming `retryable: true` on a 402 must not
   // make this SDK resend a credential the facilitator genuinely refused, so the
   // status stays the ceiling and the body is only allowed to lower it.
-  const retryable = transportRetryable && !isDeclaredUnretryable(parsed);
+  //
+  // The one exception is NAMED, not read from a flag: `409
+  // authorization_in_flight`. Its body says `retryable: false` because this
+  // request will never get the original answer, but the verdict is still
+  // coming, and resending the SAME request is how a caller without the
+  // admitting binding learns it: the facilitator admits no replacement
+  // payment for an admitted authorization, so the resend can only come back
+  // as `authorization_already_settled` or as the original rejection.
+  const inFlight = status === 409 && parsed.errorCode === AUTHORIZATION_IN_FLIGHT;
+  const retryable = inFlight || (transportRetryable && !isDeclaredUnretryable(parsed));
   const retryAfterSeconds = retryable
     ? (parseRetryAfterSeconds(response) ?? DEFAULT_RETRY_AFTER_SECONDS)
     : undefined;
