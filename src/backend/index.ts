@@ -1,4 +1,5 @@
-import { parseFacilitatorReceipt, receiptFromErrorBody, paymentResponseHeaders, validatePurchaseContext, type FacilitatorReceipt } from "../receipts";
+import { parseFacilitatorReceipt, receiptFromErrorBody, mergePaymentResponseHeaders, validatePurchaseContext, type FacilitatorReceipt } from "../receipts";
+import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 export * from "../receipts";
 import { parseUnits } from 'ethers';
 import { buildHederaRequirements, type HederaNetwork } from '../providers/hedera';
@@ -92,9 +93,13 @@ import type {
 import { X402Error } from '../types';
 import { getChainByName, isUsdPegged, usdConversionError } from '../chains';
 import {
+  AUTHORIZATION_ALREADY_SETTLED,
+  AUTHORIZATION_IN_FLIGHT,
   DEFAULT_RETRY_AFTER_SECONDS,
   SETTLEMENT_UNCONFIRMED,
   carryFailureFields,
+  isAuthorizationAlreadyUsed,
+  isAuthorizationInFlight,
   isReplayableLeaseReason,
   facilitatorFetch,
   failureFields,
@@ -108,15 +113,20 @@ import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitat
 // see ./facilitator-error.ts for why that costs the buyer a second payment.
 export {
   AMBIGUOUS_LEASE_REASONS,
+  AUTHORIZATION_ALREADY_SETTLED,
+  AUTHORIZATION_IN_FLIGHT,
   DEFAULT_FACILITATOR_RETRIES,
   DEFAULT_RETRY_AFTER_SECONDS,
   MAX_RETRY_AFTER_SECONDS,
+  RECEIPT_REQUEST_CONFLICT,
   REPLAYABLE_LEASE_REASONS,
   SETTLEMENT_UNCONFIRMED,
   WRITER_LEASE_REASONS,
   carryFailureFields,
   facilitatorFetch,
   isAmbiguousLeaseReason,
+  isAuthorizationAlreadyUsed,
+  isAuthorizationInFlight,
   isReplayableLeaseReason,
   isSettlementUnconfirmed,
   parseFacilitatorErrorBody,
@@ -124,6 +134,7 @@ export {
   readFacilitatorError,
 } from './facilitator-error';
 export type {
+  AdmittedAuthorizationCode,
   FacilitatorErrorInfo,
   FacilitatorFailureFields,
   FacilitatorFetchOptions,
@@ -210,6 +221,12 @@ export interface VerifyResponse extends FacilitatorFailureFields {
   invalidReason?: string;
   payer?: string;
   network?: string;
+  /**
+   * The `Idempotency-Key` this verification carried. Settle the same payment
+   * with it (`settle(..., { idempotencyKey })`) so both calls present one
+   * purchase binding. Merchant-private: never forward it to the buyer.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -244,6 +261,26 @@ export interface SettleResponse extends FacilitatorFailureFields {
    * DX402's `anchorEvidence` needs to reach `verified: true`.
    */
   proofOfPayment?: ProofOfPayment;
+  /**
+   * The facilitator answered `Idempotent-Replayed: true`: this is its stored
+   * answer to an EARLIER settle of this authorization, and no new money moved.
+   *
+   * It is this caller's own purchase only when the call carried the binding
+   * that admitted it -- the same `idempotencyKey`, or the same
+   * `X-UVD-Purchase` context. A settle made with a fresh key and no context
+   * cannot have admitted anything before, so this client, `verifyAndSettle`
+   * and both middlewares answer such a replay as
+   * {@link AUTHORIZATION_ALREADY_SETTLED} (or {@link AUTHORIZATION_IN_FLIGHT})
+   * instead of a success: the resource must not be served again. Facilitators
+   * from 2.39.0 refuse that resend with the same codes themselves.
+   */
+  replayed?: boolean;
+  /**
+   * The `Idempotency-Key` this settle carried. After a lost response, resend
+   * the same payment with it to receive the original answer instead of a
+   * `409`. Merchant-private: never forward it to the buyer.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -304,7 +341,16 @@ export interface VerifiedPaymentState {
   payment: X402Header;
   requirements: PaymentRequirements;
   verifyResult: VerifyResponse;
+  /**
+   * Settles once; later calls return the same result. A facilitator replay that
+   * this request did not bind (no `X-UVD-Purchase`) comes back as
+   * {@link AUTHORIZATION_ALREADY_SETTLED} or {@link AUTHORIZATION_IN_FLIGHT},
+   * never as a success, so a replayed X-PAYMENT is not served twice. The
+   * receipt headers are added only while the response has not been sent.
+   */
   settle: () => Promise<SettleResponse>;
+  /** The key sent on this payment's `/verify` and `/settle`. Merchant-private. */
+  idempotencyKey?: string;
 }
 
 /**
@@ -946,6 +992,113 @@ export function getCorsHeaders(origin: string = '*'): Record<string, string> {
 // FACILITATOR CLIENT
 // ============================================================================
 
+/** The header that binds `/verify` and `/settle` of one payment to one purchase. */
+export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
+
+/** The header with which the facilitator marks a stored answer, not a new settle. */
+export const IDEMPOTENT_REPLAYED_HEADER = 'Idempotent-Replayed';
+
+/**
+ * A new, unguessable `Idempotency-Key` for ONE payment.
+ *
+ * Send the same key on that payment's `/verify` and `/settle` and on every
+ * retry of either; after a lost response, the key is what earns the
+ * facilitator's original answer back. It is random on purpose: a key derived
+ * from the X-PAYMENT would be known to anyone holding the payment, and holding
+ * the payment is exactly what the facilitator refuses to accept as a binding.
+ * Persist it with your order if you need to resume after a restart.
+ */
+export function createIdempotencyKey(): string {
+  return `x402-${bytesToHex(randomBytes(32))}`;
+}
+
+/** Throws on a key the facilitator or a header cannot carry. */
+function checkIdempotencyKey(key: string): string {
+  // `receipt:` is reserved by the facilitator (400 reserved_idempotency_key),
+  // and the legacy store uses the key as a table key: keep it short and plain.
+  if (typeof key !== 'string' || !/^[\x21-\x7e]{1,255}$/.test(key) || key.startsWith('receipt:')) {
+    throw new Error('idempotencyKey must be 1-255 visible ASCII characters and must not start with "receipt:"');
+  }
+  return key;
+}
+
+/** Whether the facilitator marked this answer `Idempotent-Replayed: true`. */
+function isReplayed(response: { headers?: { get?: (name: string) => string | null } }): boolean {
+  try {
+    return response?.headers?.get?.(IDEMPOTENT_REPLAYED_HEADER)?.trim().toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A replay that the request did not bind is somebody else's purchase.
+ *
+ * Only for a settle whose key is fresh and which carried no purchase context:
+ * such a call cannot have admitted the authorization, so a replay reached it
+ * through possession of the payment alone. Answered the way facilitator 2.39.0
+ * answers it -- `authorization_already_settled` / `authorization_in_flight` --
+ * without the success artefacts a caller could deliver on. The receipt stays.
+ * A replayed rejection is still the original rejection and passes unchanged.
+ */
+function refuseUnboundReplay(result: SettleResponse): SettleResponse {
+  if (!result.replayed) return result;
+  const pending = result.receipt?.status === 'pending' || result.receipt?.status === 'unknown'
+    || result.errorCode === 'settlement_in_progress';
+  if (!result.success && !pending) return result;
+  const {
+    transactionHash: _tx, proofOfPayment: _proof, paymentId: _id, transaction: _t,
+    retryAfterSeconds, ...rest
+  } = result;
+  if (result.success) {
+    return { ...rest, success: false, error: AUTHORIZATION_ALREADY_SETTLED,
+      errorCode: AUTHORIZATION_ALREADY_SETTLED, retryable: false, safeToReplay: false };
+  }
+  return { ...rest, success: false, error: AUTHORIZATION_IN_FLIGHT, errorCode: AUTHORIZATION_IN_FLIGHT,
+    retryable: true, safeToReplay: false, retryAfterSeconds: retryAfterSeconds ?? DEFAULT_RETRY_AFTER_SECONDS };
+}
+
+/** Per-call options of {@link FacilitatorClient.verify} and {@link FacilitatorClient.settle}. */
+export interface FacilitatorCallOptions {
+  /** A validated `X-UVD-Purchase` value, forwarded unchanged (see `validatePurchaseContext`). */
+  receiptContext?: string;
+  /**
+   * The payment's `Idempotency-Key` (see {@link createIdempotencyKey}). Pass the
+   * SAME key to `verify` and `settle` of one payment and to their retries.
+   * Omitted, the call sends a fresh key and reports it back as
+   * `result.idempotencyKey`.
+   */
+  idempotencyKey?: string;
+}
+
+/** Headers of a `/verify` or `/settle` call: the payment's binding travels on both. */
+function facilitatorHeaders(idempotencyKey: string, receiptContext?: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    [IDEMPOTENCY_KEY_HEADER]: idempotencyKey,
+    ...(receiptContext ? { 'X-UVD-Purchase': receiptContext } : {}),
+  };
+}
+
+/**
+ * The failure fields of a `/verify` that names an admitted authorization.
+ *
+ * `/verify` answers these with HTTP 200 and `isValid: false`, so without this
+ * they look like a refused signature -- and a 402 asks the buyer to sign again
+ * for a purchase that is already paid or being paid.
+ */
+function admittedVerdict(result: { isValid?: unknown; invalidReason?: unknown }): FacilitatorFailureFields {
+  if (result.isValid !== false) return {};
+  if (result.invalidReason === AUTHORIZATION_IN_FLIGHT) {
+    return { errorCode: AUTHORIZATION_IN_FLIGHT, retryable: true, safeToReplay: false,
+      retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS };
+  }
+  if (result.invalidReason === AUTHORIZATION_ALREADY_SETTLED) {
+    return { errorCode: AUTHORIZATION_ALREADY_SETTLED, retryable: false, safeToReplay: false };
+  }
+  return {};
+}
+
 /**
  * Options for the FacilitatorClient
  */
@@ -1037,15 +1190,23 @@ export class FacilitatorClient {
    *
    * Call this before providing the paid resource to validate the payment.
    *
+   * An authorization the facilitator already admitted for another request
+   * comes back invalid with `errorCode` {@link AUTHORIZATION_ALREADY_SETTLED}
+   * (do not serve, do not ask for a new signature) or
+   * {@link AUTHORIZATION_IN_FLIGHT} (`retryable`: the same request learns the
+   * verdict later). Neither is a rejected payment: never answer them with 402.
+   *
    * @param paymentHeader - Parsed x402 payment header
    * @param requirements - Payment requirements
+   * @param options - Purchase context and the payment's `idempotencyKey`
    * @returns Verification result
    */
   async verify(
     paymentHeader: X402Header,
     requirements: PaymentRequirements,
-    options: { receiptContext?: string } = {},
+    options: FacilitatorCallOptions = {},
   ): Promise<VerifyResponse> {
+    const idempotencyKey = checkIdempotencyKey(options.idempotencyKey ?? createIdempotencyKey());
     // Not `buildVerifyRequest` any more. That one only speaks v1, so a seller
     // advertising CAIP-2 -- which this SDK's own Hono middleware does by itself
     // -- could not reach the facilitator at all: the body came back 400 with
@@ -1061,7 +1222,7 @@ export class FacilitatorClient {
         `${this.baseUrl}/verify`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(options.receiptContext ? { 'X-UVD-Purchase': options.receiptContext } : {}) },
+          headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
           body: JSON.stringify(body),
         },
         { timeoutMs: this.timeout, retries: this.retries },
@@ -1078,11 +1239,12 @@ export class FacilitatorClient {
           invalidReason: error.error,
           ...failureFields(error),
           receipt: receiptFromErrorBody(error.body),
+          idempotencyKey,
         };
       }
 
       const result = await response.json();
-      return { ...result, receipt: parseFacilitatorReceipt(result.receipt) };
+      return { ...result, ...admittedVerdict(result), receipt: parseFacilitatorReceipt(result.receipt), idempotencyKey };
     } catch (error) {
       // A thrown error is a transport failure (timeout, DNS, connection reset).
       // No verdict was reached either, so it is retryable for exactly the same
@@ -1093,6 +1255,7 @@ export class FacilitatorClient {
         retryable: true,
         safeToReplay: false,
         retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
+        idempotencyKey,
       };
     }
   }
@@ -1102,15 +1265,29 @@ export class FacilitatorClient {
    *
    * Call this after providing the paid resource to execute the on-chain transfer.
    *
+   * Send the `idempotencyKey` the payment was verified with, and the same one
+   * on any retry: it is the binding that earns the original answer back after
+   * a lost response (`replayed: true`). Without it, or with another one, an
+   * authorization already admitted comes back `409`
+   * {@link AUTHORIZATION_ALREADY_SETTLED}, {@link AUTHORIZATION_IN_FLIGHT} or
+   * {@link RECEIPT_REQUEST_CONFLICT} -- the X-PAYMENT was used; do not serve it
+   * again. With no key and no context the call uses a fresh key, so a replay
+   * it receives is refused the same way.
+   *
    * @param paymentHeader - Parsed x402 payment header
    * @param requirements - Payment requirements
+   * @param options - Purchase context and the payment's `idempotencyKey`
    * @returns Settlement result with transaction hash
    */
   async settle(
     paymentHeader: X402Header,
     requirements: PaymentRequirements,
-    options: { receiptContext?: string } = {},
+    options: FacilitatorCallOptions = {},
   ): Promise<SettleResponse> {
+    // A fresh key with no purchase context binds nothing an earlier settle
+    // could have admitted, so any replay this call receives is unbound.
+    const unbound = options.idempotencyKey === undefined && !options.receiptContext;
+    const idempotencyKey = checkIdempotencyKey(options.idempotencyKey ?? createIdempotencyKey());
     const body = buildSettleRequestForVersion(
       paymentHeader,
       requirements,
@@ -1130,7 +1307,8 @@ export class FacilitatorClient {
         `${this.baseUrl}/settle`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...(options.receiptContext ? { 'X-UVD-Purchase': options.receiptContext } : {}) },
+          // The same init, key included, goes out on every automatic retry.
+          headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
           body: JSON.stringify(body),
         },
         { timeoutMs: settleTimeout, retries: this.retries },
@@ -1142,6 +1320,7 @@ export class FacilitatorClient {
           error: error.error,
           ...failureFields(error),
           receipt: receiptFromErrorBody(error.body),
+          idempotencyKey,
         };
       }
 
@@ -1167,7 +1346,7 @@ export class FacilitatorClient {
             'transaction/transactionHash/transaction_hash — treat delivery as unconfirmed'
         );
       }
-      return {
+      const settled: SettleResponse = {
         // Read the facilitator's verdict instead of asserting one.
         //
         // This was the literal `true`, so a settle was reported successful
@@ -1199,18 +1378,25 @@ export class FacilitatorClient {
         receipt: parseFacilitatorReceipt(result.receipt),
         paymentId: result.paymentId,
         ...(result.receipt?.status === "unknown" || result.receipt?.status === "pending" ? { retryable: true, safeToReplay: false } : {}),
+        // `202 settlement_in_progress` and friends: a 2xx that names its state.
+        ...(!result.success && typeof result.error === 'string' && result.error ? { errorCode: result.error } : {}),
+        ...(isReplayed(response) ? { replayed: true } : {}),
+        idempotencyKey,
       };
+      return unbound ? refuseUnboundReplay(settled) : settled;
     } catch (error) {
       // Timeout or connection failure. The write may have landed -- this is the
       // same ambiguity as `forward_failed`, so it is retryable but never
       // replayed automatically. Reconcile on-chain, or by transaction hash,
-      // before sending anything again.
+      // before sending anything again -- with `idempotencyKey`, which is what
+      // gets the original answer back.
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
         retryable: true,
         safeToReplay: false,
         retryAfterSeconds: DEFAULT_RETRY_AFTER_SECONDS,
+        idempotencyKey,
       };
     }
   }
@@ -1221,23 +1407,38 @@ export class FacilitatorClient {
    * Convenience method that verifies first, then settles if valid.
    * Use this for simple payment flows where you don't need custom logic between verify and settle.
    *
+   * Both steps carry ONE `Idempotency-Key` (`options.idempotencyKey`, or a
+   * fresh one reported back as `idempotencyKey`). With a fresh key and no
+   * purchase context, a replay of an earlier settle is not this purchase and
+   * comes back `settled: false` with `errorCode`
+   * {@link AUTHORIZATION_ALREADY_SETTLED}.
+   *
    * @param paymentHeader - Parsed x402 payment header
    * @param requirements - Payment requirements
+   * @param options - Purchase context and the payment's `idempotencyKey`
    * @returns Combined result with verify and settle status
    */
   async verifyAndSettle(
     paymentHeader: X402Header,
-    requirements: PaymentRequirements
+    requirements: PaymentRequirements,
+    options: FacilitatorCallOptions = {},
   ): Promise<
     {
       verified: boolean;
       settled: boolean;
       transactionHash?: string;
       error?: string;
+      /** The facilitator answered from its record of an earlier settle. */
+      replayed?: boolean;
+      /** The key both steps carried. Merchant-private. */
+      idempotencyKey: string;
     } & FacilitatorFailureFields
   > {
+    const unbound = options.idempotencyKey === undefined && !options.receiptContext;
+    const binding = { ...options, idempotencyKey: checkIdempotencyKey(options.idempotencyKey ?? createIdempotencyKey()) };
+    const { idempotencyKey } = binding;
     // Verify first
-    const verifyResult = await this.verify(paymentHeader, requirements);
+    const verifyResult = await this.verify(paymentHeader, requirements, binding);
     if (!verifyResult.isValid) {
       // Carry the refusal's shape up. Flattening it to `verified: false` here
       // would undo the whole point one level below: the caller could not tell a
@@ -1247,17 +1448,21 @@ export class FacilitatorClient {
         settled: false,
         error: verifyResult.invalidReason,
         ...carryFailureFields(verifyResult),
+        idempotencyKey,
       };
     }
 
-    // Settle
-    const settleResult = await this.settle(paymentHeader, requirements);
+    // Settle, under the key the verification carried.
+    const answered = await this.settle(paymentHeader, requirements, binding);
+    const settleResult = unbound ? refuseUnboundReplay(answered) : answered;
     return {
       verified: true,
       settled: settleResult.success,
       transactionHash: settleResult.transactionHash,
       error: settleResult.error,
       ...carryFailureFields(settleResult),
+      ...(settleResult.replayed ? { replayed: true } : {}),
+      idempotencyKey,
     };
   }
 
@@ -1800,12 +2005,21 @@ async function resolvePaymentRequirement(
   return { requirement: matches[0] };
 }
 
+/**
+ * The settle of ONE merchant request, under the key its verification carried.
+ *
+ * The key is fresh for this request, so a replay without the buyer's
+ * `X-UVD-Purchase` was earned by possession of the X-PAYMENT alone -- a resend,
+ * not this purchase -- and is refused (see {@link refuseUnboundReplay}). With a
+ * context, the facilitator already checked the buyer's capability, and a
+ * replay is how a resumed purchase gets its answer back.
+ */
 function createVerifiedPaymentState(
   client: FacilitatorClient,
   payment: X402Header,
   requirements: PaymentRequirements,
   verifyResult: VerifyResponse,
-  receiptContext?: string,
+  binding: { idempotencyKey: string; receiptContext?: string },
   onSettled?: (result: SettleResponse) => void,
 ): VerifiedPaymentState {
   let settlePromise: Promise<SettleResponse> | null = null;
@@ -1813,11 +2027,79 @@ function createVerifiedPaymentState(
     payment,
     requirements,
     verifyResult,
+    idempotencyKey: binding.idempotencyKey,
     settle: () => {
       if (!settlePromise) {
-        settlePromise = client.settle(payment, requirements, { receiptContext }).then(result => { onSettled?.(result); return result; });
+        settlePromise = client.settle(payment, requirements, binding).then(answer => {
+          const result = binding.receiptContext ? answer : refuseUnboundReplay(answer);
+          // The payment is settled whatever happens to a header: never let
+          // attaching the receipt turn this result into a rejected promise.
+          try { onSettled?.(result); } catch (error) {
+            console.warn('[x402] settled, but the payment response headers could not be attached:', error);
+          }
+          return result;
+        });
       }
       return settlePromise;
+    },
+  };
+}
+
+/**
+ * The result as propagated to the buyer in `PAYMENT-RESPONSE`: everything but
+ * the merchant's `Idempotency-Key`, which is a binding and stays server-side.
+ */
+function propagatedResult(result: VerifyResponse | SettleResponse): Record<string, unknown> {
+  const { idempotencyKey: _key, ...propagated } = result;
+  return propagated;
+}
+
+/** The answer to an authorization the facilitator admitted for another request. */
+export interface PaymentConflictResponse {
+  /** `409` when the payment was used; `503` + `Retry-After` while it is in flight. */
+  status: 409 | 503;
+  headers: Record<string, string>;
+  body: {
+    error: string;
+    /** The facilitator's code, e.g. `authorization_already_settled`. */
+    reason?: string;
+    retryable: boolean;
+    retryAfterSeconds?: number;
+    safeToReplay: boolean;
+  };
+}
+
+/**
+ * Build the answer to a verify or settle that names an admitted authorization,
+ * or `null` when the result is something else.
+ *
+ * - {@link AUTHORIZATION_IN_FLIGHT} -> `503` + `Retry-After`: resend the SAME
+ *   request (with its `X-UVD-Purchase`, if it had one) to learn the verdict;
+ *   never sign a new authorization while this one may still settle.
+ * - {@link AUTHORIZATION_ALREADY_SETTLED}, {@link RECEIPT_REQUEST_CONFLICT} and
+ *   any other `409` from the facilitator -> `409`, not retryable: this X-PAYMENT
+ *   was already used and the purchase is not served again.
+ *
+ * Never `402` -- the payment was not refused, and a new signature would pay a
+ * second time -- and never `500`.
+ */
+export function buildPaymentConflictResponse(
+  failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
+): PaymentConflictResponse | null {
+  if (isAuthorizationInFlight(failure)) {
+    const { headers, body } = buildUnavailableResponse('Payment authorization in flight', failure);
+    return { status: 503, headers, body: { ...body, reason: AUTHORIZATION_IN_FLIGHT } };
+  }
+  const used = isAuthorizationAlreadyUsed(failure);
+  if (!used && failure.status !== 409) return null;
+  return {
+    status: 409,
+    headers: {},
+    body: {
+      error: used ? 'Payment authorization already used' : 'Payment request conflict',
+      reason: failure.errorCode ?? failure.invalidReason ?? failure.error,
+      retryable: false,
+      safeToReplay: false,
     },
   };
 }
@@ -1913,22 +2195,56 @@ export function buildUnavailableResponse(
  * public, framework-agnostic form of the same decision.
  */
 function respondUnavailable(
-  res: {
-    status: (code: number) => {
-      json: (body: unknown) => void;
-      set: (headers: Record<string, string>) => { json: (body: unknown) => void };
-    };
-  },
+  res: ExpressLikeResponse,
   message: string,
   failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
 ): void {
-  const { status, headers, body } = buildUnavailableResponse(message, failure);
+  respondExpress(res, buildUnavailableResponse(message, failure));
+}
+
+/** Send a framework-agnostic `{ status, headers, body }` through Express. */
+function respondExpress(
+  res: ExpressLikeResponse,
+  { status, headers, body }: { status: number; headers: Record<string, string>; body: unknown },
+): void {
   const staged = res.status(status);
-  if (typeof staged.set === 'function') {
+  if (Object.keys(headers).length > 0 && typeof staged.set === 'function') {
     staged.set(headers).json(body);
     return;
   }
   staged.json(body);
+}
+
+/** The slice of an Express `res` the middleware uses. Readers are optional for doubles. */
+type ExpressLikeResponse = {
+  set?: (headers: Record<string, string>) => unknown;
+  /** Node's reader of a header already set, e.g. by a CORS middleware. */
+  getHeader?: (name: string) => unknown;
+  /** Express's alias of `getHeader`. */
+  get?: (name: string) => unknown;
+  /** True once the response went out; headers can no longer be added. */
+  headersSent?: boolean;
+  status: (code: number) => {
+    json: (body: unknown) => void;
+    set: (headers: Record<string, string>) => { json: (body: unknown) => void };
+  };
+};
+
+/**
+ * Add the payment result headers to an Express response, merging the CORS
+ * expose list and the cache directives the application already set.
+ *
+ * Skipped once the response was sent: in `'manual'` mode a handler may answer
+ * first and settle afterwards, and `res.set` then throws ERR_HTTP_HEADERS_SENT.
+ */
+function setExpressPaymentHeaders(res: ExpressLikeResponse, result: VerifyResponse | SettleResponse): void {
+  if (!result.receipt || !res.set || res.headersSent) return;
+  const current = (name: string): string | undefined => {
+    const value = res.getHeader ? res.getHeader(name) : res.get?.(name);
+    if (value === undefined || value === null) return undefined;
+    return Array.isArray(value) ? value.join(', ') : String(value);
+  };
+  res.set(mergePaymentResponseHeaders(propagatedResult(result), current));
 }
 
 /**
@@ -1964,7 +2280,7 @@ export function createPaymentMiddleware(
   options: PaymentMiddlewareOptions = {}
 ): (
   req: { headers: Record<string, string | string[] | undefined>; x402?: VerifiedPaymentState; method?: string; url?: string; originalUrl?: string; rawBody?: Uint8Array },
-  res: { set?: (headers: Record<string, string>) => unknown; status: (code: number) => { json: (body: unknown) => void; set: (headers: Record<string, string>) => { json: (body: unknown) => void } } },
+  res: ExpressLikeResponse,
   next: () => void
 ) => Promise<void> {
   const client = new FacilitatorClient({
@@ -1999,10 +2315,19 @@ export function createPaymentMiddleware(
         requirements.resource = actualUrl;
       }
     } catch { res.status(400).json({ error: 'receipt_context_mismatch' }); return; }
-    const verifyResult = await client.verify(payment, requirements, { receiptContext });
-    if (verifyResult.receipt) res.set?.(paymentResponseHeaders({ ...verifyResult }));
+    // One key for this payment's verify, settle and their retries.
+    const binding = { idempotencyKey: createIdempotencyKey(), receiptContext };
+    const verifyResult = await client.verify(payment, requirements, binding);
+    setExpressPaymentHeaders(res, verifyResult);
 
     if (!verifyResult.isValid) {
+      // An authorization already admitted for another request: 409 when it was
+      // used, 503 while it settles. Serving it would deliver the purchase twice.
+      const conflict = buildPaymentConflictResponse(verifyResult);
+      if (conflict) {
+        respondExpress(res, conflict);
+        return;
+      }
       // 402 says "your payment was REJECTED, sign a new authorization". Sending
       // it for a facilitator that never reached a verdict is what makes the
       // buyer pay twice: their first authorization was never refused and is
@@ -2019,13 +2344,19 @@ export function createPaymentMiddleware(
       return;
     }
 
-    req.x402 = createVerifiedPaymentState(client, payment, requirements, verifyResult, receiptContext, result => {
-      if (result.receipt) res.set?.(paymentResponseHeaders({ ...result }));
-    });
+    req.x402 = createVerifiedPaymentState(client, payment, requirements, verifyResult, binding,
+      result => setExpressPaymentHeaders(res, result));
 
     if (settlementStrategy === 'before-handler') {
       const settleResult = await req.x402.settle();
       if (!settleResult.success) {
+        // A replayed or conflicting authorization is not a server fault: 409,
+        // or 503 while in flight -- and the handler never runs.
+        const conflict = buildPaymentConflictResponse(settleResult);
+        if (conflict) {
+          respondExpress(res, conflict);
+          return;
+        }
         // Same distinction on the settle side. A 500 tells a client its request
         // is broken and to stop; a settle that reached no verdict is the one
         // case where retrying the identical request is correct.
@@ -2121,18 +2452,50 @@ function settlementFailureBody(
 
 /** {@link respondUnavailable} for a Hono context. */
 function honoUnavailable(
-  c: {
-    json: (body: unknown, status?: number) => unknown;
-    header?: (name: string, value: string) => void;
-  },
+  c: HonoLikeContext,
   message: string,
   failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
 ): unknown {
-  const { status, headers, body } = buildUnavailableResponse(message, failure);
+  return respondHono(c, buildUnavailableResponse(message, failure));
+}
+
+/** Send a framework-agnostic `{ status, headers, body }` through Hono. */
+function respondHono(
+  c: HonoLikeContext,
+  { status, headers, body }: { status: number; headers: Record<string, string>; body: unknown },
+): unknown {
   for (const [name, value] of Object.entries(headers)) {
     c.header?.(name, value);
   }
   return c.json(body, status);
+}
+
+/** The slice of a Hono `Context` the middleware uses. Optional parts fit older doubles. */
+type HonoLikeContext = {
+  req: { header: (name: string) => string | undefined; url: string; method?: string; raw?: Request };
+  json: (body: unknown, status?: number) => unknown;
+  set?: (key: string, value: unknown) => void;
+  /** Hono's response-header setter. Optional so older context doubles still fit. */
+  header?: (name: string, value: string) => void;
+  /** Hono's response so far, read to merge with headers a CORS middleware set. */
+  res?: { headers: { get: (name: string) => string | null } };
+  /** True once a handler's response was committed to the context. */
+  finalized?: boolean;
+};
+
+/**
+ * Add the payment result headers through Hono, merging the CORS expose list
+ * and the cache directives already on the response instead of replacing them.
+ *
+ * Skipped once the response was committed, as in Express: a `'manual'` settle
+ * after the handler returned must not rebuild a response already handed back.
+ */
+function setHonoPaymentHeaders(c: HonoLikeContext, result: VerifyResponse | SettleResponse): void {
+  if (!result.receipt || !c.header || c.finalized) return;
+  const current = (name: string) => c.res?.headers.get(name) ?? undefined;
+  for (const [name, value] of Object.entries(mergePaymentResponseHeaders(propagatedResult(result), current))) {
+    c.header(name, value);
+  }
 }
 
 export function createHonoMiddleware(options: HonoMiddlewareOptions) {
@@ -2148,13 +2511,7 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
   }
 
   return async (
-    c: {
-      req: { header: (name: string) => string | undefined; url: string; method?: string; raw?: Request };
-      json: (body: unknown, status?: number) => unknown;
-      set?: (key: string, value: unknown) => void;
-      /** Hono's response-header setter. Optional so older context doubles still fit. */
-      header?: (name: string, value: string) => void;
-    },
+    c: HonoLikeContext,
     next: () => Promise<void>
   ) => {
     const paymentHeader = c.req.header('PAYMENT-SIGNATURE') || c.req.header('X-PAYMENT') || c.req.header('x-payment');
@@ -2203,9 +2560,14 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
         receiptContext = validatePurchaseContext(header, method, c.req.url, bytes);
       }
     } catch { return c.json({ error: 'receipt_context_mismatch' }, 400); }
-    const verifyResult = await client.verify(parsed, requirement, { receiptContext });
-    if (verifyResult.receipt) for (const [name, value] of Object.entries(paymentResponseHeaders({ ...verifyResult }))) c.header?.(name, value);
+    // One key for this payment's verify, settle and their retries.
+    const binding = { idempotencyKey: createIdempotencyKey(), receiptContext };
+    const verifyResult = await client.verify(parsed, requirement, binding);
+    setHonoPaymentHeaders(c, verifyResult);
     if (!verifyResult.isValid) {
+      // See the Express branch: an admitted authorization is 409 or 503.
+      const conflict = buildPaymentConflictResponse(verifyResult);
+      if (conflict) return respondHono(c, conflict);
       // See respondUnavailable: 402 here would tell the buyer to sign again for
       // an authorization the facilitator never rejected.
       if (verifyResult.retryable) {
@@ -2217,14 +2579,15 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
       }, 402);
     }
 
-    const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult, receiptContext, result => {
-      if (result.receipt) for (const [name, value] of Object.entries(paymentResponseHeaders({ ...result }))) c.header?.(name, value);
-    });
+    const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult, binding,
+      result => setHonoPaymentHeaders(c, result));
     c.set?.('x402', verifiedPayment);
 
     if (settlementStrategy === 'before-handler') {
       const settleResult = await verifiedPayment.settle();
       if (!settleResult.success) {
+        const conflict = buildPaymentConflictResponse(settleResult);
+        if (conflict) return respondHono(c, conflict);
         if (settleResult.retryable) {
           return honoUnavailable(c, 'Payment settlement unavailable', settleResult);
         }

@@ -32,7 +32,10 @@ facilitator, and propagate `PAYMENT-RESPONSE` / `X-PAYMENT-RESPONSE`. Express mu
 provide the exact `rawBody` bytes for non-GET/HEAD requests. Configure the public
 merchant URL correctly behind proxies. Custom integrations can use
 `validatePurchaseContext`, `FacilitatorClient.verify/settle(..., {receiptContext})`
-and `paymentResponseHeaders(result)`. Forward these headers through CORS/proxies.
+and `paymentResponseHeaders(result)`, or `mergePaymentResponseHeaders(result, current)`
+when the response may already carry `Access-Control-Expose-Headers` or
+`Cache-Control` (it adds to them instead of replacing them). Forward these
+headers through CORS/proxies.
 
 `getFacilitatorReceipt(receiptId, context)` performs capability-protected lookup.
 `verifyFacilitatorReceipt(receipt, trustedKeys)` validates issuer, request hash
@@ -65,3 +68,50 @@ authorized stored receipt, including `unknown` after a failed settlement call.
 HTTP 200 means lookup succeeded; inspect and verify the receipt status before
 treating the payment as confirmed. This fix preserves the original signature
 and settlement POST result, and requires no SDK upgrade beyond this release.
+
+## Purchase binding and resends
+
+The facilitator returns an admitted payment's original answer only to the
+binding that admitted it: the same `Idempotency-Key` or the same
+`X-UVD-Purchase`. Holding the signed payment is not a binding. From 2.97.0 every
+`/verify` and `/settle` call carries an `Idempotency-Key`:
+
+```typescript
+import { FacilitatorClient, createIdempotencyKey } from 'uvd-x402-sdk/backend';
+
+const client = new FacilitatorClient();
+const idempotencyKey = createIdempotencyKey(); // one per payment; store it with the order
+const verified = await client.verify(payment, requirements, { idempotencyKey });
+const settled = await client.settle(payment, requirements, { idempotencyKey });
+// After a lost response, resend with the SAME key: the original answer comes
+// back with settled.replayed === true, and no new money moves.
+```
+
+`verifyAndSettle` and the Express/Hono middlewares create one key per payment
+and send it on both calls and every retry. The key is random: a key derived from
+the X-PAYMENT would be known to anyone holding the payment. It is
+merchant-private and never propagated in `PAYMENT-RESPONSE`. On networks without
+receipts the facilitator uses it for its own settle cache, keyed per payment, so
+only a retry of the same settle can hit it; if that cache is unreadable it answers
+`503 idempotency_store_unavailable` without settling, which the SDK reports as
+`retryable` (no verdict).
+
+A resend without the admitting binding is refused, and the SDK reports it as
+data:
+
+| `errorCode` | Meaning | Middleware answer |
+| --- | --- | --- |
+| `authorization_already_settled` | This X-PAYMENT was used; its payment is confirmed | `409`, handler not run |
+| `authorization_in_flight` | Its payment is pending or unknown; `retryable: true` to learn the verdict | `503` + `Retry-After` |
+| `receipt_request_conflict` | The authorization belongs to another request | `409` |
+
+None is a rejected signature, so none is answered `402` (a new signature would
+pay a second time), and none is a `500`. `/verify` reports the first two as
+`isValid: false` with the same `errorCode`. For a payment made without purchase
+context, the receipt travels in `PAYMENT-RESPONSE` so the buyer can see its
+state. `buildPaymentConflictResponse(result)` gives any other framework the same
+answer. A facilitator older than 2.39.0 replays the original success to any
+resend; a settle made with a fresh key and no purchase context cannot have
+admitted anything, so the SDK answers such a replay as
+`authorization_already_settled` too. A replay bound by the buyer's
+`X-UVD-Purchase` is a resumed purchase and is served.

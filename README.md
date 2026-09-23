@@ -1194,7 +1194,9 @@ The same reading applies to `Erc8004LookupError` (`POST /register` goes through
 the same EVM path, so a mint can come back unconfirmed too) and to every gasless
 escrow call. An explicit `retryable: false` in a facilitator body always wins
 over the status — but only ever **downgrades**: a body claiming `retryable: true`
-on a `402` will not make this SDK resend a genuinely refused credential.
+on a `402` will not make this SDK resend a genuinely refused credential. The one
+exception is named, not read from a flag: `409 authorization_in_flight` is
+`retryable` (see [Portable facilitator receipts](#portable-facilitator-receipts)).
 
 Three independent signals stop a retry, because the cost of missing one is a
 second payment: the explicit `retryable: false`, the named
@@ -1215,6 +1217,15 @@ An unconfirmed settlement is the one 5xx that goes out as **`500`, with no
 `Retry-After`**: "stop" is the correct instruction when the transfer may already
 be mining. The body carries `transaction`, `paymentId` and `retryable: false`, so
 the buyer's client can reconcile instead of paying again.
+
+An X-PAYMENT the facilitator already admitted for another request is answered
+**`409`** (`authorization_already_settled`, `receipt_request_conflict`: it was
+used, the handler does not run) or **`503` + `Retry-After`** while it is
+`authorization_in_flight` — never `402` and never `500`. Both middlewares add
+`PAYMENT-RESPONSE` to an existing `Access-Control-Expose-Headers` and `no-store`
+to an existing `Cache-Control` instead of replacing them, and in `'manual'` mode
+a `settle()` after the handler already answered no longer touches the sent
+response.
 
 ## ERC-8004 Trustless Agents
 
@@ -1986,4 +1997,13 @@ facilitator receipts: network, asset, atomic amount, payTo, request hash,
 settlement ID, status and refusal reason. Persist purchase context before sending
 the authorization and reuse it after uncertainty. Payment confirmation does not
 prove merchant delivery. See [the receipt guide](docs/facilitator-receipts.md).
+
+Every `/verify` and `/settle` carries an `Idempotency-Key`, the same one for both
+calls of a payment and for their retries: `verifyAndSettle` and both middlewares
+create one per payment, and `verify`/`settle` accept `{ idempotencyKey }`
+(`createIdempotencyKey()`). The facilitator returns an admitted payment's original
+answer (`SettleResponse.replayed`, from `Idempotent-Replayed: true`) only to that
+key or to the buyer's `X-UVD-Purchase`; a resend without them is
+`authorization_already_settled`, `authorization_in_flight` or
+`receipt_request_conflict`, and the SDK never serves it again.
 Funded EURC payments settled on Arc mainnet (x402 v1/v2, 2026-09-22); Arc testnet funded acceptance is pending.

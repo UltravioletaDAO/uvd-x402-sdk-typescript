@@ -131,6 +131,34 @@ export function paymentResponseHeaders(result: Record<string, unknown>): Record<
   return { 'PAYMENT-RESPONSE': encoded, 'X-PAYMENT-RESPONSE': encoded,
     'Access-Control-Expose-Headers': 'PAYMENT-RESPONSE, X-PAYMENT-RESPONSE', 'Cache-Control': 'no-store' };
 }
+/** Headers that hold a comma-separated list the application may already have set. */
+const LIST_HEADERS = ['Access-Control-Expose-Headers', 'Cache-Control'];
+/**
+ * Adds the comma-separated `additions` to `existing`, keeping every entry already
+ * there and its spelling. Entries compare case-insensitively by name, so a
+ * `Cache-Control` of `no-store, max-age=0` does not gain a second `no-store`.
+ */
+export function mergeHeaderList(existing: string | undefined, additions: string): string {
+  const name = (entry: string) => entry.split('=')[0].trim().toLowerCase();
+  const kept = (existing || '').split(',').map(entry => entry.trim()).filter(Boolean);
+  const seen = new Set(kept.map(name));
+  for (const entry of additions.split(',').map(value => value.trim()).filter(Boolean)) {
+    if (!seen.has(name(entry))) { kept.push(entry); seen.add(name(entry)); }
+  }
+  return kept.join(', ');
+}
+/**
+ * {@link paymentResponseHeaders} for a response that may already carry CORS or
+ * cache headers: `Access-Control-Expose-Headers` and `Cache-Control` are merged
+ * with the current value read through `current`, never replaced.
+ */
+export function mergePaymentResponseHeaders(
+  result: Record<string, unknown>, current: (name: string) => string | undefined,
+): Record<string, string> {
+  const headers = paymentResponseHeaders(result);
+  for (const name of LIST_HEADERS) headers[name] = mergeHeaderList(current(name), headers[name]);
+  return headers;
+}
 export function receiptFromResponse(response: Response): FacilitatorReceipt | null {
   const values = [response.headers.get('PAYMENT-RESPONSE'), response.headers.get('X-PAYMENT-RESPONSE')].filter((v): v is string => v !== null);
   if (!values.length) return null;
