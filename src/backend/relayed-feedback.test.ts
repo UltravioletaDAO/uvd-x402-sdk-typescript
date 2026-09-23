@@ -33,7 +33,8 @@ import {
 /**
  * The eight mainnets Execution Market deployed a FeedbackDelegate on, each read
  * off its own chain on two independent RPCs before it was written down
- * (2026-08-23), plus the testnet the rail was first proven against.
+ * (2026-08-23), plus the testnet the rail was first proven against. Arc joined
+ * on 2026-09-23 (v4 delegate, facilitator 2.38.0).
  */
 const DELEGATE_NETWORKS = [
   'base',
@@ -44,6 +45,7 @@ const DELEGATE_NETWORKS = [
   'celo',
   'bsc',
   'monad',
+  'arc',
   'base-sepolia',
 ];
 
@@ -88,6 +90,13 @@ describe('the networks that serve the rail', () => {
     // predates Shanghai so 7702 cannot land there at all.
     expect(supportsRelayedFeedback('scroll')).toBe(false);
     expect(supportsRelayedFeedback('skale-base')).toBe(false);
+  });
+
+  it('leaves Arc testnet out: Arc mainnet has a delegate, testnet does not', () => {
+    // The facilitator serves ERC-8004 reads on arc-testnet and refuses the
+    // relay there with a 400. A delegate on one Arc says nothing about the other.
+    expect(supportsRelayedFeedback('arc')).toBe(true);
+    expect(supportsRelayedFeedback('arc-testnet')).toBe(false);
   });
 
   it('routes the deprecated base alias', () => {

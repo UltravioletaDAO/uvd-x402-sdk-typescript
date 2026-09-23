@@ -19,7 +19,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **React & Wagmi**: First-class integrations
 - **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
 - **ERC-8128 Signed Requests**: Authenticate HTTP requests with a wallet (RFC 9421 + EIP-191) — no API keys
-- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 21 networks (19 EVM + 2 Solana)
+- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 23 networks (21 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
 - **Escrow Pre-Auth**: Sign-on-assignment `X-Payment-Auth` builder (`buildEscrowPreAuth`) — vector-pinned parity with the Python SDK and Execution Market
@@ -1229,16 +1229,19 @@ response.
 
 ## ERC-8004 Trustless Agents
 
-Build verifiable on-chain reputation for AI agents and services. Supports **21 networks** (19 EVM + 2 Solana).
+Build verifiable on-chain reputation for AI agents and services. Supports **23 networks** (21 EVM + 2 Solana).
 
 > Name Base as `'base'`. The old `'base-mainnet'` spelling is rejected by the facilitator
 > (`400 Invalid network`); the SDK now rewrites it for you, but new code should use `'base'`.
 
 On EVM networks, agent IDs are sequential numbers. On Solana, agent IDs are base58 pubkey strings. The `AgentId` type (`number | string`) handles both.
 
-### EVM Networks (18)
+### EVM Networks (21)
 
-ethereum, base-mainnet, polygon, arbitrum, optimism, celo, bsc, monad, avalanche, skale-base, ethereum-sepolia, base-sepolia, polygon-amoy, arbitrum-sepolia, optimism-sepolia, celo-sepolia, avalanche-fuji, skale-base-sepolia
+ethereum, base, polygon, arbitrum, optimism, celo, bsc, monad, avalanche, scroll, skale-base, arc, ethereum-sepolia, base-sepolia, polygon-amoy, arbitrum-sepolia, optimism-sepolia, celo-sepolia, avalanche-fuji, skale-base-sepolia, arc-testnet
+
+Arc (`arc`, `arc-testnet`) since 2.98.0, with the canonical registries on both; see
+[ERC-8004 on Arc](docs/networks/arc.md#erc-8004-on-arc-2980).
 
 ### Solana Networks (2)
 
@@ -1356,14 +1359,16 @@ Pass the **same** feedback parameters, `deadline` and `nonce` back to
 registry calldata from them and refuses to relay anything the rater's signature
 does not cover.
 
-Available on the nine networks in `RELAYED_FEEDBACK_NETWORKS` -- the eight
+Available on the ten networks in `RELAYED_FEEDBACK_NETWORKS` -- the nine
 mainnets with a deployed `FeedbackDelegate` (base, ethereum, polygon, arbitrum,
-optimism, celo, bsc, monad) plus base-sepolia. **Avalanche is not one of them
+optimism, celo, bsc, monad, arc) plus base-sepolia. **Avalanche is not one of them
 and is not waiting to become one**: its C-Chain rejects the transaction type
 itself (`-32000 transaction type not supported`), so anchor the rating on a
 chain that supports EIP-7702 -- the payment stays where it was made.
+`arc-testnet` serves ERC-8004 reads but not this rail: no delegate is deployed
+there, and `prepare` answers 400.
 
-Requires facilitator v1.93.0+ for the mainnets; base-sepolia since v1.74.0.
+Requires facilitator v1.93.0+ for the mainnets (2.38.0+ for arc); base-sepolia since v1.74.0.
 
 ### The same thing on Solana, without a delegate
 

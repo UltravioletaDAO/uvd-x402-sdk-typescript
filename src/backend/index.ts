@@ -3895,8 +3895,9 @@ export type AgentId = number | string;
 const MAINNET_IDENTITY = '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432';
 const MAINNET_REPUTATION = '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63';
 // Deployed after the identity/reputation pair, which is why it was missing here.
-// Verified live on all ten EVM mainnets; SKALE Base has no code at this address
-// and is the one mainnet that legitimately has no validation registry.
+// Verified live on all eleven EVM mainnets (Arc on 2026-09-23); SKALE Base has
+// no code at this address and is the one mainnet that legitimately has no
+// validation registry.
 const MAINNET_VALIDATION = '0x8004Cc8439f36fd5F9F049D9fF86523Df6dAAB58';
 
 // Testnet addresses (same on all testnets)
@@ -3909,7 +3910,7 @@ const SOLANA_AGENT_REGISTRY = '8oo4dC4JvBLwy5tGgiH3WwK4B9PWxL9Z4XjA2jzkQMbQ';
 const SOLANA_ATOM_ENGINE = 'AToMw53aiPQ8j7iHVb4fGt6nzUNxUhcPc3tbPBZuzVVb';
 
 /**
- * ERC-8004 contract addresses per network (21 networks: 19 EVM + 2 Solana)
+ * ERC-8004 contract addresses per network (23 networks: 21 EVM + 2 Solana)
  */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
@@ -3918,7 +3919,7 @@ export const ERC8004_CONTRACTS: Record<string, {
   agentRegistryProgram?: string;
   atomEngineProgram?: string;
 }> = {
-  // Mainnets (11)
+  // Mainnets (12)
   ethereum: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
@@ -3975,13 +3976,22 @@ export const ERC8004_CONTRACTS: Record<string, {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
   },
+  // Arc (Circle, chain 5042). The facilitator names these three in
+  // ARC_MAINNET_CONTRACTS (x402-rs 2.37.0+). Read on 2026-09-23 against
+  // rpc.mainnet.arc.io: each is a 130-byte EIP-1967 proxy whose implementation
+  // is the one Base runs, and getVersion() answers 2.0.0.
+  arc: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
+  },
   // Deprecated alias for 'base' -- kept so existing lookups keep resolving.
   'base-mainnet': {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
     validationRegistry: MAINNET_VALIDATION,
   },
-  // Testnets (8)
+  // Testnets (9)
   'ethereum-sepolia': {
     identityRegistry: TESTNET_IDENTITY,
     reputationRegistry: TESTNET_REPUTATION,
@@ -4022,6 +4032,15 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
   },
+  // Arc testnet (chain 5042002), ARC_TESTNET_CONTRACTS in the facilitator. Read
+  // on 2026-09-23 against rpc.testnet.arc.io and rpc.testnet.arc.network: the
+  // proxies Base Sepolia runs, validation registry included. Reads only -- no
+  // FeedbackDelegate is deployed here, so it is not in RELAYED_FEEDBACK_NETWORKS.
+  'arc-testnet': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
   // Solana (2) - uses QuantuLabs 8004-solana Anchor program + ATOM Engine
   solana: {
     agentRegistryProgram: SOLANA_AGENT_REGISTRY,
@@ -4046,21 +4065,22 @@ export function wireNetwork(network: string): string {
 }
 
 /**
- * Network type for ERC-8004 operations (21 networks: 19 EVM + 2 Solana)
+ * Network type for ERC-8004 operations (23 networks: 21 EVM + 2 Solana)
  *
  * These are the names the FACILITATOR accepts, verified against
- * GET /feedback -> supportedNetworks. 'base-mainnet' is kept only as a
+ * GET /feedback -> supportedNetworks (all 23, facilitator 2.39.0, 2026-09-23).
+ * 'base-mainnet' is kept only as a
  * deprecated alias: the facilitator rejects it outright (400 "Invalid network"),
  * so anything passed through this module is normalised to 'base' before it
  * reaches the wire. Use 'base'.
  */
 export type Erc8004Network =
   // EVM Mainnets
-  | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base'
+  | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base' | 'arc'
   // Deprecated alias, rewritten to 'base' before it reaches the wire
   | 'base-mainnet'
   // EVM Testnets
-  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia'
+  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia' | 'arc-testnet'
   // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)
   | 'solana' | 'solana-devnet';
 
@@ -4080,6 +4100,13 @@ export type Erc8004Network =
  * transaction type itself (`-32000 transaction type not supported`), so there
  * is nothing to deploy against. Anchor the rating on a chain that supports
  * EIP-7702; the payment stays where it was made.
+ *
+ * `arc` joined with facilitator 2.38.0: Execution Market deployed the v4
+ * delegate `0x955Cc9fB9aB95FC0821ae74197D273dde5dA84f1` there on 2026-09-23
+ * (`VERSION()` = 4, `REPUTATION_REGISTRY()` = the mainnet registry), and
+ * `prepare` answers 200 for it. `arc-testnet` serves ERC-8004 reads but has
+ * no delegate, and `prepare` answers `400 "relayed feedback is not available
+ * on arc-testnet"`. Arc mainnet having one is not a reason to assume it.
  */
 export const RELAYED_FEEDBACK_NETWORKS: readonly Erc8004Network[] = [
   'base',
@@ -4090,6 +4117,7 @@ export const RELAYED_FEEDBACK_NETWORKS: readonly Erc8004Network[] = [
   'celo',
   'bsc',
   'monad',
+  'arc',
   'base-sepolia',
 ] as const;
 
