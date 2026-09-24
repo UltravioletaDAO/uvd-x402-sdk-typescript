@@ -1,0 +1,101 @@
+{
+  "_note": [
+    "Arc (chain 5042) escrow pre-auth vector. `pre_auth` is the Arc pre-auth case of the",
+    "Python SDK (uvd-x402-sdk-python tests/fixtures/arc-escrow-d.json), key for key.",
+    "buildEscrowPreAuth(network_config, payer, pre_auth.worker, bounty_atomic, no review",
+    "deadline, pre_auth.tier), with time frozen at pre_auth.now and the salt RNG at",
+    "pre_auth.salt, signed by frozen_build.signer_private_key of",
+    "src/escrow-preauth.vectors.json (whose address is `payer`), yields expected_wrapper.",
+    "expected_nonce is AuthCaptureEscrow.getHash (payer = 0) read on chain 5042 at block 22439550;",
+    "usdc_domain_name / usdc_domain_version are the USDC contract's name() / version() read",
+    "at the same block (src/fixtures/arc-escrow-d.rpc.json).",
+    "Derived by scripts/derive-arc-escrow-preauth-vector.mjs. Hex values of 32 bytes or more",
+    "are stored without the 0x prefix."
+  ],
+  "pre_auth": {
+    "network": "arc",
+    "now": 1760000000,
+    "salt": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "signer": "synthetic test key 0x42 * 32, never held funds",
+    "worker": "0x1111111111111111111111111111111111111111",
+    "bounty_usd": "0.10",
+    "tier": "micro",
+    "payment_info": {
+      "operator": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+      "receiver": "0x1111111111111111111111111111111111111111",
+      "token": "0x3600000000000000000000000000000000000000",
+      "maxAmount": "100000",
+      "preApprovalExpiry": 1760003600,
+      "authorizationExpiry": 1760604800,
+      "refundExpiry": 1761209600,
+      "minFeeBps": 0,
+      "maxFeeBps": 1800,
+      "feeReceiver": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+      "salt": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+    }
+  },
+  "payer": "0x17c5185167401eD00cF5F5b2fc97D9BBfDb7D025",
+  "bounty_atomic": "100000",
+  "network_config": {
+    "chain_id": 5042,
+    "operator": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+    "escrow": "0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff",
+    "token_collector": "0x0E3dF9510de65469C4518D7843919c0b8C7A7757",
+    "usdc": "0x3600000000000000000000000000000000000000",
+    "usdc_domain_name": "USDC",
+    "usdc_domain_version": "2",
+    "payment_info_typehash": "ae68ac7ce30c86ece8196b61a7c486d8f0061f575037fbd34e7fe4e2820c6591",
+    "min_fee_bps": 0,
+    "max_fee_bps": 1800
+  },
+  "expected_nonce": "db6eef4e9a2cfbfbc0184fae0cde241135c88a73c9c67164316b50ba98f67f6f",
+  "expected_typed_data": {
+    "domain": {
+      "name": "USDC",
+      "version": "2",
+      "chainId": 5042,
+      "verifyingContract": "0x3600000000000000000000000000000000000000"
+    },
+    "primaryType": "ReceiveWithAuthorization",
+    "message": {
+      "from": "0x17c5185167401eD00cF5F5b2fc97D9BBfDb7D025",
+      "to": "0x0E3dF9510de65469C4518D7843919c0b8C7A7757",
+      "value": "100000",
+      "validAfter": "0",
+      "validBefore": "1760003600",
+      "nonce": "db6eef4e9a2cfbfbc0184fae0cde241135c88a73c9c67164316b50ba98f67f6f"
+    }
+  },
+  "expected_wrapper": {
+    "x402Version": 2,
+    "scheme": "escrow",
+    "payload": {
+      "authorization": {
+        "from": "0x17c5185167401eD00cF5F5b2fc97D9BBfDb7D025",
+        "to": "0x0E3dF9510de65469C4518D7843919c0b8C7A7757",
+        "value": "100000",
+        "validAfter": "0",
+        "validBefore": "1760003600",
+        "nonce": "db6eef4e9a2cfbfbc0184fae0cde241135c88a73c9c67164316b50ba98f67f6f"
+      },
+      "signature": "7e3b46d252f30ba1345d700536e98b21e051bfdb6c170090836198b8281fdfc17e489ef1ce489315098ebb075331aac75b199dd2d6e49c2d404b54e4c500340d1b",
+      "paymentInfo": {
+        "operator": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+        "receiver": "0x1111111111111111111111111111111111111111",
+        "token": "0x3600000000000000000000000000000000000000",
+        "maxAmount": "100000",
+        "preApprovalExpiry": 1760003600,
+        "authorizationExpiry": 1760604800,
+        "refundExpiry": 1761209600,
+        "minFeeBps": 0,
+        "maxFeeBps": 1800,
+        "feeReceiver": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+        "salt": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
+      }
+    },
+    "paymentRequirements": {
+      "scheme": "escrow",
+      "network": "eip155:5042"
+    }
+  }
+}

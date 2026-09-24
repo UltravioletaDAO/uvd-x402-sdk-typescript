@@ -53,14 +53,15 @@ const OPERATOR_CONFIG = [
   '0x0000000000000000000000000000000000000000',
 ];
 
-// The escrow-preauth Arc vector: payer-agnostic hashes (payer = 0) of two
-// PaymentInfos, read from AuthCaptureEscrow.getHash on chain 5042.
-const SALT = '0x' + 'ab'.repeat(32);
+// Payer-agnostic hashes (payer = 0) read from AuthCaptureEscrow.getHash:
+// `static` is the PaymentInfo the escrow client's authorize test signs;
+// `preAuth` is the one src/escrow-preauth.arc-vector.json builds (the Python
+// SDK's Arc pre-auth case).
 const VECTOR_PAYMENT_INFOS = {
   static: [D.operator, ethers.ZeroAddress, '0x1111111111111111111111111111111111111111', D.usdc,
-    100000n, 1760003600, 1760007200, 1760086400, 0, 1800, D.operator, SALT],
-  frozen: [D.operator, ethers.ZeroAddress, '0x1111111111111111111111111111111111111111', D.usdc,
-    100000n, 1760003600, 1761036800, 1761641600, 0, 1800, D.operator, SALT],
+    100000n, 1760003600, 1760007200, 1760086400, 0, 1800, D.operator, '0x' + 'ab'.repeat(32)],
+  preAuth: [D.operator, ethers.ZeroAddress, '0x1111111111111111111111111111111111111111', D.usdc,
+    100000n, 1760003600, 1760604800, 1761209600, 0, 1800, D.operator, '0x' + 'a7'.repeat(32)],
 };
 
 const PI = 'tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt)';
@@ -146,7 +147,7 @@ async function recordChain({ chainId, rpcUrl, fullFactoryCode }) {
   await call('usdc.version', D.usdc, token.encodeFunctionData('version'));
   await call('usdc.DOMAIN_SEPARATOR', D.usdc, token.encodeFunctionData('DOMAIN_SEPARATOR'));
   const staticHash = await call('escrow.getHash.static', D.escrow, escrow.encodeFunctionData('getHash', [VECTOR_PAYMENT_INFOS.static]));
-  await call('escrow.getHash.frozen', D.escrow, escrow.encodeFunctionData('getHash', [VECTOR_PAYMENT_INFOS.frozen]));
+  await call('escrow.getHash.preAuth', D.escrow, escrow.encodeFunctionData('getHash', [VECTOR_PAYMENT_INFOS.preAuth]));
   await call('escrow.paymentState.static', D.escrow, escrow.encodeFunctionData('paymentState', [staticHash]));
   return { rpcUrl, block, reads };
 }

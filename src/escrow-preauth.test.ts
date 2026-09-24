@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { getBytes, parseUnits } from 'ethers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -18,6 +22,7 @@ import { ESCROW_CONTRACTS } from './backend';
 import { getChainByName } from './chains';
 import { X402Error } from './types';
 import fixtureRaw from './escrow-preauth.vectors.json';
+import arcVectorRaw from './escrow-preauth.arc-vector.json';
 
 /**
  * Provenance: `src/escrow-preauth.vectors.json` is a byte-identical copy of
@@ -26,14 +31,14 @@ import fixtureRaw from './escrow-preauth.vectors.json';
  * That file is the single source for every mirrored suite (dashboard vitest,
  * em-mobile node --test, em-plugin-sdk pytest); if the wire format ever
  * changes there, re-copy the file and this suite must keep passing WITHOUT
- * touching the assertions (the format is pinned).
+ * touching the assertions (the format is pinned). Its sha256 is pinned below
+ * so that no edit here goes unnoticed.
  *
- * The one exception is `arc_vector`, appended here after every other key
- * (whose bytes are unchanged) by `scripts/derive-arc-escrow-preauth-vector.mjs`:
- * Arc (chain 5042) on the x402r canonical escrow. Its nonces are
- * AuthCaptureEscrow.getHash answers read on chain 5042 and its USDC domain is
- * the token's own name()/version() (`src/fixtures/arc-escrow-d.rpc.json`).
- * Mirrored copies take it by re-copying this file.
+ * Arc (chain 5042) has its own vector, `src/escrow-preauth.arc-vector.json`,
+ * derived by `scripts/derive-arc-escrow-preauth-vector.mjs`: the Python SDK's
+ * Arc pre-auth case, with the nonce AuthCaptureEscrow.getHash returned on
+ * chain 5042 and the token's own name()/version()
+ * (`src/fixtures/arc-escrow-d.rpc.json`).
  *
  * The nonce MUST match AuthCaptureEscrow.getHash(paymentInfo) or the
  * on-chain authorize reverts. The golden-wrapper test freezes time
@@ -73,12 +78,25 @@ interface EscrowPreAuthFixture {
     };
     expected_wrapper: Record<string, unknown>;
   };
-  arc_vector: {
+}
+
+interface ArcPreAuthVector {
+  pre_auth: {
     network: string;
-    network_config: Omit<EscrowNetworkConfig, 'tiers'>;
-    static_vector: { payment_info: EscrowPaymentInfo; expected_nonce: string };
-    frozen_build: Omit<EscrowPreAuthFixture['frozen_build'], 'signer_private_key' | 'signer_address'>;
+    now: number;
+    salt: string;
+    signer: string;
+    worker: string;
+    bounty_usd: string;
+    tier: string;
+    payment_info: EscrowPaymentInfo;
   };
+  payer: string;
+  bounty_atomic: string;
+  network_config: Omit<EscrowNetworkConfig, 'tiers'>;
+  expected_nonce: string;
+  expected_typed_data: EscrowPreAuthFixture['frozen_build']['expected_typed_data'];
+  expected_wrapper: Record<string, unknown>;
 }
 
 const LONG_HEX = /^[0-9a-f]{64,}$/;
@@ -94,6 +112,7 @@ function hydrate(value: unknown): unknown {
 
 const FX = hydrate(fixtureRaw) as EscrowPreAuthFixture;
 const FROZEN = FX.frozen_build;
+const ARC = hydrate(arcVectorRaw) as ArcPreAuthVector;
 
 const EXPECTED_NONCE = FX.static_vector.expected_nonce;
 const MOCK_SIGNATURE = '0x' + '11'.repeat(65);
@@ -168,6 +187,13 @@ describe('computeEscrowNonce', () => {
 });
 
 describe('golden vectors (escrow-preauth.vectors.json, byte-pinned)', () => {
+  it('keeps the file byte-identical to its mirrored copies (sha256 pinned)', () => {
+    const bytes = readFileSync(resolve(__dirname, 'escrow-preauth.vectors.json'));
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+      '0513fcdfacd934f9658c7f328f23143a82284a5cc8df50304b73688709f6ddf7'
+    );
+  });
+
   it('keeps the local constants in sync with the fixture', () => {
     expect(ESCROW_TIER_WINDOWS).toEqual(FX.escrow_tier_windows);
     expect(ESCROW_DEPOSIT_LIMIT_USD).toBe(FX.deposit_limit_usd);
@@ -216,13 +242,15 @@ describe('golden vectors (escrow-preauth.vectors.json, byte-pinned)', () => {
   });
 });
 
-describe('Arc vector (arc_vector: chain 5042, x402r canonical escrow)', () => {
-  const ARC = FX.arc_vector;
+describe('Arc vector (escrow-preauth.arc-vector.json: chain 5042, x402r canonical escrow)', () => {
   const ARC_CONFIG: EscrowNetworkConfig = { ...ARC.network_config, tiers: FX.escrow_tier_windows };
+  const RPC = JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'arc-escrow-d.rpc.json'), 'utf8'));
+  const recordedGetHash =
+    '0x' + RPC.chains['5042'].reads.find((r: { label: string }) => r.label === 'escrow.getHash.preAuth').result;
 
   it('names the escrow the SDK registry ships for Arc, and the USDC domain of the chain registry', () => {
     const c = ESCROW_CONTRACTS[5042];
-    expect(ARC.network).toBe('arc');
+    expect(ARC.pre_auth.network).toBe('arc');
     expect(ARC.network_config).toMatchObject({
       chain_id: 5042,
       operator: c.operator,
@@ -238,24 +266,30 @@ describe('Arc vector (arc_vector: chain 5042, x402r canonical escrow)', () => {
     ]);
   });
 
-  it('computeEscrowNonce equals the nonce AuthCaptureEscrow.getHash returned on chain 5042', () => {
+  it('its nonce is the one AuthCaptureEscrow.getHash returned on chain 5042, and computeEscrowNonce agrees', () => {
+    expect(ARC.expected_nonce).toBe(recordedGetHash);
     const nonce = computeEscrowNonce(
       ARC_CONFIG.chain_id,
       ARC_CONFIG.escrow,
       ARC_CONFIG.payment_info_typehash,
-      ARC.static_vector.payment_info
+      ARC.pre_auth.payment_info
     );
-    expect(nonce).toBe(ARC.static_vector.expected_nonce);
+    expect(nonce).toBe(ARC.expected_nonce);
     expect(nonce).not.toBe(EXPECTED_NONCE);
   });
 
+  it("signs as the payer (the synthetic key's own address) for the bounty in atomic units", () => {
+    expect(ARC.payer).toBe(new EnvKeyAdapter(FROZEN.signer_private_key).getAddress());
+    expect(ARC.bounty_atomic).toBe(parseUnits(ARC.pre_auth.bounty_usd, 6).toString());
+  });
+
   it('reproduces the expected Arc wrapper + typed data under frozen time/salt', async () => {
-    const frozen = ARC.frozen_build;
+    const salt = getBytes(ARC.pre_auth.salt);
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(frozen.now * 1000));
+    vi.setSystemTime(new Date(ARC.pre_auth.now * 1000));
     vi.stubGlobal('crypto', {
       getRandomValues: (arr: Uint8Array) => {
-        arr.fill(0xab);
+        arr.set(salt);
         return arr;
       },
     });
@@ -271,15 +305,16 @@ describe('Arc vector (arc_vector: chain 5042, x402r canonical escrow)', () => {
 
     const header = await buildEscrowPreAuth(wallet, {
       networkConfig: ARC_CONFIG,
-      payerWallet: PAYER,
-      workerWallet: WORKER,
-      bountyAtomic: FX.bounty_atomic,
-      tier: frozen.tier,
-      reviewDeadlineSec: frozen.deadline,
+      payerWallet: ARC.payer,
+      workerWallet: ARC.pre_auth.worker,
+      bountyAtomic: ARC.bounty_atomic,
+      tier: ARC.pre_auth.tier,
     });
-    expect(JSON.parse(header)).toEqual(frozen.expected_wrapper);
+    const wrapper = JSON.parse(header);
+    expect(wrapper).toEqual(ARC.expected_wrapper);
+    expect(wrapper.payload.paymentInfo).toEqual(ARC.pre_auth.payment_info);
 
-    const etd = frozen.expected_typed_data;
+    const etd = ARC.expected_typed_data;
     expect(calls).toHaveLength(1);
     expect(calls[0].primaryType).toBe(etd.primaryType);
     expect(calls[0].domain).toEqual(etd.domain);
@@ -294,7 +329,7 @@ describe('Arc vector (arc_vector: chain 5042, x402r canonical escrow)', () => {
 });
 
 describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', () => {
-  const ARC_CONFIG: EscrowNetworkConfig = { ...FX.arc_vector.network_config, tiers: FX.escrow_tier_windows };
+  const ARC_CONFIG: EscrowNetworkConfig = { ...ARC.network_config, tiers: FX.escrow_tier_windows };
   const params = (networkConfig: EscrowNetworkConfig) => ({
     networkConfig,
     payerWallet: PAYER,
