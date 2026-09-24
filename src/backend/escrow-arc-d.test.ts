@@ -203,17 +203,26 @@ describe('Arc escrow registry (x402r canonical escrow)', () => {
   });
 
   it('carries no address of the older escrow generations', () => {
-    const older = [
-      '0xF8211868187974a7Fb9d99b8fFB171AD70665Dc6',
-      '0x0308703621160b894cF045E555686d99ee8bd94E',
-      '0x7561DC178D9aD5bc5fb103C01f448A510d2A36D0',
-      '0xD8490609d2da0ee626b0e676941b225cbc1A8C08',
-      '0x15f36140bC1d444f917D306d0f5be223F55709B6',
-      '0xBC151792f80C0EB1973d56b0235e6bee2A60e245',
-    ].map((a) => a.toLowerCase());
+    // keccak256 of each older-generation address, lowercase with 0x, so that
+    // the addresses themselves appear nowhere under src/ -- not even here.
+    const older = new Set([
+      '55109a1a4a7cad23b8fcfb37c2e23d56e5537a84ad38d74037c4814f5b936845',
+      '5cf43a85b5c6d230408db69152dc1083bdccc2b677fd64113afa48f27e1ac2db',
+      '290c769e20a0e95e9128f2f4453bd9da1c2dfdb25732a4830f8256f714c4f3fc',
+      'c85a6cdb3b6c3cdac35b80f3eb711b23dfce148546ae29bb67e660da9b16a9d4',
+      'fb7729bb04e3f5674e29c4368ddd2089537e2a2ea961d95b5fe5eacc7c641b1e',
+      '5b3052e62525ebcff240f1081a82df56cbfc1834d1f1dbbb7a2c34105e2fbd77',
+    ]);
+    const digest = (address: string) => ethers.keccak256(ethers.toUtf8Bytes(address.toLowerCase())).slice(2);
+
+    // Control: the list does catch an older-generation address the registry
+    // still ships for another chain (SKALE Base's escrow).
+    expect(older.has(digest(ESCROW_CONTRACTS[1187947933].escrow))).toBe(true);
+
     for (const chainId of ARC) {
-      const entry = JSON.stringify(ESCROW_CONTRACTS[chainId]).toLowerCase();
-      for (const address of older) expect(entry, `${address} in ${chainId}`).not.toContain(address.slice(2));
+      for (const [field, address] of Object.entries(ESCROW_CONTRACTS[chainId])) {
+        expect(older.has(digest(address)), `${chainId}.${field}`).toBe(false);
+      }
     }
   });
 });
