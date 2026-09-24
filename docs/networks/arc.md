@@ -14,7 +14,7 @@ Both networks use USDC `0x3600000000000000000000000000000000000000` with EIP-712
 
 The chain ID is part of the signature domain. An authorization signed on mainnet cannot be reused on testnet. The SDK preserves their distinct registry entries and CAIP-2 identifiers.
 
-The facilitator URL is `https://facilitator.ultravioletadao.xyz`. Check `/supported` at runtime when using another facilitator. USYC, Gateway, contract-wallet signatures/EIP-6492, `upto` and escrow are outside this Arc release. ERC-8004 identity and reputation are covered since 2.98.0: see [ERC-8004 on Arc](#erc-8004-on-arc-2980).
+The facilitator URL is `https://facilitator.ultravioletadao.xyz`. Check `/supported` at runtime when using another facilitator. USYC, Gateway, contract-wallet signatures/EIP-6492 and `upto` are outside this Arc release. ERC-8004 identity and reputation are covered since 2.98.0: see [ERC-8004 on Arc](#erc-8004-on-arc-2980). Escrow is covered since 2.99.0: see [Escrow on Arc](#escrow-on-arc-2990).
 
 ## EURC: prices in euros
 
@@ -218,3 +218,68 @@ supportsRelayedFeedback('arc-testnet'); // false -> no delegate on testnet
 
 Gas on Arc is USDC. The facilitator pays it for the relayed rating, as it does
 for payments.
+
+## Escrow on Arc (2.99.0)
+
+`AdvancedEscrowClient` (chain ID `5042` or `5042002`) and `buildEscrowPreAuth` run
+on the x402r canonical escrow. The addresses are the same on both networks:
+
+| Contract | Address |
+|---|---|
+| AuthCaptureEscrow | `0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff` |
+| ERC3009PaymentCollector (`tokenCollector`) | `0x0E3dF9510de65469C4518D7843919c0b8C7A7757` |
+| ProtocolFeeConfig | `0xBe2d24614F339a1eB103A399F93AA2a39Ca815Bc` |
+| RefundRequestFactory | `0xe971C674fD5c3462023f3F891dF6289DFbC9CEFC` |
+| PaymentOperatorFactory v1.0.2 | `0xc24153B7ED8DC03e551F29DDEeA5CadFe57e2716` |
+| PaymentOperator (`operator`) | `0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D` |
+
+The operator is generation `'v3'` (`OPERATOR_ABI_V3`). It has no `release` and no
+`refundInEscrow`, so the client maps them:
+
+- `release(paymentInfo, amount)` sends `capture(paymentInfo, amount, 0x)`.
+- `refundInEscrow(paymentInfo, amount)` sends `void(paymentInfo, 0x)`. `void` takes
+  no amount: it returns the whole `capturableAmount` to the payer. The client reads
+  that amount on-chain first and sends only when `amount` equals it. Otherwise it
+  sends nothing and returns `errorCode` `ESCROW_VOID_AMOUNT_MISMATCH`, or
+  `ESCROW_NOTHING_TO_VOID` when the capturable amount is 0. To return part of an
+  escrow, `release` the part the receiver keeps, then `refundInEscrow` the rest.
+- `charge` and `refundPostEscrow` return `ESCROW_UNSUPPORTED_ON_GENERATION` without
+  signing or sending.
+- While the operator address has no code, `release` and `refundInEscrow` return
+  `ESCROW_OPERATOR_NOT_DEPLOYED` and send nothing.
+
+```typescript
+import { AdvancedEscrowClient, ESCROW_VOID_AMOUNT_MISMATCH } from 'uvd-x402-sdk/backend';
+
+const client = new AdvancedEscrowClient(signer, { chainId: 5042 });
+// 5 USDC in escrow: pay the receiver 3, return the other 2 to the payer.
+await client.release(paymentInfo, '3000000');                        // capture(paymentInfo, 3000000, 0x)
+const refund = await client.refundInEscrow(paymentInfo, '2000000');  // void(paymentInfo, 0x)
+if (!refund.success && refund.errorCode === ESCROW_VOID_AMOUNT_MISMATCH) {
+  // 2000000 is not what is left in escrow. Nothing was sent.
+}
+```
+
+Measured from the public RPCs on 2026-09-24 (Arc block 22435548, Arc Testnet block
+63681360) and recorded in `src/fixtures/arc-escrow-d.rpc.json` by
+`scripts/record-arc-escrow-d.mjs`:
+
+- The factory's `computeAddress` returns the operator above on both networks, and
+  its `ESCROW()` / `PROTOCOL_FEE_CONFIG()` are the escrow and fee config above. The
+  factory bytecode is identical on both networks and contains every
+  `OPERATOR_ABI_V3` selector (`capture` `0xf12b86f6`, `void` `0xc3c5090e`,
+  `FEE_RECEIVER` `0xd3e78e4d`) and none of the v1/v2 `release` / `refundInEscrow`.
+- The token collector's `authCaptureEscrow()` is the escrow above. Every contract in
+  the table but the operator has code.
+- USDC `name()` / `version()` are `USDC` / `2`, and the EIP-712 domain the client
+  signs hashes to the token's `DOMAIN_SEPARATOR()` on both networks.
+- The pre-auth vector `arc_vector` in `src/escrow-preauth.vectors.json` uses nonces
+  read from `AuthCaptureEscrow.getHash` on Arc.
+
+`buildEscrowPreAuth` checks the escrow config's USDC domain against
+`VERIFIED_USDC_DOMAINS`: on Arc and Arc Testnet a config that does not say
+`USDC` / `2` is refused with `INVALID_CONFIG` before anything is signed.
+
+The gasless `releaseViaFacilitator` / `refundViaFacilitator` send the same request
+as on any other network; whether a facilitator serves escrow on Arc is for its
+`/supported` to answer.
