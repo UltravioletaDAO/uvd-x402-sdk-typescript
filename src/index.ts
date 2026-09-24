@@ -379,6 +379,7 @@ export {
   MAX_PROTOCOL_FEE_BPS,
   DEFAULT_MIN_FEE_BPS,
   DEFAULT_MAX_FEE_BPS,
+  VERIFIED_USDC_DOMAINS,
 } from './escrow-preauth';
 export type {
   EscrowNetworkConfig,

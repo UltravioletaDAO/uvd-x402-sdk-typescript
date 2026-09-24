@@ -6,6 +6,7 @@ import {
   ESCROW_DEPOSIT_LIMIT_USD,
   ESCROW_TIER_WINDOWS,
   OPERATOR_FEE_BPS,
+  VERIFIED_USDC_DOMAINS,
 } from './escrow-preauth';
 import type {
   EscrowNetworkConfig,
@@ -289,6 +290,49 @@ describe('Arc vector (arc_vector: chain 5042, x402r canonical escrow)', () => {
       verifyingContract: ESCROW_CONTRACTS[5042].usdc,
     });
     expect(calls[0].message).toEqual(etd.message);
+  });
+});
+
+describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', () => {
+  const ARC_CONFIG: EscrowNetworkConfig = { ...FX.arc_vector.network_config, tiers: FX.escrow_tier_windows };
+  const params = (networkConfig: EscrowNetworkConfig) => ({
+    networkConfig,
+    payerWallet: PAYER,
+    workerWallet: WORKER,
+    bountyAtomic: FX.bounty_atomic,
+  });
+
+  it('lists Arc and Arc Testnet, with the chain registry domain', () => {
+    expect(VERIFIED_USDC_DOMAINS).toEqual({
+      5042: { name: getChainByName('arc')!.usdc.name, version: getChainByName('arc')!.usdc.version },
+      5042002: { name: getChainByName('arc-testnet')!.usdc.name, version: getChainByName('arc-testnet')!.usdc.version },
+    });
+    expect(VERIFIED_USDC_DOMAINS[5042]).toEqual({ name: 'USDC', version: '2' });
+  });
+
+  it.each([
+    ['name', { usdc_domain_name: 'USD Coin' }],
+    ['version', { usdc_domain_version: '1' }],
+  ])('refuses an Arc config whose USDC domain %s differs, before anything is signed', async (_field, override) => {
+    const { wallet, signTypedData } = mockWallet();
+    const attempt = buildEscrowPreAuth(wallet, params({ ...ARC_CONFIG, ...override }));
+    await expect(attempt).rejects.toBeInstanceOf(X402Error);
+    await expect(attempt).rejects.toMatchObject({ code: 'INVALID_CONFIG' });
+    expect(signTypedData).not.toHaveBeenCalled();
+  });
+
+  it('signs an Arc config with the verified domain', async () => {
+    const { wallet, signTypedData } = mockWallet();
+    await buildEscrowPreAuth(wallet, params(ARC_CONFIG));
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+  });
+
+  it('signs a chain outside the table exactly as before, with the domain the config gives', async () => {
+    expect(VERIFIED_USDC_DOMAINS[NETWORK_CONFIG.chain_id]).toBeUndefined();
+    const { wallet, signTypedData } = mockWallet();
+    await buildEscrowPreAuth(wallet, params({ ...NETWORK_CONFIG, usdc_domain_name: 'Not The Token Name' }));
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(signTypedData.mock.calls[0][0]).domain.name).toBe('Not The Token Name');
   });
 });
 
