@@ -123,5 +123,100 @@
         "network": "eip155:8453"
       }
     }
+  },
+  "arc_vector": {
+    "_note": [
+      "Arc (chain 5042) on the x402r canonical escrow, with the payer, worker, bounty,",
+      "frozen now/salt/deadline/tier and signer_private_key of frozen_build above.",
+      "Both expected nonces are AuthCaptureEscrow.getHash answers (payer = 0) read on",
+      "chain 5042 at block 22435548; usdc_domain_name / usdc_domain_version are the",
+      "USDC contract's name() / version() read at the same block.",
+      "Recorded in uvd-x402-sdk-typescript src/fixtures/arc-escrow-d.rpc.json; derived by",
+      "scripts/derive-arc-escrow-preauth-vector.mjs."
+    ],
+    "network": "arc",
+    "network_config": {
+      "chain_id": 5042,
+      "operator": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+      "escrow": "0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff",
+      "token_collector": "0x0E3dF9510de65469C4518D7843919c0b8C7A7757",
+      "usdc": "0x3600000000000000000000000000000000000000",
+      "usdc_domain_name": "USDC",
+      "usdc_domain_version": "2",
+      "payment_info_typehash": "ae68ac7ce30c86ece8196b61a7c486d8f0061f575037fbd34e7fe4e2820c6591",
+      "min_fee_bps": 0,
+      "max_fee_bps": 1800
+    },
+    "static_vector": {
+      "payment_info": {
+        "operator": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+        "receiver": "0x1111111111111111111111111111111111111111",
+        "token": "0x3600000000000000000000000000000000000000",
+        "maxAmount": "100000",
+        "preApprovalExpiry": 1760003600,
+        "authorizationExpiry": 1760007200,
+        "refundExpiry": 1760086400,
+        "minFeeBps": 0,
+        "maxFeeBps": 1800,
+        "feeReceiver": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+        "salt": "abababababababababababababababababababababababababababababababab"
+      },
+      "expected_nonce": "47ff25a033ffd5f1c1dcebacd53e5d4a727ad9a24366493b3204e7190ff35c6b"
+    },
+    "frozen_build": {
+      "now": 1760000000,
+      "salt": "abababababababababababababababababababababababababababababababab",
+      "deadline": 1760432000,
+      "tier": "micro",
+      "expected_typed_data": {
+        "domain": {
+          "name": "USDC",
+          "version": "2",
+          "chainId": 5042,
+          "verifyingContract": "0x3600000000000000000000000000000000000000"
+        },
+        "primaryType": "ReceiveWithAuthorization",
+        "message": {
+          "from": "0x2222222222222222222222222222222222222222",
+          "to": "0x0E3dF9510de65469C4518D7843919c0b8C7A7757",
+          "value": "100000",
+          "validAfter": "0",
+          "validBefore": "1760003600",
+          "nonce": "edf1f8dc085ae946d54b795b8b2e3264a146700b93a1b42836a32c788e378839"
+        }
+      },
+      "expected_wrapper": {
+        "x402Version": 2,
+        "scheme": "escrow",
+        "payload": {
+          "authorization": {
+            "from": "0x2222222222222222222222222222222222222222",
+            "to": "0x0E3dF9510de65469C4518D7843919c0b8C7A7757",
+            "value": "100000",
+            "validAfter": "0",
+            "validBefore": "1760003600",
+            "nonce": "edf1f8dc085ae946d54b795b8b2e3264a146700b93a1b42836a32c788e378839"
+          },
+          "signature": "c1a18befee63db56a13ac0429a2d0465e375a22d7196c91eca070d4c821f0e3935cc60e42a4bba99c5ee0375319a3a9362fcaf1b3f1a381e1cdf47e0ec59635d1b",
+          "paymentInfo": {
+            "operator": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+            "receiver": "0x1111111111111111111111111111111111111111",
+            "token": "0x3600000000000000000000000000000000000000",
+            "maxAmount": "100000",
+            "preApprovalExpiry": 1760003600,
+            "authorizationExpiry": 1761036800,
+            "refundExpiry": 1761641600,
+            "minFeeBps": 0,
+            "maxFeeBps": 1800,
+            "feeReceiver": "0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D",
+            "salt": "abababababababababababababababababababababababababababababababab"
+          }
+        },
+        "paymentRequirements": {
+          "scheme": "escrow",
+          "network": "eip155:5042"
+        }
+      }
+    }
   }
 }

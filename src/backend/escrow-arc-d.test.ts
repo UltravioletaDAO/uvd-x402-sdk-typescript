@@ -183,6 +183,19 @@ describe('Arc escrow registry (x402r canonical escrow)', () => {
     }
   });
 
+  it.each(ARC)('signs with the EIP-712 domain the USDC contract publishes on %i', (chainId) => {
+    const text = (label: string) => ABI_CODER.decode(['string'], hex(read(chainId, label).result))[0];
+    expect(text('usdc.name')).toBe(USDC_DOMAIN_NAME[chainId]);
+    expect(text('usdc.version')).toBe('2');
+    const domain = {
+      name: USDC_DOMAIN_NAME[chainId],
+      version: '2',
+      chainId,
+      verifyingContract: ESCROW_CONTRACTS[chainId].usdc,
+    };
+    expect(ethers.TypedDataEncoder.hashDomain(domain)).toBe(hex(read(chainId, 'usdc.DOMAIN_SEPARATOR').result));
+  });
+
   it('still throws for a chain outside the registry', () => {
     expect(() => new AdvancedEscrowClient({ getAddress: async () => PAYER }, { chainId: 999999 })).toThrow(
       /No escrow contracts found for chain ID 999999/,

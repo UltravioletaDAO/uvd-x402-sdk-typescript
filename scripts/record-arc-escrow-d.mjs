@@ -77,6 +77,11 @@ const escrow = new ethers.Interface([
   'function paymentState(bytes32) view returns (bool hasCollectedPayment, uint120 capturableAmount, uint120 refundableAmount)',
 ]);
 const collector = new ethers.Interface(['function authCaptureEscrow() view returns (address)']);
+const token = new ethers.Interface([
+  'function name() view returns (string)',
+  'function version() view returns (string)',
+  'function DOMAIN_SEPARATOR() view returns (bytes32)',
+]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let requestId = 0;
@@ -137,6 +142,9 @@ async function recordChain({ chainId, rpcUrl, fullFactoryCode }) {
   await code('code.protocolFeeConfig', D.protocolFeeConfig, false);
   await code('code.refundRequest', D.refundRequest, false);
   await code('code.usdc', D.usdc, false);
+  await call('usdc.name', D.usdc, token.encodeFunctionData('name'));
+  await call('usdc.version', D.usdc, token.encodeFunctionData('version'));
+  await call('usdc.DOMAIN_SEPARATOR', D.usdc, token.encodeFunctionData('DOMAIN_SEPARATOR'));
   const staticHash = await call('escrow.getHash.static', D.escrow, escrow.encodeFunctionData('getHash', [VECTOR_PAYMENT_INFOS.static]));
   await call('escrow.getHash.frozen', D.escrow, escrow.encodeFunctionData('getHash', [VECTOR_PAYMENT_INFOS.frozen]));
   await call('escrow.paymentState.static', D.escrow, escrow.encodeFunctionData('paymentState', [staticHash]));

@@ -13,6 +13,8 @@ import type {
   EscrowTierWindows,
 } from './escrow-preauth';
 import { EnvKeyAdapter } from './adapters/env-key';
+import { ESCROW_CONTRACTS } from './backend';
+import { getChainByName } from './chains';
 import { X402Error } from './types';
 import fixtureRaw from './escrow-preauth.vectors.json';
 
@@ -24,6 +26,13 @@ import fixtureRaw from './escrow-preauth.vectors.json';
  * em-mobile node --test, em-plugin-sdk pytest); if the wire format ever
  * changes there, re-copy the file and this suite must keep passing WITHOUT
  * touching the assertions (the format is pinned).
+ *
+ * The one exception is `arc_vector`, appended here after every other key
+ * (whose bytes are unchanged) by `scripts/derive-arc-escrow-preauth-vector.mjs`:
+ * Arc (chain 5042) on the x402r canonical escrow. Its nonces are
+ * AuthCaptureEscrow.getHash answers read on chain 5042 and its USDC domain is
+ * the token's own name()/version() (`src/fixtures/arc-escrow-d.rpc.json`).
+ * Mirrored copies take it by re-copying this file.
  *
  * The nonce MUST match AuthCaptureEscrow.getHash(paymentInfo) or the
  * on-chain authorize reverts. The golden-wrapper test freezes time
@@ -62,6 +71,12 @@ interface EscrowPreAuthFixture {
       message: Record<string, string>;
     };
     expected_wrapper: Record<string, unknown>;
+  };
+  arc_vector: {
+    network: string;
+    network_config: Omit<EscrowNetworkConfig, 'tiers'>;
+    static_vector: { payment_info: EscrowPaymentInfo; expected_nonce: string };
+    frozen_build: Omit<EscrowPreAuthFixture['frozen_build'], 'signer_private_key' | 'signer_address'>;
   };
 }
 
@@ -197,6 +212,83 @@ describe('golden vectors (escrow-preauth.vectors.json, byte-pinned)', () => {
     expect(typedData.domain).toEqual(etd.domain);
     expect(typedData.message).toEqual(etd.message);
     expect(typedData.types).toHaveProperty('ReceiveWithAuthorization');
+  });
+});
+
+describe('Arc vector (arc_vector: chain 5042, x402r canonical escrow)', () => {
+  const ARC = FX.arc_vector;
+  const ARC_CONFIG: EscrowNetworkConfig = { ...ARC.network_config, tiers: FX.escrow_tier_windows };
+
+  it('names the escrow the SDK registry ships for Arc, and the USDC domain of the chain registry', () => {
+    const c = ESCROW_CONTRACTS[5042];
+    expect(ARC.network).toBe('arc');
+    expect(ARC.network_config).toMatchObject({
+      chain_id: 5042,
+      operator: c.operator,
+      escrow: c.escrow,
+      token_collector: c.tokenCollector,
+      usdc: c.usdc,
+      payment_info_typehash: FX.network_config.payment_info_typehash,
+    });
+    const usdc = getChainByName('arc')!.usdc;
+    expect([ARC.network_config.usdc_domain_name, ARC.network_config.usdc_domain_version]).toEqual([
+      usdc.name,
+      usdc.version,
+    ]);
+  });
+
+  it('computeEscrowNonce equals the nonce AuthCaptureEscrow.getHash returned on chain 5042', () => {
+    const nonce = computeEscrowNonce(
+      ARC_CONFIG.chain_id,
+      ARC_CONFIG.escrow,
+      ARC_CONFIG.payment_info_typehash,
+      ARC.static_vector.payment_info
+    );
+    expect(nonce).toBe(ARC.static_vector.expected_nonce);
+    expect(nonce).not.toBe(EXPECTED_NONCE);
+  });
+
+  it('reproduces the expected Arc wrapper + typed data under frozen time/salt', async () => {
+    const frozen = ARC.frozen_build;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(frozen.now * 1000));
+    vi.stubGlobal('crypto', {
+      getRandomValues: (arr: Uint8Array) => {
+        arr.fill(0xab);
+        return arr;
+      },
+    });
+
+    const adapter = new EnvKeyAdapter(FROZEN.signer_private_key);
+    const calls: Array<Record<string, unknown>> = [];
+    const wallet = {
+      signTypedData: (typedData: string) => {
+        calls.push(JSON.parse(typedData) as Record<string, unknown>);
+        return adapter.signTypedData(typedData);
+      },
+    };
+
+    const header = await buildEscrowPreAuth(wallet, {
+      networkConfig: ARC_CONFIG,
+      payerWallet: PAYER,
+      workerWallet: WORKER,
+      bountyAtomic: FX.bounty_atomic,
+      tier: frozen.tier,
+      reviewDeadlineSec: frozen.deadline,
+    });
+    expect(JSON.parse(header)).toEqual(frozen.expected_wrapper);
+
+    const etd = frozen.expected_typed_data;
+    expect(calls).toHaveLength(1);
+    expect(calls[0].primaryType).toBe(etd.primaryType);
+    expect(calls[0].domain).toEqual(etd.domain);
+    expect(calls[0].domain).toEqual({
+      name: 'USDC',
+      version: '2',
+      chainId: 5042,
+      verifyingContract: ESCROW_CONTRACTS[5042].usdc,
+    });
+    expect(calls[0].message).toEqual(etd.message);
   });
 });
 
