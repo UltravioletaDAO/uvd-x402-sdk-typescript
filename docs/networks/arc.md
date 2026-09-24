@@ -261,8 +261,8 @@ if (!refund.success && refund.errorCode === ESCROW_VOID_AMOUNT_MISMATCH) {
 }
 ```
 
-Measured from the public RPCs on 2026-09-24 (Arc block 22435548, Arc Testnet block
-63681360) and recorded in `src/fixtures/arc-escrow-d.rpc.json` by
+Measured from the public RPCs on 2026-09-24 (Arc block 22439550, Arc Testnet block
+63685410) and recorded in `src/fixtures/arc-escrow-d.rpc.json` by
 `scripts/record-arc-escrow-d.mjs`:
 
 - The factory's `computeAddress` returns the operator above on both networks, and
@@ -274,8 +274,8 @@ Measured from the public RPCs on 2026-09-24 (Arc block 22435548, Arc Testnet blo
   the table but the operator has code.
 - USDC `name()` / `version()` are `USDC` / `2`, and the EIP-712 domain the client
   signs hashes to the token's `DOMAIN_SEPARATOR()` on both networks.
-- The pre-auth vector `arc_vector` in `src/escrow-preauth.vectors.json` uses nonces
-  read from `AuthCaptureEscrow.getHash` on Arc.
+- The pre-auth vector `src/escrow-preauth.arc-vector.json` (the Python SDK's Arc
+  pre-auth case) uses the nonce read from `AuthCaptureEscrow.getHash` on Arc.
 
 `buildEscrowPreAuth` checks the escrow config's USDC domain against
 `VERIFIED_USDC_DOMAINS`: on Arc and Arc Testnet a config that does not say
