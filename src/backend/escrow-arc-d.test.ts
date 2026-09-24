@@ -374,6 +374,7 @@ describe("v3 operator calls, ethers.Signer mode", () => {
   it.each([
     ['release', (c: AdvancedEscrowClient, pi: AdvancedPaymentInfo) => c.release(pi)],
     ['refundInEscrow', (c: AdvancedEscrowClient, pi: AdvancedPaymentInfo) => c.refundInEscrow(pi)],
+    ['refundPostEscrow', (c: AdvancedEscrowClient, pi: AdvancedPaymentInfo) => c.refundPostEscrow(pi)],
   ])('%s against an operator with no code sends nothing', async (_name, call) => {
     const { client, sent } = signerClient(chainId, { operatorCode: '0x' });
     const result = await call(client, paymentInfo(chainId));
@@ -382,12 +383,29 @@ describe("v3 operator calls, ethers.Signer mode", () => {
     expect(sent).toEqual([]);
   });
 
-  it.each([
-    ['charge', (c: AdvancedEscrowClient, pi: AdvancedPaymentInfo) => c.charge(pi)],
-    ['refundPostEscrow', (c: AdvancedEscrowClient, pi: AdvancedPaymentInfo) => c.refundPostEscrow(pi)],
-  ])('%s is refused on v3 without signing or sending', async (_name, call) => {
+  it('refundPostEscrow sends refund(paymentInfo, amount, tokenCollector, collectorData)', async () => {
+    const pi = paymentInfo(chainId);
+    const collector = '0x3333333333333333333333333333333333333333';
+    const { client, sent } = signerClient(chainId);
+    const result = await client.refundPostEscrow(pi, '1250000', collector, '0xabcd');
+    expect(result.success).toBe(true);
+    expect(sent).toEqual([
+      { to: operator, data: OPERATOR_V3.encodeFunctionData('refund', [tupleOf(pi), '1250000', collector, '0xabcd']) },
+    ]);
+  });
+
+  it('refundPostEscrow with no collector sends refund with the zero address and empty data', async () => {
+    const pi = paymentInfo(chainId);
+    const { client, sent } = signerClient(chainId);
+    await client.refundPostEscrow(pi);
+    expect(sent).toEqual([
+      { to: operator, data: OPERATOR_V3.encodeFunctionData('refund', [tupleOf(pi), '5000000', ethers.ZeroAddress, '0x']) },
+    ]);
+  });
+
+  it('charge is refused on v3 without signing or sending', async () => {
     const { client, sent, signTypedData, reads } = signerClient(chainId);
-    const result = await call(client, paymentInfo(chainId));
+    const result = await client.charge(paymentInfo(chainId));
     expect(result.success).toBe(false);
     expect(result.errorCode).toBe(ESCROW_UNSUPPORTED_ON_GENERATION);
     expect(signTypedData).not.toHaveBeenCalled();

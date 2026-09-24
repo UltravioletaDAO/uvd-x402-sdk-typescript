@@ -243,10 +243,11 @@ The operator is generation `'v3'` (`OPERATOR_ABI_V3`). It has no `release` and n
   sends nothing and returns `errorCode` `ESCROW_VOID_AMOUNT_MISMATCH`, or
   `ESCROW_NOTHING_TO_VOID` when the capturable amount is 0. To return part of an
   escrow, `release` the part the receiver keeps, then `refundInEscrow` the rest.
-- `charge` and `refundPostEscrow` return `ESCROW_UNSUPPORTED_ON_GENERATION` without
-  signing or sending.
-- While the operator address has no code, `release` and `refundInEscrow` return
-  `ESCROW_OPERATOR_NOT_DEPLOYED` and send nothing.
+- `refundPostEscrow(paymentInfo, amount, tokenCollector, collectorData)` sends
+  `refund` with the same arguments.
+- `charge` returns `ESCROW_UNSUPPORTED_ON_GENERATION` without signing or sending.
+- While the operator address has no code, `release`, `refundInEscrow` and
+  `refundPostEscrow` return `ESCROW_OPERATOR_NOT_DEPLOYED` and send nothing.
 
 ```typescript
 import { AdvancedEscrowClient, ESCROW_VOID_AMOUNT_MISMATCH } from 'uvd-x402-sdk/backend';

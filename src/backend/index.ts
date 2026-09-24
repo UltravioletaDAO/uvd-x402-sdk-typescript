@@ -6794,9 +6794,8 @@ export const ESCROW_NOTHING_TO_VOID = 'escrow_nothing_to_void';
 export const ESCROW_OPERATOR_NOT_DEPLOYED = 'escrow_operator_not_deployed';
 
 /**
- * The call has no counterpart on the chain's operator generation (`charge` and
- * `refundPostEscrow` on a v3 operator). Nothing was signed or sent.
- * `errorCode` of the result.
+ * The call has no counterpart on the chain's operator generation (`charge` on
+ * a v3 operator). Nothing was signed or sent. `errorCode` of the result.
  */
 export const ESCROW_UNSUPPORTED_ON_GENERATION = 'escrow_unsupported_on_generation';
 
@@ -6849,8 +6848,8 @@ export function getEscrowOperatorGeneration(chainId: number): EscrowOperatorGene
  *
  * The operator ABI follows the chain's {@link ESCROW_OPERATOR_GENERATION}.
  * On Arc and Arc Testnet (`'v3'`) `release` sends `capture`, `refundInEscrow`
- * sends `void` (whole capturable amount only), and `charge` /
- * `refundPostEscrow` refuse without signing or sending.
+ * sends `void` (whole capturable amount only), `refundPostEscrow` sends
+ * `refund`, and `charge` refuses without signing or sending.
  *
  * Contract addresses are auto-resolved from the chain ID.
  * Pass custom contracts to override.
@@ -7824,8 +7823,10 @@ export class AdvancedEscrowClient {
    *
    * Kept for future use when tokenCollector is implemented.
    *
-   * Not available on a `'v3'` operator (Arc, Arc Testnet): it returns
-   * {@link ESCROW_UNSUPPORTED_ON_GENERATION} without sending.
+   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * `PaymentOperator.refund(paymentInfo, amount, tokenCollector, collectorData)`
+   * -> escrow.refund(), the same arguments, after checking that the operator
+   * has code ({@link ESCROW_OPERATOR_NOT_DEPLOYED}).
    *
    * @param paymentInfo - PaymentInfo from the original authorization
    * @param amount - Amount to refund (defaults to maxAmount)
@@ -7838,14 +7839,18 @@ export class AdvancedEscrowClient {
     tokenCollector?: string,
     collectorData?: string,
   ): Promise<AdvancedTransactionResult> {
-    const unsupported = this.unsupportedOnV3('refundPostEscrow');
-    if (unsupported) return unsupported;
     if (!this.payerAddress) await this.init();
 
     try {
       const { ethers } = await import('ethers');
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
+
+      if (getEscrowOperatorGeneration(this.chainId) === 'v3') {
+        return await this.sendV3OperatorCall(ethers, this.v3Provider(ethers), 'refund', [
+          tuple, amt, tokenCollector || ZERO_ADDRESS, collectorData || '0x',
+        ]);
+      }
 
       // OWS wallet adapter mode
       if (this.walletAdapter) {
@@ -7883,7 +7888,7 @@ export class AdvancedEscrowClient {
   // ==========================================================================
 
   /** The refusal of a call a 'v3' operator does not have, or null elsewhere. */
-  private unsupportedOnV3(method: 'charge' | 'refundPostEscrow'): AdvancedTransactionResult | null {
+  private unsupportedOnV3(method: 'charge'): AdvancedTransactionResult | null {
     if (getEscrowOperatorGeneration(this.chainId) !== 'v3') return null;
     return {
       success: false,
@@ -7916,7 +7921,7 @@ export class AdvancedEscrowClient {
   private async sendV3OperatorCall(
     ethersModule: any,
     provider: any,
-    method: 'capture' | 'void',
+    method: 'capture' | 'void' | 'refund',
     args: unknown[],
   ): Promise<AdvancedTransactionResult> {
     const code: string = await provider.getCode(this.contracts.operator);
