@@ -6206,6 +6206,10 @@ export function buildErc8004PaymentRequirements(
 //   operator.refundInEscrow()   -> escrow.partialVoid()  (refund payer)
 //   operator.charge()           -> escrow.charge()       (direct payment)
 //   operator.refundPostEscrow() -> escrow.refund()       (dispute refund)
+//
+// On a 'v3' operator (Arc, Arc Testnet) the client maps RELEASE to
+// operator.capture() and REFUND IN ESCROW to operator.void(), which returns
+// the WHOLE capturable amount. See OPERATOR_ABI_V3.
 // ============================================================================
 
 /**
@@ -6254,6 +6258,17 @@ export const ESCROW_TIMEOUT_MS: Record<number, number> = {
 const DEFAULT_ESCROW_TIMEOUT_MS = 30_000;
 
 /**
+ * An Arc network's USDC as the chain registry (`src/chains`) has it. The
+ * escrow tables below read the address and the EIP-712 domain name from here
+ * instead of typing them a second time.
+ */
+function arcUsdc(network: 'arc' | 'arc-testnet'): { address: string; name: string } {
+  const chain = getChainByName(network);
+  if (!chain) throw new Error(`The chain registry has no '${network}'.`);
+  return chain.usdc;
+}
+
+/**
  * USDC EIP-712 domain name per chain.
  * Most chains use "USD Coin", but some (Celo, Monad, HyperEVM) use "USDC".
  * This must match the on-chain token's name() for EIP-712 signing to work.
@@ -6268,6 +6283,8 @@ export const USDC_DOMAIN_NAME: Record<number, string> = {
   43114: 'USD Coin',      // Avalanche
   42220: 'USDC',          // Celo
   143: 'USDC',            // Monad
+  5042: arcUsdc('arc').name,             // Arc ('USDC', from src/chains)
+  5042002: arcUsdc('arc-testnet').name,  // Arc Testnet ('USDC', from src/chains)
 };
 
 /**
@@ -6288,6 +6305,13 @@ export const USDC_DOMAIN_NAME: Record<number, string> = {
  * resolve the real operator from the marketplace's own escrow config
  * ({@link EscrowNetworkConfig}) and pass it via `options.contracts`.
  * See {@link OPERATOR_FEE_BPS} for the commands.
+ *
+ * Arc (5042) and Arc Testnet (5042002) use the x402r canonical escrow
+ * (AuthCaptureEscrow `0xBdEA0D1b…`, PaymentOperatorFactory v1.0.2
+ * `0xc24153B7…`). Their `operator` is a PaymentOperator address: the one the
+ * factory's `computeAddress` returns, recorded on both chains in
+ * `src/fixtures/arc-escrow-d.rpc.json`. Their operator generation is `'v3'`
+ * ({@link OPERATOR_ABI_V3}).
  */
 export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
   // Base Sepolia (testnet, chain 84532)
@@ -6388,6 +6412,24 @@ export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
     protocolFeeConfig: '0xf62788834C99B2E85a6891C0b46D1EB996f8f596',
     refundRequest: '0x69e9BF2b40Ed472b55E47e9D4205d93Ed673093F',
     usdc: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
+  },
+  // Arc (chain 5042) - x402r canonical escrow, 'v3' operator
+  5042: {
+    operator: '0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D',
+    escrow: '0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff',
+    tokenCollector: '0x0E3dF9510de65469C4518D7843919c0b8C7A7757',
+    protocolFeeConfig: '0xBe2d24614F339a1eB103A399F93AA2a39Ca815Bc',
+    refundRequest: '0xe971C674fD5c3462023f3F891dF6289DFbC9CEFC',
+    usdc: arcUsdc('arc').address,
+  },
+  // Arc Testnet (chain 5042002) - same canonical addresses as Arc
+  5042002: {
+    operator: '0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D',
+    escrow: '0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff',
+    tokenCollector: '0x0E3dF9510de65469C4518D7843919c0b8C7A7757',
+    protocolFeeConfig: '0xBe2d24614F339a1eB103A399F93AA2a39Ca815Bc',
+    refundRequest: '0xe971C674fD5c3462023f3F891dF6289DFbC9CEFC',
+    usdc: arcUsdc('arc-testnet').address,
   },
 };
 
@@ -6629,7 +6671,8 @@ export interface AdvancedEscrowClientOptions {
    * Chain ID (default: 8453 for Base Mainnet).
    * Supported chains: 8453 (Base), 84532 (Base Sepolia), 1 (Ethereum),
    * 11155111 (Ethereum Sepolia), 137 (Polygon), 42161 (Arbitrum),
-   * 10 (Optimism), 42220 (Celo), 143 (Monad), 43114 (Avalanche).
+   * 10 (Optimism), 42220 (Celo), 143 (Monad), 43114 (Avalanche),
+   * 1187947933 (SKALE Base), 5042 (Arc), 5042002 (Arc Testnet).
    */
   chainId?: number;
   /** Contract addresses (auto-resolved from chainId if not provided) */
@@ -6693,8 +6736,106 @@ export const OPERATOR_ABI_CREATE3 = [
   'function refundPostEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
 ];
 
-/** Chain IDs using CREATE3-deployed operators with updated ABI */
-const CREATE3_CHAIN_IDS = new Set([1187947933]);
+/**
+ * PaymentOperator of the x402r canonical PaymentOperatorFactory v1.0.2
+ * (`0xc24153B7ED8DC03e551F29DDEeA5CadFe57e2716`), the operator generation of
+ * Arc and Arc Testnet. Source: BackTrackCo/x402r-contracts
+ * `src/operator/payment/PaymentOperator.sol` @ 8345776e.
+ *
+ * It has no `release` and no `refundInEscrow`:
+ * - `capture(paymentInfo, amount, data)` pays the receiver;
+ * - `void(paymentInfo, data)` takes NO amount: it returns the whole
+ *   `capturableAmount` to the payer;
+ * - `refund(...)` returns funds after a capture;
+ * - the owner is `FEE_RECEIVER()`.
+ *
+ * Every selector here is checked against the factory bytecode recorded on
+ * Arc (`src/fixtures/arc-escrow-d.rpc.json`): `capture` 0xf12b86f6, `void`
+ * 0xc3c5090e, `FEE_RECEIVER` 0xd3e78e4d.
+ */
+export const OPERATOR_ABI_V3 = [
+  'function capture(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, bytes data)',
+  'function void(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, bytes data)',
+  'function refund(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
+  'function FEE_RECEIVER() view returns (address)',
+  'function AUTHORIZE_PRE_ACTION_CONDITION() view returns (address)',
+  'function CHARGE_PRE_ACTION_CONDITION() view returns (address)',
+  'function CAPTURE_PRE_ACTION_CONDITION() view returns (address)',
+  'function VOID_PRE_ACTION_CONDITION() view returns (address)',
+  'function REFUND_PRE_ACTION_CONDITION() view returns (address)',
+];
+
+/**
+ * The two AuthCaptureEscrow reads a v3 `refundInEscrow` makes before it sends
+ * anything: the payment's hash, then its `capturableAmount`.
+ */
+const AUTH_CAPTURE_ESCROW_STATE_ABI = [
+  'function getHash(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo) view returns (bytes32)',
+  'function paymentState(bytes32 paymentInfoHash) view returns (bool hasCollectedPayment, uint120 capturableAmount, uint120 refundableAmount)',
+];
+
+/**
+ * `refundInEscrow` on a v3 operator was given an amount other than the whole
+ * `capturableAmount`. `void` takes no amount, so sending it would return more
+ * than was asked. Nothing was sent. `errorCode` of the result.
+ */
+export const ESCROW_VOID_AMOUNT_MISMATCH = 'escrow_void_amount_mismatch';
+
+/**
+ * `refundInEscrow` on a v3 operator found `capturableAmount` = 0: nothing is
+ * left to return. Nothing was sent. `errorCode` of the result.
+ */
+export const ESCROW_NOTHING_TO_VOID = 'escrow_nothing_to_void';
+
+/**
+ * The v3 operator has no code on the chain. A call to it would succeed and
+ * move nothing, so the SDK does not send one. `errorCode` of the result.
+ */
+export const ESCROW_OPERATOR_NOT_DEPLOYED = 'escrow_operator_not_deployed';
+
+/**
+ * The call has no counterpart on the chain's operator generation (`charge` on
+ * a v3 operator). Nothing was signed or sent. `errorCode` of the result.
+ */
+export const ESCROW_UNSUPPORTED_ON_GENERATION = 'escrow_unsupported_on_generation';
+
+/**
+ * Which PaymentOperator ABI a chain's escrow operator speaks.
+ *
+ * - `'v1'`: {@link OPERATOR_ABI} — `release(PaymentInfo, amount)` and
+ *   `refundInEscrow(PaymentInfo, amount)`.
+ * - `'v2'`: {@link OPERATOR_ABI_CREATE3} — the same two with a trailing
+ *   `bytes data`.
+ * - `'v3'`: {@link OPERATOR_ABI_V3} — `capture(PaymentInfo, amount, data)` and
+ *   `void(PaymentInfo, data)`.
+ */
+export type EscrowOperatorGeneration = 'v1' | 'v2' | 'v3';
+
+/**
+ * Operator generation per chain — the single source the escrow client reads
+ * to pick the operator ABI. A chain absent from this table is `'v1'`, which is
+ * what a custom `options.contracts` on an unlisted chain has always used.
+ */
+export const ESCROW_OPERATOR_GENERATION: Record<number, EscrowOperatorGeneration> = {
+  84532: 'v1',       // Base Sepolia
+  8453: 'v1',        // Base
+  11155111: 'v1',    // Ethereum Sepolia
+  1: 'v1',           // Ethereum
+  137: 'v1',         // Polygon
+  42161: 'v1',       // Arbitrum
+  42220: 'v1',       // Celo
+  143: 'v1',         // Monad
+  43114: 'v1',       // Avalanche
+  10: 'v1',          // Optimism
+  1187947933: 'v2',  // SKALE Base
+  5042: 'v3',        // Arc
+  5042002: 'v3',     // Arc Testnet
+};
+
+/** Operator generation of a chain; `'v1'` when the chain is not listed. */
+export function getEscrowOperatorGeneration(chainId: number): EscrowOperatorGeneration {
+  return ESCROW_OPERATOR_GENERATION[chainId] ?? 'v1';
+}
 
 /**
  * AdvancedEscrowClient provides the 5 Advanced Escrow flows via the
@@ -6702,7 +6843,13 @@ const CREATE3_CHAIN_IDS = new Set([1187947933]);
  *
  * Supported chains: Base (8453), Base Sepolia (84532), Ethereum (1),
  * Ethereum Sepolia (11155111), Polygon (137), Arbitrum (42161),
- * Optimism (10), Celo (42220), Monad (143), Avalanche (43114).
+ * Optimism (10), Celo (42220), Monad (143), Avalanche (43114),
+ * SKALE Base (1187947933), Arc (5042), Arc Testnet (5042002).
+ *
+ * The operator ABI follows the chain's {@link ESCROW_OPERATOR_GENERATION}.
+ * On Arc and Arc Testnet (`'v3'`) `release` sends `capture`, `refundInEscrow`
+ * sends `void` (whole capturable amount only), `refundPostEscrow` sends
+ * `refund`, and `charge` refuses without signing or sending.
  *
  * Contract addresses are auto-resolved from the chain ID.
  * Pass custom contracts to override.
@@ -7123,6 +7270,10 @@ export class AdvancedEscrowClient {
    *
    * Calls PaymentOperator.release() -> escrow.capture()
    *
+   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * `PaymentOperator.capture(paymentInfo, amount, 0x)` instead, after checking
+   * that the operator has code ({@link ESCROW_OPERATOR_NOT_DEPLOYED}).
+   *
    * @param paymentInfo - PaymentInfo from the authorize step
    * @param amount - Amount to release (defaults to maxAmount)
    */
@@ -7131,10 +7282,15 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
+      const generation = getEscrowOperatorGeneration(this.chainId);
+      const isCreate3 = generation === 'v2';
       const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
+
+      if (generation === 'v3') {
+        return await this.sendV3OperatorCall(ethers, this.v3Provider(ethers), 'capture', [tuple, amt, '0x']);
+      }
 
       // OWS wallet adapter mode: build unsigned TX, sign via adapter, broadcast
       if (this.walletAdapter) {
@@ -7168,6 +7324,16 @@ export class AdvancedEscrowClient {
    *
    * Calls PaymentOperator.refundInEscrow() -> escrow.partialVoid()
    *
+   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * `PaymentOperator.void(paymentInfo, 0x)`, which takes no amount and returns
+   * the WHOLE `capturableAmount`. So it first reads that amount on-chain
+   * (`AuthCaptureEscrow.getHash` + `paymentState`) and sends only when
+   * `amount` equals it. Otherwise nothing is sent and `errorCode` says why:
+   * {@link ESCROW_NOTHING_TO_VOID} when it is 0,
+   * {@link ESCROW_VOID_AMOUNT_MISMATCH} for any other amount. To return part
+   * of an escrow on v3, `release` the part the receiver keeps, then
+   * `refundInEscrow` what is left.
+   *
    * @param paymentInfo - PaymentInfo from the authorize step
    * @param amount - Amount to refund (defaults to maxAmount)
    */
@@ -7176,10 +7342,15 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
+      const generation = getEscrowOperatorGeneration(this.chainId);
+      const isCreate3 = generation === 'v2';
       const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
+
+      if (generation === 'v3') {
+        return await this.voidWholeCapturable(ethers, tuple, amt);
+      }
 
       // OWS wallet adapter mode: build unsigned TX, sign via adapter, broadcast
       if (this.walletAdapter) {
@@ -7576,10 +7747,15 @@ export class AdvancedEscrowClient {
    * Calls PaymentOperator.charge() -> escrow.charge()
    * Funds go directly from payer to receiver.
    *
+   * Not available on a `'v3'` operator (Arc, Arc Testnet): it returns
+   * {@link ESCROW_UNSUPPORTED_ON_GENERATION} without signing or sending.
+   *
    * @param paymentInfo - PaymentInfo with receiver and amount
    * @param amount - Amount to charge (defaults to maxAmount)
    */
   async charge(paymentInfo: AdvancedPaymentInfo, amount?: string): Promise<AdvancedTransactionResult> {
+    const unsupported = this.unsupportedOnV3('charge');
+    if (unsupported) return unsupported;
     if (!this.payerAddress) await this.init();
 
     try {
@@ -7647,6 +7823,11 @@ export class AdvancedEscrowClient {
    *
    * Kept for future use when tokenCollector is implemented.
    *
+   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * `PaymentOperator.refund(paymentInfo, amount, tokenCollector, collectorData)`
+   * -> escrow.refund(), the same arguments, after checking that the operator
+   * has code ({@link ESCROW_OPERATOR_NOT_DEPLOYED}).
+   *
    * @param paymentInfo - PaymentInfo from the original authorization
    * @param amount - Amount to refund (defaults to maxAmount)
    * @param tokenCollector - Address of token collector for refund sourcing
@@ -7664,6 +7845,12 @@ export class AdvancedEscrowClient {
       const { ethers } = await import('ethers');
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
+
+      if (getEscrowOperatorGeneration(this.chainId) === 'v3') {
+        return await this.sendV3OperatorCall(ethers, this.v3Provider(ethers), 'refund', [
+          tuple, amt, tokenCollector || ZERO_ADDRESS, collectorData || '0x',
+        ]);
+      }
 
       // OWS wallet adapter mode
       if (this.walletAdapter) {
@@ -7694,6 +7881,119 @@ export class AdvancedEscrowClient {
     } catch (e: any) {
       return { success: false, error: e.message || String(e) };
     }
+  }
+
+  // ==========================================================================
+  // INTERNAL: 'v3' operator (Arc, Arc Testnet)
+  // ==========================================================================
+
+  /** The refusal of a call a 'v3' operator does not have, or null elsewhere. */
+  private unsupportedOnV3(method: 'charge'): AdvancedTransactionResult | null {
+    if (getEscrowOperatorGeneration(this.chainId) !== 'v3') return null;
+    return {
+      success: false,
+      errorCode: ESCROW_UNSUPPORTED_ON_GENERATION,
+      error:
+        `${method} is not available on the v3 escrow operator of chain ${this.chainId} ` +
+        `(OPERATOR_ABI_V3). Nothing was signed or sent.`,
+    };
+  }
+
+  /** The provider a 'v3' call reads with before it sends anything. */
+  private v3Provider(ethersModule: any): any {
+    const provider = this.walletAdapter
+      ? new ethersModule.JsonRpcProvider(this.rpcUrl)
+      : this.signer?.provider;
+    if (!provider) {
+      throw new Error(
+        `AdvancedEscrowClient: chain ${this.chainId} uses a v3 escrow operator, which is read ` +
+          'on-chain before any call; the signer has no provider to read with.',
+      );
+    }
+    return provider;
+  }
+
+  /**
+   * Send one OPERATOR_ABI_V3 call, once the operator is known to have code.
+   * A call to an address with no code succeeds and moves nothing, and would be
+   * reported as a success.
+   */
+  private async sendV3OperatorCall(
+    ethersModule: any,
+    provider: any,
+    method: 'capture' | 'void' | 'refund',
+    args: unknown[],
+  ): Promise<AdvancedTransactionResult> {
+    const code: string = await provider.getCode(this.contracts.operator);
+    if (!code || code === '0x') {
+      return {
+        success: false,
+        errorCode: ESCROW_OPERATOR_NOT_DEPLOYED,
+        error:
+          `The escrow operator ${this.contracts.operator} has no code on chain ${this.chainId}. ` +
+          'Nothing was sent.',
+      };
+    }
+
+    if (this.walletAdapter) {
+      return await this.sendViaAdapter(ethersModule, OPERATOR_ABI_V3, (iface) =>
+        iface.encodeFunctionData(method, args),
+      );
+    }
+
+    const contract = new ethersModule.Contract(this.contracts.operator, OPERATOR_ABI_V3, this.signer);
+    const tx = await contract.getFunction(method)(...args, { gasLimit: this.gasLimit });
+    const receipt = await tx.wait();
+
+    return {
+      success: receipt.status === 1,
+      transactionHash: receipt.hash,
+      gasUsed: Number(receipt.gasUsed),
+      error: receipt.status !== 1 ? 'Transaction reverted' : undefined,
+    };
+  }
+
+  /**
+   * `refundInEscrow` on a 'v3' operator: `void` returns the whole capturable
+   * amount, so it is sent only when that is exactly what was asked for.
+   */
+  private async voidWholeCapturable(
+    ethersModule: any,
+    tuple: any[],
+    amount: string,
+  ): Promise<AdvancedTransactionResult> {
+    const requested = BigInt(amount);
+    if (requested <= 0n) {
+      return { success: false, error: `refundInEscrow amount must be positive, got ${amount}. Nothing was sent.` };
+    }
+
+    const provider = this.v3Provider(ethersModule);
+    const escrow = new ethersModule.Contract(this.contracts.escrow, AUTH_CAPTURE_ESCROW_STATE_ABI, provider);
+    const paymentInfoHash = await escrow.getHash(tuple);
+    const [, capturable] = await escrow.paymentState(paymentInfoHash);
+    const capturableAmount = BigInt(capturable);
+
+    if (capturableAmount === 0n) {
+      return {
+        success: false,
+        errorCode: ESCROW_NOTHING_TO_VOID,
+        error:
+          `Nothing to void on chain ${this.chainId}: capturableAmount is 0 for payment ` +
+          `${paymentInfoHash}. Nothing was sent.`,
+      };
+    }
+    if (requested !== capturableAmount) {
+      return {
+        success: false,
+        errorCode: ESCROW_VOID_AMOUNT_MISMATCH,
+        error:
+          `refundInEscrow asked for ${requested} but the v3 operator's void() returns the whole ` +
+          `capturableAmount, ${capturableAmount}. Pass ${capturableAmount}, or release the part the ` +
+          'receiver keeps first. Nothing was sent.',
+      };
+    }
+
+    return await this.sendV3OperatorCall(ethersModule, provider, 'void', [tuple, '0x']);
   }
 
   // ==========================================================================

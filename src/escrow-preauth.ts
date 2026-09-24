@@ -15,8 +15,9 @@
  * receiver fill" is on-chain unsound).
  *
  * Fail-loud policy: an incomplete network config, an unknown tier, a bounty
- * outside the on-chain deposit limit, or a `maxFeeBps` that cannot cover the
- * operator's static fee all throw instead of falling back — a silent
+ * outside the on-chain deposit limit, a `maxFeeBps` that cannot cover the
+ * operator's static fee, or a USDC domain that contradicts
+ * {@link VERIFIED_USDC_DOMAINS} all throw instead of falling back — a silent
  * fallback would sign an EIP-3009 authorization with the WRONG EIP-712
  * domain (chainId + verifyingContract): a mismatched, wallet-draining auth.
  *
@@ -50,6 +51,7 @@
  */
 
 import { ethers } from 'ethers';
+import { getChainByName } from './chains';
 import { X402Error } from './types';
 import {
   needsAccountWrap,
@@ -213,6 +215,30 @@ export interface EscrowPaymentInfo {
   salt: string;
 }
 
+/**
+ * USDC EIP-712 domains VERIFIED ON-CHAIN, per chain ID.
+ *
+ * `usdc_domain_name` / `usdc_domain_version` arrive with the server's config,
+ * and they ARE the domain the authorization is signed under: a wrong pair
+ * produces an authorization that never settles. For a chain in this table,
+ * {@link buildEscrowPreAuth} refuses a config whose pair differs. A chain that
+ * is not in the table is signed exactly as before.
+ *
+ * Only chains whose domain this SDK checked against the token's own
+ * `DOMAIN_SEPARATOR()` are listed: Arc and Arc Testnet
+ * (`src/fixtures/arc-escrow-d.rpc.json`, pinned by
+ * `src/backend/escrow-arc-d.test.ts`). The values come from the chain
+ * registry (`src/chains`), not typed again here. Mirrors the refusal policy of
+ * the Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`.
+ */
+export const VERIFIED_USDC_DOMAINS: Record<number, { name: string; version: string }> = Object.fromEntries(
+  (['arc', 'arc-testnet'] as const).map((network) => {
+    const chain = getChainByName(network);
+    if (!chain) throw new Error(`The chain registry has no '${network}'.`);
+    return [chain.chainId, { name: chain.usdc.name, version: chain.usdc.version }];
+  })
+);
+
 const REQUIRED_NETWORK_KEYS: Array<keyof EscrowNetworkConfig> = [
   'chain_id',
   'operator',
@@ -351,8 +377,9 @@ export interface EscrowPreAuthParams {
  * `em_plugin_sdk.escrow_signing.build_escrow_pre_auth`.
  *
  * @throws {X402Error} `INVALID_CONFIG` on an incomplete network config,
- *   unknown tier, or a `maxFeeBps` that cannot cover the operator's static
- *   fee; `INVALID_AMOUNT` on a bounty outside (0, deposit limit].
+ *   unknown tier, a `maxFeeBps` that cannot cover the operator's static
+ *   fee, or a USDC domain that differs from {@link VERIFIED_USDC_DOMAINS};
+ *   `INVALID_AMOUNT` on a bounty outside (0, deposit limit].
  */
 export async function buildEscrowPreAuth(
   wallet: EscrowPreAuthSigner,
@@ -365,6 +392,20 @@ export async function buildEscrowPreAuth(
     throw new X402Error(
       `Incomplete escrow network config (missing ${missing.join(', ')}) — ` +
         'refusing to sign an EIP-3009 authorization with a mismatched domain.',
+      'INVALID_CONFIG'
+    );
+  }
+
+  const verified = VERIFIED_USDC_DOMAINS[cfg.chain_id];
+  if (
+    verified &&
+    (cfg.usdc_domain_name !== verified.name || cfg.usdc_domain_version !== verified.version)
+  ) {
+    throw new X402Error(
+      `The escrow config gives chain ${cfg.chain_id} the USDC domain ` +
+        `'${cfg.usdc_domain_name}' / '${cfg.usdc_domain_version}', but the token's on-chain ` +
+        `domain is '${verified.name}' / '${verified.version}' — refusing to sign an ` +
+        'authorization that could never settle.',
       'INVALID_CONFIG'
     );
   }

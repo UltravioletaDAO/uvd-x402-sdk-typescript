@@ -1493,7 +1493,7 @@ const state = await escrow.getEscrowState({
 
 Full escrow lifecycle management for EVM chains. Supports both `ethers.Signer` and `SigningWalletAdapter` (EnvKey, OWS) for signing.
 
-Supported on 10 EVM networks: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche.
+Supported on 10 EVM networks: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche. Since 2.99.0 also on Arc and Arc Testnet, on the x402r canonical escrow: there `release` sends `capture` and `refundInEscrow` sends `void`, which only returns the whole capturable amount. See [Escrow on Arc](docs/networks/arc.md#escrow-on-arc-2990).
 
 ### With Private Key (ethers.Signer)
 

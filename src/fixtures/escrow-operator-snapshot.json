@@ -1,0 +1,1254 @@
+{
+  "_note": [
+    "Recorded once from uvd-x402-sdk 2.98.0 (origin/main ef9397e) by",
+    "src/backend/escrow-operator-snapshot.test.ts with UVD_RECORD_ESCROW_SNAPSHOT=1.",
+    "Never re-recorded: a difference is a regression on a chain that was already live.",
+    "Hex values of 32 bytes or more are stored without the 0x prefix."
+  ],
+  "registry": {
+    "1": {
+      "operator": "0x69B67962ffb7c5C7078ff348a87DF604dfA8001b",
+      "escrow": "0x9D4146EF898c8E60B3e865AE254ef438E7cEd2A0",
+      "tokenCollector": "0x206D4DbB6E7b876e4B5EFAAD2a04e7d7813FB6ba",
+      "protocolFeeConfig": "0x5b3e33791C1764cF7e2573Bf8116F1D361FD97Cd",
+      "refundRequest": "0xFa8C4Cb156053b867Ae7489220A29b5939E3Df70",
+      "usdc": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    },
+    "10": {
+      "operator": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "escrow": "0x320a3c35F131E5D2Fb36af56345726B298936037",
+      "tokenCollector": "0x230fd3A171750FA45db2976121376b7F47Cba308",
+      "protocolFeeConfig": "0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838",
+      "refundRequest": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "usdc": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"
+    },
+    "137": {
+      "operator": "0xb33D6502EdBbC47201cd1E53C49d703EC0a660b8",
+      "escrow": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "tokenCollector": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "protocolFeeConfig": "0xE78648e7af7B1BaDE717FF6E410B922F92adE80f",
+      "refundRequest": "0xed02d3E5167BCc9582D851885A89b050AB816a56",
+      "usdc": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
+    },
+    "143": {
+      "operator": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "escrow": "0x320a3c35F131E5D2Fb36af56345726B298936037",
+      "tokenCollector": "0x230fd3A171750FA45db2976121376b7F47Cba308",
+      "protocolFeeConfig": "0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838",
+      "refundRequest": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "usdc": "0x754704Bc059F8C67012fEd69BC8a327a5aafb603"
+    },
+    "8453": {
+      "operator": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+      "escrow": "0xb9488351E48b23D798f24e8174514F28B741Eb4f",
+      "tokenCollector": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+      "protocolFeeConfig": "0x59314674BAbb1a24Eb2704468a9cCdD50668a1C6",
+      "refundRequest": "0x35fb2EFEfAc3Ee9f6E52A9AAE5C9655bC08dEc00",
+      "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    },
+    "42161": {
+      "operator": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "escrow": "0x320a3c35F131E5D2Fb36af56345726B298936037",
+      "tokenCollector": "0x230fd3A171750FA45db2976121376b7F47Cba308",
+      "protocolFeeConfig": "0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838",
+      "refundRequest": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "usdc": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+    },
+    "42220": {
+      "operator": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "escrow": "0x320a3c35F131E5D2Fb36af56345726B298936037",
+      "tokenCollector": "0x230fd3A171750FA45db2976121376b7F47Cba308",
+      "protocolFeeConfig": "0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838",
+      "refundRequest": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "usdc": "0xcebA9300f2b948710d2653dD7B07f33A8B32118C"
+    },
+    "43114": {
+      "operator": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "escrow": "0x320a3c35F131E5D2Fb36af56345726B298936037",
+      "tokenCollector": "0x230fd3A171750FA45db2976121376b7F47Cba308",
+      "protocolFeeConfig": "0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838",
+      "refundRequest": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "usdc": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+    },
+    "84532": {
+      "operator": "0x97d53e63A9CB97556c00BeFd325AF810c9b267B2",
+      "escrow": "0x29025c0E9D4239d438e169570818dB9FE0A80873",
+      "tokenCollector": "0x5cA789000070DF15b4663DB64a50AeF5D49c5Ee0",
+      "protocolFeeConfig": "0x8F96C493bAC365E41f0315cf45830069EBbDCaCe",
+      "refundRequest": "0x1C2Ab244aC8bDdDB74d43389FF34B118aF2E90F4",
+      "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    },
+    "11155111": {
+      "operator": "0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6",
+      "escrow": "0x320a3c35F131E5D2Fb36af56345726B298936037",
+      "tokenCollector": "0x230fd3A171750FA45db2976121376b7F47Cba308",
+      "protocolFeeConfig": "0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838",
+      "refundRequest": "0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98",
+      "usdc": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+    },
+    "1187947933": {
+      "operator": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+      "escrow": "0xBC151792f80C0EB1973d56b0235e6bee2A60e245",
+      "tokenCollector": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+      "protocolFeeConfig": "0xf62788834C99B2E85a6891C0b46D1EB996f8f596",
+      "refundRequest": "0x69e9BF2b40Ed472b55E47e9D4205d93Ed673093F",
+      "usdc": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20"
+    }
+  },
+  "operatorAbi": [
+    "function release(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount)",
+    "function refundInEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint120 amount)",
+    "function charge(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)",
+    "function refundPostEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)"
+  ],
+  "operatorAbiCreate3": [
+    "function release(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, bytes data)",
+    "function refundInEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint120 amount, bytes data)",
+    "function charge(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)",
+    "function refundPostEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)"
+  ],
+  "usdcDomainName": {
+    "1": "USD Coin",
+    "137": "USD Coin",
+    "143": "USDC",
+    "8453": "USD Coin",
+    "42161": "USD Coin",
+    "42220": "USDC",
+    "43114": "USD Coin",
+    "84532": "USD Coin",
+    "11155111": "USD Coin"
+  },
+  "paymentInfoTypehash": "ae68ac7ce30c86ece8196b61a7c486d8f0061f575037fbd34e7fe4e2820c6591",
+  "calls": {
+    "8453": {
+      "paymentInfo": {
+        "operator": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+        "receiver": "0x1111111111111111111111111111111111111111",
+        "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "maxAmount": "5000000",
+        "preApprovalExpiry": 1760003600,
+        "authorizationExpiry": 1761036800,
+        "refundExpiry": 1761641600,
+        "minFeeBps": 0,
+        "maxFeeBps": 1800,
+        "feeReceiver": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+        "salt": "0x5eedc0de"
+      },
+      "authorize": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": true,
+              "transactionHash": "0xfeed",
+              "paymentInfo": {
+                "operator": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                "receiver": "0x1111111111111111111111111111111111111111",
+                "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "maxAmount": "5000000",
+                "preApprovalExpiry": 1760003600,
+                "authorizationExpiry": 1761036800,
+                "refundExpiry": 1761641600,
+                "minFeeBps": 0,
+                "maxFeeBps": 1800,
+                "feeReceiver": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                "salt": "0x5eedc0de"
+              },
+              "salt": "0x5eedc0de"
+            }
+          },
+          "sent": [],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 8453,
+                "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "aeff8ccb8164e0bb721910bac606ce0948bd7626b38b67ba726766a0ab849df6"
+              }
+            }
+          ],
+          "bodies": [
+            {
+              "url": "http://facilitator.invalid/settle",
+              "body": {
+                "x402Version": 2,
+                "scheme": "escrow",
+                "payload": {
+                  "authorization": {
+                    "from": "0x2222222222222222222222222222222222222222",
+                    "to": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+                    "value": "5000000",
+                    "validAfter": "0",
+                    "validBefore": "1760003600",
+                    "nonce": "aeff8ccb8164e0bb721910bac606ce0948bd7626b38b67ba726766a0ab849df6"
+                  },
+                  "signature": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+                  "paymentInfo": {
+                    "operator": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                    "receiver": "0x1111111111111111111111111111111111111111",
+                    "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                    "maxAmount": "5000000",
+                    "preApprovalExpiry": 1760003600,
+                    "authorizationExpiry": 1761036800,
+                    "refundExpiry": 1761641600,
+                    "minFeeBps": 0,
+                    "maxFeeBps": 1800,
+                    "feeReceiver": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                    "salt": "0x5eedc0de"
+                  }
+                },
+                "paymentRequirements": {
+                  "scheme": "escrow",
+                  "network": "eip155:8453",
+                  "maxAmountRequired": "5000000",
+                  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  "payTo": "0x1111111111111111111111111111111111111111",
+                  "extra": {
+                    "escrowAddress": "0xb9488351E48b23D798f24e8174514F28B741Eb4f",
+                    "operatorAddress": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                    "tokenCollector": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "adapter": {
+          "outcome": {
+            "resolved": {
+              "success": true,
+              "transactionHash": "0xfeed",
+              "paymentInfo": {
+                "operator": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                "receiver": "0x1111111111111111111111111111111111111111",
+                "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                "maxAmount": "5000000",
+                "preApprovalExpiry": 1760003600,
+                "authorizationExpiry": 1761036800,
+                "refundExpiry": 1761641600,
+                "minFeeBps": 0,
+                "maxFeeBps": 1800,
+                "feeReceiver": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                "salt": "0x5eedc0de"
+              },
+              "salt": "0x5eedc0de"
+            }
+          },
+          "sent": [],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 8453,
+                "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "primaryType": "ReceiveWithAuthorization",
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "aeff8ccb8164e0bb721910bac606ce0948bd7626b38b67ba726766a0ab849df6"
+              }
+            }
+          ],
+          "bodies": [
+            {
+              "url": "http://facilitator.invalid/settle",
+              "body": {
+                "x402Version": 2,
+                "scheme": "escrow",
+                "payload": {
+                  "authorization": {
+                    "from": "0x2222222222222222222222222222222222222222",
+                    "to": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+                    "value": "5000000",
+                    "validAfter": "0",
+                    "validBefore": "1760003600",
+                    "nonce": "aeff8ccb8164e0bb721910bac606ce0948bd7626b38b67ba726766a0ab849df6"
+                  },
+                  "signature": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+                  "paymentInfo": {
+                    "operator": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                    "receiver": "0x1111111111111111111111111111111111111111",
+                    "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                    "maxAmount": "5000000",
+                    "preApprovalExpiry": 1760003600,
+                    "authorizationExpiry": 1761036800,
+                    "refundExpiry": 1761641600,
+                    "minFeeBps": 0,
+                    "maxFeeBps": 1800,
+                    "feeReceiver": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                    "salt": "0x5eedc0de"
+                  }
+                },
+                "paymentRequirements": {
+                  "scheme": "escrow",
+                  "network": "eip155:8453",
+                  "maxAmountRequired": "5000000",
+                  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  "payTo": "0x1111111111111111111111111111111111111111",
+                  "extra": {
+                    "escrowAddress": "0xb9488351E48b23D798f24e8174514F28B741Eb4f",
+                    "operatorAddress": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+                    "tokenCollector": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "release": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "ecf39b0a0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "ecf39b0a0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40",
+              "gasLimit": "300000",
+              "chainId": "8453",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "release.partial": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "ecf39b0a0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d0",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "ecf39b0a0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d0",
+              "gasLimit": "300000",
+              "chainId": "8453",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "refundInEscrow": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "e2b8996f0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "e2b8996f0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40",
+              "gasLimit": "300000",
+              "chainId": "8453",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "refundInEscrow.partial": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "e2b8996f0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d0",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "e2b8996f0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d0",
+              "gasLimit": "300000",
+              "chainId": "8453",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "charge": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "3d2c2d9d0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000048adf6e37f9b31dc2aad0462c5862b5422c736b800000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000041111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 8453,
+                "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "aeff8ccb8164e0bb721910bac606ce0948bd7626b38b67ba726766a0ab849df6"
+              }
+            }
+          ],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "3d2c2d9d0000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000048adf6e37f9b31dc2aad0462c5862b5422c736b800000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000041111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "8453",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 8453,
+                "verifyingContract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "primaryType": "ReceiveWithAuthorization",
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "aeff8ccb8164e0bb721910bac606ce0948bd7626b38b67ba726766a0ab849df6"
+              }
+            }
+          ],
+          "bodies": []
+        }
+      },
+      "refundPostEscrow": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "1eefbfd90000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x3D0837fF8Ea36F417261577b9BA568400A840260",
+              "data": "1eefbfd90000000000000000000000003d0837ff8ea36f417261577b9ba568400a84026000000000000000000000000022222222222222222222222222222222222222220000000000000000000000001111111111111111111111111111111111111111000000000000000000000000833589fcd6edb6e08f4c7c32d4f71b54bda0291300000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a000000000000000000000000000000000000000000000000000000000069008480000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007080000000000000000000000003d0837ff8ea36f417261577b9ba568400a840260000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "8453",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      }
+    },
+    "1187947933": {
+      "paymentInfo": {
+        "operator": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+        "receiver": "0x1111111111111111111111111111111111111111",
+        "token": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+        "maxAmount": "5000000",
+        "preApprovalExpiry": 1760003600,
+        "authorizationExpiry": 1761036800,
+        "refundExpiry": 1761641600,
+        "minFeeBps": 0,
+        "maxFeeBps": 1800,
+        "feeReceiver": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+        "salt": "0x5eedc0de"
+      },
+      "authorize": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": true,
+              "transactionHash": "0xfeed",
+              "paymentInfo": {
+                "operator": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                "receiver": "0x1111111111111111111111111111111111111111",
+                "token": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+                "maxAmount": "5000000",
+                "preApprovalExpiry": 1760003600,
+                "authorizationExpiry": 1761036800,
+                "refundExpiry": 1761641600,
+                "minFeeBps": 0,
+                "maxFeeBps": 1800,
+                "feeReceiver": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                "salt": "0x5eedc0de"
+              },
+              "salt": "0x5eedc0de"
+            }
+          },
+          "sent": [],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 1187947933,
+                "verifyingContract": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "39289f7100318fd6a9ec5160ada58d4fff5be1d51eed6e746d17ab36effbcb99"
+              }
+            }
+          ],
+          "bodies": [
+            {
+              "url": "http://facilitator.invalid/settle",
+              "body": {
+                "x402Version": 2,
+                "scheme": "escrow",
+                "payload": {
+                  "authorization": {
+                    "from": "0x2222222222222222222222222222222222222222",
+                    "to": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+                    "value": "5000000",
+                    "validAfter": "0",
+                    "validBefore": "1760003600",
+                    "nonce": "39289f7100318fd6a9ec5160ada58d4fff5be1d51eed6e746d17ab36effbcb99"
+                  },
+                  "signature": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+                  "paymentInfo": {
+                    "operator": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                    "receiver": "0x1111111111111111111111111111111111111111",
+                    "token": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+                    "maxAmount": "5000000",
+                    "preApprovalExpiry": 1760003600,
+                    "authorizationExpiry": 1761036800,
+                    "refundExpiry": 1761641600,
+                    "minFeeBps": 0,
+                    "maxFeeBps": 1800,
+                    "feeReceiver": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                    "salt": "0x5eedc0de"
+                  }
+                },
+                "paymentRequirements": {
+                  "scheme": "escrow",
+                  "network": "eip155:1187947933",
+                  "maxAmountRequired": "5000000",
+                  "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+                  "payTo": "0x1111111111111111111111111111111111111111",
+                  "extra": {
+                    "escrowAddress": "0xBC151792f80C0EB1973d56b0235e6bee2A60e245",
+                    "operatorAddress": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                    "tokenCollector": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "adapter": {
+          "outcome": {
+            "resolved": {
+              "success": true,
+              "transactionHash": "0xfeed",
+              "paymentInfo": {
+                "operator": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                "receiver": "0x1111111111111111111111111111111111111111",
+                "token": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+                "maxAmount": "5000000",
+                "preApprovalExpiry": 1760003600,
+                "authorizationExpiry": 1761036800,
+                "refundExpiry": 1761641600,
+                "minFeeBps": 0,
+                "maxFeeBps": 1800,
+                "feeReceiver": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                "salt": "0x5eedc0de"
+              },
+              "salt": "0x5eedc0de"
+            }
+          },
+          "sent": [],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 1187947933,
+                "verifyingContract": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "primaryType": "ReceiveWithAuthorization",
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "39289f7100318fd6a9ec5160ada58d4fff5be1d51eed6e746d17ab36effbcb99"
+              }
+            }
+          ],
+          "bodies": [
+            {
+              "url": "http://facilitator.invalid/settle",
+              "body": {
+                "x402Version": 2,
+                "scheme": "escrow",
+                "payload": {
+                  "authorization": {
+                    "from": "0x2222222222222222222222222222222222222222",
+                    "to": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+                    "value": "5000000",
+                    "validAfter": "0",
+                    "validBefore": "1760003600",
+                    "nonce": "39289f7100318fd6a9ec5160ada58d4fff5be1d51eed6e746d17ab36effbcb99"
+                  },
+                  "signature": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+                  "paymentInfo": {
+                    "operator": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                    "receiver": "0x1111111111111111111111111111111111111111",
+                    "token": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+                    "maxAmount": "5000000",
+                    "preApprovalExpiry": 1760003600,
+                    "authorizationExpiry": 1761036800,
+                    "refundExpiry": 1761641600,
+                    "minFeeBps": 0,
+                    "maxFeeBps": 1800,
+                    "feeReceiver": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                    "salt": "0x5eedc0de"
+                  }
+                },
+                "paymentRequirements": {
+                  "scheme": "escrow",
+                  "network": "eip155:1187947933",
+                  "maxAmountRequired": "5000000",
+                  "asset": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20",
+                  "payTo": "0x1111111111111111111111111111111111111111",
+                  "extra": {
+                    "escrowAddress": "0xBC151792f80C0EB1973d56b0235e6bee2A60e245",
+                    "operatorAddress": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+                    "tokenCollector": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "release": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "c602dd4a00000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "c602dd4a00000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "1187947933",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "release.partial": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "c602dd4a00000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "c602dd4a00000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "1187947933",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "refundInEscrow": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "4e04eaa000000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "4e04eaa000000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b4000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "1187947933",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "refundInEscrow.partial": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "4e04eaa000000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "4e04eaa000000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000001312d000000000000000000000000000000000000000000000000000000000000001c00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "1187947933",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      },
+      "charge": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "3d2c2d9d00000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000009a12a116a44636f55c9e135189a1321abcfe2f3000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000041111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 1187947933,
+                "verifyingContract": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "39289f7100318fd6a9ec5160ada58d4fff5be1d51eed6e746d17ab36effbcb99"
+              }
+            }
+          ],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "3d2c2d9d00000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000009a12a116a44636f55c9e135189a1321abcfe2f3000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000041111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111100000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "1187947933",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [
+            {
+              "domain": {
+                "name": "USD Coin",
+                "version": "2",
+                "chainId": 1187947933,
+                "verifyingContract": "0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20"
+              },
+              "types": {
+                "ReceiveWithAuthorization": [
+                  {
+                    "name": "from",
+                    "type": "address"
+                  },
+                  {
+                    "name": "to",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validAfter",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "validBefore",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "bytes32"
+                  }
+                ]
+              },
+              "primaryType": "ReceiveWithAuthorization",
+              "message": {
+                "from": "0x2222222222222222222222222222222222222222",
+                "to": "0x9A12A116a44636F55c9e135189A1321Abcfe2f30",
+                "value": "5000000",
+                "validAfter": "0",
+                "validBefore": "1760003600",
+                "nonce": "39289f7100318fd6a9ec5160ada58d4fff5be1d51eed6e746d17ab36effbcb99"
+              }
+            }
+          ],
+          "bodies": []
+        }
+      },
+      "refundPostEscrow": {
+        "signer": {
+          "outcome": {
+            "resolved": {
+              "success": false,
+              "error": "recorded, not sent"
+            }
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "1eefbfd900000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        },
+        "adapter": {
+          "outcome": {
+            "rejected": "recorded, not sent"
+          },
+          "sent": [
+            {
+              "to": "0x28c23AE8f55aDe5Ea10a5353FC40418D0c1B3d33",
+              "data": "1eefbfd900000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d330000000000000000000000002222222222222222222222222222222222222222000000000000000000000000111111111111111111111111111111111111111100000000000000000000000085889c8c714505e0c94b30fcfcf64fe3ac8fcb2000000000000000000000000000000000000000000000000000000000004c4b400000000000000000000000000000000000000000000000000000000068e786100000000000000000000000000000000000000000000000000000000068f74a0000000000000000000000000000000000000000000000000000000000690084800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000070800000000000000000000000028c23ae8f55ade5ea10a5353fc40418d0c1b3d33000000000000000000000000000000000000000000000000000000005eedc0de00000000000000000000000000000000000000000000000000000000004c4b40000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000000",
+              "gasLimit": "300000",
+              "chainId": "1187947933",
+              "nonce": 7,
+              "type": 2,
+              "maxFeePerGas": "2000000000",
+              "maxPriorityFeePerGas": "1000000000"
+            }
+          ],
+          "typedData": [],
+          "bodies": []
+        }
+      }
+    }
+  }
+}
