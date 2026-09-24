@@ -47,6 +47,7 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
+import { toAtomicUnits } from '../../utils/amount';
 
 /**
  * XRP Ledger network configuration.
@@ -72,8 +73,8 @@ const XRPL_CONFIG = {
   },
 } as const;
 
-/** XRP drops per whole XRP (6 decimals). */
-const DROPS_PER_XRP = 1_000_000;
+/** XRP amounts are counted in drops: 6 decimal places of a whole XRP. */
+const XRP_DECIMALS = 6;
 
 /** tfPartialPayment flag - MUST never be set on x402 XRPL payments. */
 const TF_PARTIAL_PAYMENT = 0x00020000;
@@ -106,7 +107,6 @@ interface XrplModule {
   Wallet: {
     fromSeed(seed: string): XrplWallet;
   };
-  xrpToDrops(xrp: string | number): string;
   convertStringToHex(value: string): string;
 }
 
@@ -243,15 +243,10 @@ export class XRPLProvider implements WalletAdapter {
 
     const xrpl = await this.getXrpl();
 
-    // Convert amount (whole XRP, e.g. "10.00") to integer drops (6 decimals).
-    // Use xrpToDrops to avoid floating point issues with fractional XRP.
-    let amountDrops: string;
-    try {
-      amountDrops = xrpl.xrpToDrops(paymentInfo.amount);
-    } catch {
-      // Fall back to manual integer-drops computation.
-      amountDrops = String(Math.round(parseFloat(paymentInfo.amount) * DROPS_PER_XRP));
-    }
+    // Convert amount (whole XRP, e.g. "10.00") to integer drops (6 decimals),
+    // exactly. A malformed amount, or one with a nonzero digit past the 6th
+    // decimal, is refused -- it used to fall through to a float that rounded it.
+    const amountDrops = toAtomicUnits(paymentInfo.amount, XRP_DECIMALS).toString();
 
     const client = new xrpl.Client(this.rpcUrl);
     try {

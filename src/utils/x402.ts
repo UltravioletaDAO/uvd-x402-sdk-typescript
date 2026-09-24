@@ -18,6 +18,7 @@ import type {
 import { CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from '../types';
 import { getChainByName, getTokenConfig, isUsdPegged } from '../chains';
 import { decodeBase64Utf8, encodeBase64Json } from './base64';
+import { toAtomicUnits } from './amount';
 
 /**
  * Detect x402 version from a response header or body
@@ -325,9 +326,9 @@ export function generatePaymentOptions(
       if (!isUsdPegged(token) && tokenType !== 'eurc') continue;
 
       // Atomic units in THIS token's decimals -- BSC USDC has 18, not 6.
-      const atomicAmount = Math.floor(
-        parseFloat(amount) * Math.pow(10, token.decimals)
-      ).toString();
+      // Unlike an unpriceable token above, an amount this token cannot hold
+      // exactly is the caller's input, not the registry's: it throws.
+      const atomicAmount = toAtomicUnits(amount, token.decimals).toString();
 
       options.push({
         network: chainToCAIP2(chain.name),

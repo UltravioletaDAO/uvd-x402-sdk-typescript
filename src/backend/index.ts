@@ -76,6 +76,7 @@ import type {
   X402Version,
 } from '../types';
 import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
+import { toAtomicUnits } from '../utils/amount';
 import {
   REVIEW_WINDOW_SEC,
   REFUND_WINDOW_SEC,
@@ -503,9 +504,7 @@ export function buildPaymentRequirements(
   if (!isUsdPegged(chain.usdc)) {
     throw new Error(usdConversionError(chain.name, chain.usdc));
   }
-  const atomicAmount = Math.floor(
-    parseFloat(amount) * Math.pow(10, chain.usdc.decimals)
-  ).toString();
+  const atomicAmount = toAtomicUnits(amount, chain.usdc.decimals).toString();
 
   // Use CAIP-2 for v2, chain name for v1
   const network = x402Version === 2 ? chainToCAIP2(chainName) : chainName;

@@ -40,6 +40,7 @@ import type {
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
+import { toAtomicUnits } from '../../utils/amount';
 import { getFacilitatorAddress } from '../../facilitator';
 
 /**
@@ -370,8 +371,8 @@ export class AlgorandProvider implements WalletAdapter {
       );
     }
 
-    // Parse amount (6 decimals for USDC)
-    const amount = Math.floor(parseFloat(paymentInfo.amount) * 1_000_000);
+    // Parse amount (6 decimals for USDC), exactly -- no float on the way
+    const amount = toAtomicUnits(paymentInfo.amount, 6);
 
     try {
       // Get suggested transaction parameters

@@ -29,6 +29,7 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
+import { toAtomicUnits } from '../../utils/amount';
 
 /**
  * Browser-compatible text to Uint8Array encoding
@@ -206,8 +207,8 @@ export class StellarProvider implements WalletAdapter {
     // Get recipient
     const recipient = paymentInfo.recipients?.stellar || paymentInfo.recipient;
 
-    // Parse amount (7 decimals for Stellar USDC)
-    const amountStroops = Math.floor(parseFloat(paymentInfo.amount) * 10_000_000);
+    // Parse amount (7 decimals for Stellar USDC), exactly -- no float on the way
+    const amountStroops = toAtomicUnits(paymentInfo.amount, 7);
 
     try {
       // Get current ledger from Soroban RPC

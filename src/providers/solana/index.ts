@@ -49,6 +49,7 @@ import type {
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
+import { toAtomicUnits } from '../../utils/amount';
 
 /**
  * Browser-compatible base64 encoding for Uint8Array
@@ -285,8 +286,8 @@ export class SVMProvider implements WalletAdapter {
     const facilitatorPubkey = new PublicKey(facilitatorAddress);
     const usdcMint = new PublicKey(chainConfig.usdc.address);
 
-    // Parse amount (6 decimals for USDC)
-    const amount = Math.floor(parseFloat(paymentInfo.amount) * 1_000_000);
+    // Parse amount (6 decimals for USDC), exactly -- no float on the way
+    const amount = toAtomicUnits(paymentInfo.amount, 6);
 
     // Get token accounts
     const fromTokenAccount = await getAssociatedTokenAddress(

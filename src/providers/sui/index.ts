@@ -47,6 +47,7 @@ import type {
 import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
+import { toAtomicUnits } from '../../utils/amount';
 
 // Lazy import Sui dependencies to avoid bundling when not used
 let SuiClient: typeof import('@mysten/sui/client').SuiClient;
@@ -235,8 +236,8 @@ export class SuiProvider implements WalletAdapter {
       throw new X402Error('Facilitator address not provided', 'INVALID_CONFIG');
     }
 
-    // Parse amount (6 decimals for USDC)
-    const amount = BigInt(Math.floor(parseFloat(paymentInfo.amount) * 1_000_000));
+    // Parse amount (6 decimals for USDC), exactly -- no float on the way
+    const amount = toAtomicUnits(paymentInfo.amount, 6);
 
     // Find USDC coins for transfer
     const usdcCoins = await client.getCoins({
