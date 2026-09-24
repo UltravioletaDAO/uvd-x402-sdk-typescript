@@ -6693,8 +6693,39 @@ export const OPERATOR_ABI_CREATE3 = [
   'function refundPostEscrow(tuple(address operator, address payer, address receiver, address token, uint120 maxAmount, uint48 preApprovalExpiry, uint48 authorizationExpiry, uint48 refundExpiry, uint16 minFeeBps, uint16 maxFeeBps, address feeReceiver, uint256 salt) paymentInfo, uint256 amount, address tokenCollector, bytes collectorData)',
 ];
 
-/** Chain IDs using CREATE3-deployed operators with updated ABI */
-const CREATE3_CHAIN_IDS = new Set([1187947933]);
+/**
+ * Which PaymentOperator ABI a chain's escrow operator speaks.
+ *
+ * - `'v1'`: {@link OPERATOR_ABI} — `release(PaymentInfo, amount)` and
+ *   `refundInEscrow(PaymentInfo, amount)`.
+ * - `'v2'`: {@link OPERATOR_ABI_CREATE3} — the same two with a trailing
+ *   `bytes data`.
+ */
+export type EscrowOperatorGeneration = 'v1' | 'v2';
+
+/**
+ * Operator generation per chain — the single source the escrow client reads
+ * to pick the operator ABI. A chain absent from this table is `'v1'`, which is
+ * what a custom `options.contracts` on an unlisted chain has always used.
+ */
+export const ESCROW_OPERATOR_GENERATION: Record<number, EscrowOperatorGeneration> = {
+  84532: 'v1',       // Base Sepolia
+  8453: 'v1',        // Base
+  11155111: 'v1',    // Ethereum Sepolia
+  1: 'v1',           // Ethereum
+  137: 'v1',         // Polygon
+  42161: 'v1',       // Arbitrum
+  42220: 'v1',       // Celo
+  143: 'v1',         // Monad
+  43114: 'v1',       // Avalanche
+  10: 'v1',          // Optimism
+  1187947933: 'v2',  // SKALE Base
+};
+
+/** Operator generation of a chain; `'v1'` when the chain is not listed. */
+export function getEscrowOperatorGeneration(chainId: number): EscrowOperatorGeneration {
+  return ESCROW_OPERATOR_GENERATION[chainId] ?? 'v1';
+}
 
 /**
  * AdvancedEscrowClient provides the 5 Advanced Escrow flows via the
@@ -7131,7 +7162,7 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
+      const isCreate3 = getEscrowOperatorGeneration(this.chainId) === 'v2';
       const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
@@ -7176,7 +7207,7 @@ export class AdvancedEscrowClient {
 
     try {
       const { ethers } = await import('ethers');
-      const isCreate3 = CREATE3_CHAIN_IDS.has(this.chainId);
+      const isCreate3 = getEscrowOperatorGeneration(this.chainId) === 'v2';
       const abi = isCreate3 ? OPERATOR_ABI_CREATE3 : OPERATOR_ABI;
       const amt = amount || paymentInfo.maxAmount;
       const tuple = this.buildTuple(paymentInfo);
