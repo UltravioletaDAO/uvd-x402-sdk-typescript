@@ -47,6 +47,7 @@ import type {
 } from '../../types';
 import { X402Error } from '../../types';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
+import { toAtomicUnits } from '../../utils/amount';
 
 // NEAR configuration
 const NEAR_CONFIG = {
@@ -501,8 +502,8 @@ export class NEARProvider implements WalletAdapter {
     // Get recipient
     const recipient = paymentInfo.recipients?.near || paymentInfo.recipient;
 
-    // Parse amount (6 decimals for USDC)
-    const amount = BigInt(Math.floor(parseFloat(paymentInfo.amount) * 1_000_000));
+    // Parse amount (6 decimals for USDC), exactly -- no float on the way
+    const amount = toAtomicUnits(paymentInfo.amount, 6);
 
     try {
       // Get access key nonce

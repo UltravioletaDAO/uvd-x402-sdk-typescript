@@ -30,7 +30,6 @@ vi.mock('xrpl', () => {
         sign: signMock,
       }),
     },
-    xrpToDrops: (xrp: string | number) => String(Math.round(parseFloat(String(xrp)) * 1_000_000)),
     convertStringToHex: (value: string) =>
       Array.from(value)
         .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
@@ -199,6 +198,35 @@ describe('XRPLProvider.signPayment payload shape', () => {
       provider.signPayment(makePaymentInfo(), getChainByName('xrpl-testnet')!)
     ).rejects.toMatchObject({ code: 'PAYMENT_FAILED' });
   });
+});
+
+describe('XRPLProvider.signPayment signs the exact amount in drops', () => {
+  const cents = (c: number) => `${Math.floor(c / 100)}.${String(c % 100).padStart(2, '0')}`;
+
+  it('every cent amount 0.01..99.99 builds a Payment of c * 10**4 drops', async () => {
+    const provider = new XRPLProvider({ seed: 'sEXAMPLESEED', testnet: true });
+    await provider.connect();
+    for (let c = 1; c <= 9_999; c++) {
+      autofillMock.mockClear();
+      await provider.signPayment(makePaymentInfo({ amount: cents(c) }), getChainByName('xrpl-testnet')!);
+      const built = autofillMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(built.Amount, cents(c)).toBe(String(c * 10_000));
+    }
+  }, 120_000);
+
+  // These used to fall through to Math.round(parseFloat(...)) and be signed rounded.
+  it.each(['1.0000005', '1e3', '-1', 'abc'])(
+    'refuses %j with INVALID_AMOUNT before connecting or signing',
+    async (amount) => {
+      const provider = new XRPLProvider({ seed: 'sEXAMPLESEED', testnet: true });
+      await provider.connect();
+      await expect(
+        provider.signPayment(makePaymentInfo({ amount }), getChainByName('xrpl-testnet')!)
+      ).rejects.toMatchObject({ code: 'INVALID_AMOUNT' });
+      expect(connectMock).not.toHaveBeenCalled();
+      expect(signMock).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('XRPLProvider.encodePaymentHeader', () => {

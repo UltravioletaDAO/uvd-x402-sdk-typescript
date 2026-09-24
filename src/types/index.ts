@@ -259,7 +259,7 @@ export interface PaymentInfo {
    *
    * For dollar-pegged tokens that is dollars; for EURC it is **euros**.
    * On XRPL it is **XRP**, because XRPL settles in its own native asset:
-   * the provider spends this through `xrpToDrops` and bills whole XRP
+   * the provider converts this to drops (6 decimals) and bills whole XRP
    * (`src/providers/xrpl/index.ts`). This used to be documented as USD, which
    * made the type and its only XRPL consumer disagree about the unit -- and the
    * consumer won, so a "10.00" written as ten dollars left as ten XRP. The SDK
