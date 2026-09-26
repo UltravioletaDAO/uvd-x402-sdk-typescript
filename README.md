@@ -861,6 +861,14 @@ app.post('/api/premium', async (req, res) => {
 
 `createPaymentMiddleware()` and `createHonoMiddleware()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
 
+### Stack key (services run by Ultravioleta DAO)
+
+Services run by Ultravioleta DAO carry a per-service credential, the stack key, so that the facilitator's rate-limit policy does not answer them `429`. `FacilitatorClient` (and the two middlewares) send it as `X-UVD-Stack-Key` on `/verify` and `/settle`; `Erc8004Client` sends it on every facilitator route it calls. It changes nothing else about a payment, and a facilitator that does not know the header ignores it.
+
+- **Where it comes from:** the facilitator's operator issues one per service: `uvdsk_` followed by 43-128 base64url characters. The process receives it as `UVD_STACK_KEY` (read by default) or as the `stackKey` option, from a secret store, never from code.
+- **Not for third parties:** if you integrate this SDK in your own product you have no key and need none. Leave both unset and no header is sent. A client aimed at a facilitator Ultravioleta DAO does not run should pass `stackKey: ''`, so an inherited `UVD_STACK_KEY` never goes there.
+- **A bad key never breaks a payment:** surrounding whitespace (a trailing `\r\n` from a file) is removed. A value that still does not match is not sent: the client warns once, without the value, and pays like any other client. The key never appears in a result, an error, a log line or a printed client.
+
 ## React
 
 ```tsx
