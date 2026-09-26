@@ -108,6 +108,7 @@ import {
   readFacilitatorError,
 } from './facilitator-error';
 import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitator-error';
+import { bindStackKey, withStackKey } from './stack-key';
 
 // A facilitator refusal is DATA, not prose. `402` and `503` say opposite things
 // and this file used to answer both with `success: false` plus a sentence --
@@ -1130,6 +1131,20 @@ export interface FacilitatorClientOptions {
    * point of the option.
    */
   x402Version?: X402Version | 'auto';
+  /**
+   * Stack key of a service run by Ultravioleta DAO, sent as `X-UVD-Stack-Key`
+   * on `/verify` and `/settle`. The facilitator exempts a key it recognises
+   * from its rate-limit policy (`429`) and changes nothing else; a facilitator
+   * that does not know the header ignores it. Third-party integrations have no
+   * key and need none.
+   *
+   * Default: `process.env.UVD_STACK_KEY`, read once when the client is built.
+   * Pass `''` to send none -- do that on any client aimed at a facilitator
+   * Ultravioleta DAO does not run. Surrounding whitespace is removed. A value
+   * that is not `uvdsk_` followed by 43-128 base64url characters is not sent:
+   * the client warns once, without the value, and pays like any other client.
+   */
+  stackKey?: string;
 }
 
 /**
@@ -1165,6 +1180,7 @@ export class FacilitatorClient {
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
     this.x402Version = options.x402Version ?? 'auto';
+    bindStackKey(this, options.stackKey);
   }
 
   /**
@@ -1221,7 +1237,7 @@ export class FacilitatorClient {
         `${this.baseUrl}/verify`,
         {
           method: 'POST',
-          headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
+          headers: withStackKey(this, facilitatorHeaders(idempotencyKey, options.receiptContext)),
           body: JSON.stringify(body),
         },
         { timeoutMs: this.timeout, retries: this.retries },
@@ -1307,7 +1323,7 @@ export class FacilitatorClient {
         {
           method: 'POST',
           // The same init, key included, goes out on every automatic retry.
-          headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
+          headers: withStackKey(this, facilitatorHeaders(idempotencyKey, options.receiptContext)),
           body: JSON.stringify(body),
         },
         { timeoutMs: settleTimeout, retries: this.retries },
@@ -2286,6 +2302,7 @@ export function createPaymentMiddleware(
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
+    stackKey: options.stackKey,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
@@ -2502,6 +2519,7 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
+    stackKey: options.stackKey,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
@@ -4968,6 +4986,13 @@ export interface Erc8004ClientOptions {
    * `forward_failed` is never replayed at any setting.
    */
   retries?: number;
+  /**
+   * Stack key, sent as `X-UVD-Stack-Key` on every facilitator route this
+   * client calls -- never on {@link Erc8004Client.resolveAgentUri}, which
+   * fetches a URI outside the facilitator. Same default and same rules as
+   * {@link FacilitatorClientOptions.stackKey}.
+   */
+  stackKey?: string;
 }
 
 /**
@@ -5016,6 +5041,7 @@ export class Erc8004Client {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
+    bindStackKey(this, options.stackKey);
   }
 
   /**
@@ -5039,11 +5065,11 @@ export class Erc8004Client {
       url,
       {
         method: 'POST',
-        headers: {
+        headers: withStackKey(this, {
           'Content-Type': 'application/json',
           Accept: 'application/json',
           ...extraHeaders,
-        },
+        }),
         body: JSON.stringify(body),
       },
       { timeoutMs: this.timeout, retries: this.retries },
@@ -5066,7 +5092,7 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: withStackKey(this, { 'Accept': 'application/json' }),
         signal: controller.signal,
       });
 
@@ -5107,7 +5133,7 @@ export class Erc8004Client {
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: withStackKey(this, { Accept: 'application/json' }),
       signal: controller.signal,
     }).finally(() => clearTimeout(timeoutId));
 
@@ -5147,6 +5173,7 @@ export class Erc8004Client {
         url = `https://ipfs.io/ipfs/${cid}`;
       }
 
+      // No stack key: this URI is the agent's, not the facilitator's.
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
@@ -5200,7 +5227,7 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: withStackKey(this, { 'Accept': 'application/json' }),
         signal: controller.signal,
       });
 
@@ -5348,10 +5375,10 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
+        headers: withStackKey(this, {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-        },
+        }),
         body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
@@ -5498,10 +5525,10 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
+        headers: withStackKey(this, {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-        },
+        }),
         body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
@@ -5678,7 +5705,7 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: withStackKey(this, { 'Accept': 'application/json' }),
         signal: controller.signal,
       });
 
@@ -6000,7 +6027,7 @@ export class Erc8004Client {
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: withStackKey(this, { Accept: 'application/json' }),
       signal: controller.signal,
     }).finally(() => clearTimeout(timeoutId));
 
@@ -6060,7 +6087,7 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: withStackKey(this, { 'Accept': 'application/json' }),
         signal: controller.signal,
       });
 
@@ -6099,7 +6126,7 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: withStackKey(this, { 'Accept': 'application/json' }),
         signal: controller.signal,
       });
 
@@ -6132,7 +6159,7 @@ export class Erc8004Client {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        headers: withStackKey(this, { 'Accept': 'application/json' }),
         signal: controller.signal,
       });
 
