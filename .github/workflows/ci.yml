@@ -3,7 +3,41 @@ name: CI
 on:
   push:
     branches: [main]
+    # Runs only when a file the jobs below read changes. A change to nothing
+    # on this list (docs/, CHANGELOG.md, the scripts CI never runs) cannot
+    # change the result, so it does not spend a run. When a job starts reading
+    # a new file, add it here in the same PR. Why each entry:
+    #   src/**            code, tests, fixtures and vectors: typecheck, test,
+    #                     lint and build read them, and both conformance
+    #                     scripts load their vectors from src/
+    #   README.md         src/readme-eurc-table.test.ts parses its EVM table,
+    #                     and `npm pack` ships it
+    #   LICENSE           `npm pack` ships it
+    #   package.json      `npm ci`, every `npm run`, and `files` for `npm pack`
+    #   package-lock.json `npm ci` installs exactly this tree
+    #   tsconfig*.json    typecheck (tsconfig.json), lint (tsconfig.eslint.json)
+    #   *.config.*        lint (eslint.config.mjs), build (tsup.config.ts);
+    #                     vitest also picks up a vitest/vite config from here
+    #   .gitattributes    checkout applies it, and it pins the bytes of the
+    #                     ERC-8128 vectors that the tests and the
+    #                     cross-language job hash
+    #   scripts/derive-erc8128-f3-3.mjs  "Vectors are the same file" step
+    #   scripts/xlang/**  the cross-language step and the agents it spawns
+    #   .github/workflows/ci.yml         this file
+    paths: &ci-paths
+      - 'src/**'
+      - 'README.md'
+      - 'LICENSE'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '*.config.*'
+      - '.gitattributes'
+      - 'scripts/derive-erc8128-f3-3.mjs'
+      - 'scripts/xlang/**'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths: *ci-paths
 
 jobs:
   validate:
