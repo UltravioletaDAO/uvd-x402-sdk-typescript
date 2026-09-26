@@ -108,6 +108,10 @@ import {
   readFacilitatorError,
 } from './facilitator-error';
 import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitator-error';
+import { bindStackKey, stackKeyFetch, stackKeyFetcher } from './stack-key';
+import type { StackKeyOptions } from './stack-key';
+export type { StackKeyOptions } from './stack-key';
+export { STACK_KEY_HEADER, StackKeyRedirectError } from './stack-key';
 
 // A facilitator refusal is DATA, not prose. `402` and `503` say opposite things
 // and this file used to answer both with `success: false` plus a sentence --
@@ -1099,9 +1103,10 @@ function admittedVerdict(result: { isValid?: unknown; invalidReason?: unknown })
 }
 
 /**
- * Options for the FacilitatorClient
+ * Options for the FacilitatorClient. `stackKey` / `stackKeyHosts`: see
+ * {@link StackKeyOptions}; the key goes on every call to the facilitator.
  */
-export interface FacilitatorClientOptions {
+export interface FacilitatorClientOptions extends StackKeyOptions {
   /** Base URL of the facilitator (default: https://facilitator.ultravioletadao.xyz) */
   baseUrl?: string;
   /**
@@ -1165,6 +1170,7 @@ export class FacilitatorClient {
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
     this.x402Version = options.x402Version ?? 'auto';
+    bindStackKey(this, options);
   }
 
   /**
@@ -1224,7 +1230,7 @@ export class FacilitatorClient {
           headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
           body: JSON.stringify(body),
         },
-        { timeoutMs: this.timeout, retries: this.retries },
+        { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
       );
 
       if (error) {
@@ -1310,7 +1316,7 @@ export class FacilitatorClient {
           headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
           body: JSON.stringify(body),
         },
-        { timeoutMs: settleTimeout, retries: this.retries },
+        { timeoutMs: settleTimeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
       );
 
       if (error) {
@@ -1472,7 +1478,7 @@ export class FacilitatorClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/health`, {
         method: 'GET',
       });
       return response.ok;
@@ -1487,7 +1493,7 @@ export class FacilitatorClient {
    * @returns Version info (e.g., { version: "1.37.0" })
    */
   async getVersion(): Promise<{ version: string; [key: string]: unknown }> {
-    const response = await fetch(`${this.baseUrl}/version`, {
+    const response = await stackKeyFetch(this, `${this.baseUrl}/version`, {
       method: 'GET',
     });
     if (!response.ok) {
@@ -1514,7 +1520,7 @@ export class FacilitatorClient {
     kinds: Array<{ network: string; scheme: string; [key: string]: unknown }>;
     [key: string]: unknown;
   }> {
-    const response = await fetch(`${this.baseUrl}/supported`, {
+    const response = await stackKeyFetch(this, `${this.baseUrl}/supported`, {
       method: 'GET',
     });
     if (!response.ok) {
@@ -1555,7 +1561,7 @@ export class FacilitatorClient {
     }>;
     [key: string]: unknown;
   }> {
-    const response = await fetch(`${this.baseUrl}/api/stats`, { method: 'GET' });
+    const response = await stackKeyFetch(this, `${this.baseUrl}/api/stats`, { method: 'GET' });
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`GET /api/stats failed: ${response.status} - ${errorText}`);
@@ -1583,7 +1589,8 @@ export class FacilitatorClient {
     if (options.limit !== undefined) params.set('limit', String(options.limit));
     if (options.network) params.set('network', options.network);
     const query = params.toString();
-    const response = await fetch(
+    const response = await stackKeyFetch(
+      this,
       `${this.baseUrl}/transactions${query ? `?${query}` : ''}`,
       { method: 'GET' }
     );
@@ -1610,7 +1617,7 @@ export class FacilitatorClient {
     loadedAtStartup: boolean;
     [key: string]: unknown;
   }> {
-    const response = await fetch(`${this.baseUrl}/blacklist`, {
+    const response = await stackKeyFetch(this, `${this.baseUrl}/blacklist`, {
       method: 'GET',
     });
     if (!response.ok) {
@@ -1656,7 +1663,7 @@ export class FacilitatorClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(`${this.baseUrl}/accepts`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/accepts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2286,6 +2293,8 @@ export function createPaymentMiddleware(
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
+    stackKey: options.stackKey,
+    stackKeyHosts: options.stackKeyHosts,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
@@ -2502,6 +2511,8 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
+    stackKey: options.stackKey,
+    stackKeyHosts: options.stackKeyHosts,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
@@ -2820,8 +2831,11 @@ export interface DiscoveryStats {
   generatedAt?: number;
 }
 
-/** Options for the {@link BazaarClient}. */
-export interface BazaarClientOptions {
+/**
+ * Options for the {@link BazaarClient}. `stackKey` / `stackKeyHosts`: see
+ * {@link StackKeyOptions}; the key goes on every call to the facilitator.
+ */
+export interface BazaarClientOptions extends StackKeyOptions {
   /** Facilitator base URL (default: https://facilitator.ultravioletadao.xyz) */
   baseUrl?: string;
   /** Request timeout in milliseconds (default: 30000) */
@@ -2884,6 +2898,7 @@ export class BazaarClient {
       options.baseUrl || 'https://facilitator.ultravioletadao.xyz'
     ).replace(/\/+$/, '');
     this.timeout = options.timeout || 30000;
+    bindStackKey(this, options);
   }
 
   /**
@@ -2894,7 +2909,7 @@ export class BazaarClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}${path}`, {
         ...init,
         headers: { Accept: 'application/json', ...(init?.headers || {}) },
         signal: controller.signal,
@@ -3052,7 +3067,7 @@ export class BazaarClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/health`, {
         method: 'GET',
         signal: controller.signal,
       });
@@ -3268,7 +3283,13 @@ export interface RequestRefundOptions {
 /**
  * Options for the EscrowClient
  */
-export interface EscrowClientOptions {
+/**
+ * Options for the EscrowClient. `stackKey` / `stackKeyHosts`: see
+ * {@link StackKeyOptions}; the key goes on every call. The default base URL,
+ * `escrow.ultravioletadao.xyz`, is not a house facilitator: it receives the
+ * key only when listed in `stackKeyHosts`.
+ */
+export interface EscrowClientOptions extends StackKeyOptions {
   /** Base URL of the Escrow API (default: https://escrow.ultravioletadao.xyz) */
   baseUrl?: string;
   /** API key for authenticated operations */
@@ -3312,6 +3333,7 @@ export class EscrowClient {
     this.baseUrl = options.baseUrl || 'https://escrow.ultravioletadao.xyz';
     this.apiKey = options.apiKey;
     this.timeout = options.timeout || 30000;
+    bindStackKey(this, options);
   }
 
   private getHeaders(authenticated: boolean = false): Record<string, string> {
@@ -3340,7 +3362,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({
@@ -3379,7 +3401,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -3414,7 +3436,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         signal: controller.signal,
@@ -3449,7 +3471,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({
@@ -3488,7 +3510,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ amount }),
@@ -3523,7 +3545,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ reason }),
@@ -3557,7 +3579,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -3598,7 +3620,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ reason, evidence }),
@@ -3633,7 +3655,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ evidence }),
@@ -3667,7 +3689,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -3719,7 +3741,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(true),
         signal: controller.signal,
@@ -3770,7 +3792,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(options),
@@ -3798,7 +3820,7 @@ export class EscrowClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/health`, {
         method: 'GET',
       });
       return response.ok;
@@ -4957,7 +4979,12 @@ export interface IdentityTotalSupplyResponse {
 /**
  * Options for the ERC8004Client
  */
-export interface Erc8004ClientOptions {
+/**
+ * Options for the Erc8004Client. `stackKey` / `stackKeyHosts`: see
+ * {@link StackKeyOptions}; the key goes on every facilitator route, never on
+ * {@link Erc8004Client.resolveAgentUri}, which fetches the agent's own URI.
+ */
+export interface Erc8004ClientOptions extends StackKeyOptions {
   /** Base URL of the facilitator (default: https://facilitator.ultravioletadao.xyz) */
   baseUrl?: string;
   /** Request timeout in milliseconds (default: 30000) */
@@ -5016,6 +5043,7 @@ export class Erc8004Client {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
+    bindStackKey(this, options);
   }
 
   /**
@@ -5046,7 +5074,7 @@ export class Erc8004Client {
         },
         body: JSON.stringify(body),
       },
-      { timeoutMs: this.timeout, retries: this.retries },
+      { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
     );
   }
 
@@ -5064,7 +5092,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal,
@@ -5105,7 +5133,7 @@ export class Erc8004Client {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    const response = await fetch(url, {
+    const response = await stackKeyFetch(this, url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -5147,6 +5175,7 @@ export class Erc8004Client {
         url = `https://ipfs.io/ipfs/${cid}`;
       }
 
+      // No stack key: this URI is the agent's, not the facilitator's.
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
@@ -5198,7 +5227,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal,
@@ -5346,7 +5375,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -5496,7 +5525,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -5676,7 +5705,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal,
@@ -5998,7 +6027,7 @@ export class Erc8004Client {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    const response = await fetch(url, {
+    const response = await stackKeyFetch(this, url, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -6058,7 +6087,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal,
@@ -6097,7 +6126,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal,
@@ -6130,7 +6159,7 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
         signal: controller.signal,
@@ -6659,9 +6688,11 @@ export interface AdvancedEscrowContracts {
 }
 
 /**
- * Configuration options for AdvancedEscrowClient.
+ * Configuration options for AdvancedEscrowClient. `stackKey` /
+ * `stackKeyHosts`: see {@link StackKeyOptions}; the key goes on every call to
+ * the facilitator (`/settle`, `/escrow/state`), never to the RPC.
  */
-export interface AdvancedEscrowClientOptions {
+export interface AdvancedEscrowClientOptions extends StackKeyOptions {
   /** Facilitator URL for AUTHORIZE operations */
   facilitatorUrl?: string;
   /** JSON-RPC URL for on-chain operations (required when using SigningWalletAdapter) */
@@ -6929,6 +6960,7 @@ export class AdvancedEscrowClient {
     this.gasLimit = options.gasLimit || 300000;
     this.timeout = options.timeout || ESCROW_TIMEOUT_MS[this.chainId] || DEFAULT_ESCROW_TIMEOUT_MS;
     this.retries = options.retries;
+    bindStackKey(this, options);
 
     if (this.walletAdapter && !this.rpcUrl) {
       throw new Error(
@@ -7222,7 +7254,7 @@ export class AdvancedEscrowClient {
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
       try {
-        const response = await fetch(`${this.facilitatorUrl}/settle`, {
+        const response = await stackKeyFetch(this, `${this.facilitatorUrl}/settle`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -7483,7 +7515,7 @@ export class AdvancedEscrowClient {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           },
-          { timeoutMs: this.timeout, retries: this.retries },
+          { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
         );
         if (error) {
           return { success: false, error: error.error, ...failureFields(error) };
@@ -7642,7 +7674,7 @@ export class AdvancedEscrowClient {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           },
-          { timeoutMs: this.timeout, retries: this.retries },
+          { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
         );
         if (error) {
           return { success: false, error: error.error, ...failureFields(error) };
@@ -7726,7 +7758,7 @@ export class AdvancedEscrowClient {
       },
     };
 
-    const response = await fetch(`${this.facilitatorUrl}/escrow/state`, {
+    const response = await stackKeyFetch(this, `${this.facilitatorUrl}/escrow/state`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

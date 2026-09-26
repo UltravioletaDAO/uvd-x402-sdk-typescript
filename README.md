@@ -861,6 +861,16 @@ app.post('/api/premium', async (req, res) => {
 
 `createPaymentMiddleware()` and `createHonoMiddleware()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
 
+### Stack key (services run by Ultravioleta DAO)
+
+Services run by Ultravioleta DAO carry a per-service credential, the stack key, so that the facilitator's rate-limit policy does not answer them `429`. Everything in this SDK that calls the facilitator sends it as `X-UVD-Stack-Key`: the clients `FacilitatorClient` (and the two middlewares), `Erc8004Client`, `BazaarClient`, `EscrowClient` and `AdvancedEscrowClient`, and the functions `anchorEvidence`, `availableBackends`, `streamTrafficEvents` and `getFacilitatorReceipt`, which take the same `stackKey` / `stackKeyHosts` options. It changes nothing else about a payment, and a facilitator that does not know the header ignores it.
+
+- **Where it comes from:** the facilitator's operator issues one per service: `uvdsk_` followed by 43-128 base64url characters. The process receives it as `UVD_STACK_KEY` (read by default) or as the `stackKey` option, from a secret store, never from code.
+- **Not for third parties:** if you integrate this SDK in your own product you have no key and need none. Leave both unset and no header is sent.
+- **Only to a house facilitator:** the key goes over `https://` to `facilitator.ultravioletadao.xyz` and nowhere else, checked on the URL of every request. A request to any other host, or over plain `http://`, carries no header, whether the key came from the option or from `UVD_STACK_KEY`, and warns once, naming the host and never the key. `stackKeyHosts: ['facilitator-staging.example']` ADDS hosts (hostnames only, matched exactly); `facilitator.ultravioletadao.xyz` stays in. Plain `http://` is accepted only for `127.0.0.1` or `localhost`, and only when listed there. `EscrowClient`'s default base URL, `escrow.ultravioletadao.xyz`, is not the facilitator and gets the key only if listed.
+- **The key does not follow redirects:** a redirect answered to a request that carries it fails with `StackKeyRedirectError` (exported), and the key is not sent again. Point the client at the facilitator's final URL.
+- **A bad key never breaks a payment:** one leading BOM (U+FEFF), then spaces, tabs, CR and LF at both ends, are removed, and nothing else. A value that still does not match is not sent: the client warns once, without the value, and pays like any other client. The key never appears in a result, an error, a log line or a printed client.
+
 ## React
 
 ```tsx

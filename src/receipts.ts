@@ -3,6 +3,8 @@ import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 import type { X402FetchOptions } from './types';
+import { bindStackKey, stackKeyFetch } from './backend/stack-key';
+import type { StackKeyOptions } from './backend/stack-key';
 
 export const RECEIPT_ISSUER = 'https://facilitator.ultravioletadao.xyz';
 export type PaymentState = 'verified' | 'pending' | 'confirmed' | 'rejected' | 'unknown' | 'not_required';
@@ -226,10 +228,18 @@ export async function fetchWithReceipt(
   }
 }
 
-export async function getFacilitatorReceipt(receiptId: string, context: PurchaseContext, options: { issuer?: string; fetchImpl?: typeof fetch } = {}): Promise<FacilitatorReceipt> {
+/**
+ * `options.stackKey` / `options.stackKeyHosts`: see {@link StackKeyOptions};
+ * the key goes on the lookup when `issuer` is a house facilitator, and a
+ * redirect answered to it throws `StackKeyRedirectError`.
+ */
+export async function getFacilitatorReceipt(receiptId: string, context: PurchaseContext, options: { issuer?: string; fetchImpl?: typeof fetch } & StackKeyOptions = {}): Promise<FacilitatorReceipt> {
   if (!/^[0-9a-f-]{36}$/.test(receiptId)) throw new Error('invalid receipt ID');
   const issuer = options.issuer || RECEIPT_ISSUER;
-  const response = await (options.fetchImpl || globalThis.fetch)(`${issuer}/receipts/${receiptId}`, { headers: { Authorization: `Bearer ${context.accessToken}` } });
+  // The key binds to this lookup only.
+  const owner = {};
+  bindStackKey(owner, options);
+  const response = await stackKeyFetch(owner, `${issuer}/receipts/${receiptId}`, { headers: { Authorization: `Bearer ${context.accessToken}` } }, options.fetchImpl || globalThis.fetch);
   if (!response.ok) throw new Error(`receipt lookup failed: ${response.status}`);
   const receipt = parseFacilitatorReceipt((await response.json()).receipt);
   if (!receipt || receipt.issuer !== issuer || receipt.purchaseId !== context.purchaseId) throw new Error('receipt lookup mismatch');
