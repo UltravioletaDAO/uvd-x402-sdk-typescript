@@ -108,9 +108,10 @@ import {
   readFacilitatorError,
 } from './facilitator-error';
 import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitator-error';
-import { bindStackKey, withStackKey } from './stack-key';
+import { bindStackKey, stackKeyFetch, stackKeyFetcher } from './stack-key';
 import type { StackKeyOptions } from './stack-key';
 export type { StackKeyOptions } from './stack-key';
+export { STACK_KEY_HEADER, StackKeyRedirectError } from './stack-key';
 
 // A facilitator refusal is DATA, not prose. `402` and `503` say opposite things
 // and this file used to answer both with `success: false` plus a sentence --
@@ -1169,7 +1170,7 @@ export class FacilitatorClient {
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
     this.x402Version = options.x402Version ?? 'auto';
-    bindStackKey(this, options, this.baseUrl);
+    bindStackKey(this, options);
   }
 
   /**
@@ -1226,10 +1227,10 @@ export class FacilitatorClient {
         `${this.baseUrl}/verify`,
         {
           method: 'POST',
-          headers: withStackKey(this, facilitatorHeaders(idempotencyKey, options.receiptContext)),
+          headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
           body: JSON.stringify(body),
         },
-        { timeoutMs: this.timeout, retries: this.retries },
+        { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
       );
 
       if (error) {
@@ -1312,10 +1313,10 @@ export class FacilitatorClient {
         {
           method: 'POST',
           // The same init, key included, goes out on every automatic retry.
-          headers: withStackKey(this, facilitatorHeaders(idempotencyKey, options.receiptContext)),
+          headers: facilitatorHeaders(idempotencyKey, options.receiptContext),
           body: JSON.stringify(body),
         },
-        { timeoutMs: settleTimeout, retries: this.retries },
+        { timeoutMs: settleTimeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
       );
 
       if (error) {
@@ -1477,9 +1478,8 @@ export class FacilitatorClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/health`, {
         method: 'GET',
-        headers: withStackKey(this, {}),
       });
       return response.ok;
     } catch {
@@ -1493,9 +1493,8 @@ export class FacilitatorClient {
    * @returns Version info (e.g., { version: "1.37.0" })
    */
   async getVersion(): Promise<{ version: string; [key: string]: unknown }> {
-    const response = await fetch(`${this.baseUrl}/version`, {
+    const response = await stackKeyFetch(this, `${this.baseUrl}/version`, {
       method: 'GET',
-      headers: withStackKey(this, {}),
     });
     if (!response.ok) {
       const errorText = await response.text();
@@ -1521,9 +1520,8 @@ export class FacilitatorClient {
     kinds: Array<{ network: string; scheme: string; [key: string]: unknown }>;
     [key: string]: unknown;
   }> {
-    const response = await fetch(`${this.baseUrl}/supported`, {
+    const response = await stackKeyFetch(this, `${this.baseUrl}/supported`, {
       method: 'GET',
-      headers: withStackKey(this, {}),
     });
     if (!response.ok) {
       const errorText = await response.text();
@@ -1563,7 +1561,7 @@ export class FacilitatorClient {
     }>;
     [key: string]: unknown;
   }> {
-    const response = await fetch(`${this.baseUrl}/api/stats`, { method: 'GET', headers: withStackKey(this, {}) });
+    const response = await stackKeyFetch(this, `${this.baseUrl}/api/stats`, { method: 'GET' });
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`GET /api/stats failed: ${response.status} - ${errorText}`);
@@ -1591,9 +1589,10 @@ export class FacilitatorClient {
     if (options.limit !== undefined) params.set('limit', String(options.limit));
     if (options.network) params.set('network', options.network);
     const query = params.toString();
-    const response = await fetch(
+    const response = await stackKeyFetch(
+      this,
       `${this.baseUrl}/transactions${query ? `?${query}` : ''}`,
-      { method: 'GET', headers: withStackKey(this, {}) }
+      { method: 'GET' }
     );
     if (!response.ok) {
       const errorText = await response.text();
@@ -1618,9 +1617,8 @@ export class FacilitatorClient {
     loadedAtStartup: boolean;
     [key: string]: unknown;
   }> {
-    const response = await fetch(`${this.baseUrl}/blacklist`, {
+    const response = await stackKeyFetch(this, `${this.baseUrl}/blacklist`, {
       method: 'GET',
-      headers: withStackKey(this, {}),
     });
     if (!response.ok) {
       const errorText = await response.text();
@@ -1665,9 +1663,9 @@ export class FacilitatorClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(`${this.baseUrl}/accepts`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/accepts`, {
         method: 'POST',
-        headers: withStackKey(this, { 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           x402Version,
           accepts: paymentRequirements,
@@ -2900,7 +2898,7 @@ export class BazaarClient {
       options.baseUrl || 'https://facilitator.ultravioletadao.xyz'
     ).replace(/\/+$/, '');
     this.timeout = options.timeout || 30000;
-    bindStackKey(this, options, this.baseUrl);
+    bindStackKey(this, options);
   }
 
   /**
@@ -2911,9 +2909,9 @@ export class BazaarClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}${path}`, {
         ...init,
-        headers: withStackKey(this, { Accept: 'application/json', ...(init?.headers || {}) } as Record<string, string>),
+        headers: { Accept: 'application/json', ...(init?.headers || {}) },
         signal: controller.signal,
       });
 
@@ -3069,9 +3067,8 @@ export class BazaarClient {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/health`, {
         method: 'GET',
-        headers: withStackKey(this, {}),
         signal: controller.signal,
       });
       return response.ok;
@@ -3336,7 +3333,7 @@ export class EscrowClient {
     this.baseUrl = options.baseUrl || 'https://escrow.ultravioletadao.xyz';
     this.apiKey = options.apiKey;
     this.timeout = options.timeout || 30000;
-    bindStackKey(this, options, this.baseUrl);
+    bindStackKey(this, options);
   }
 
   private getHeaders(authenticated: boolean = false): Record<string, string> {
@@ -3347,7 +3344,7 @@ export class EscrowClient {
     if (authenticated && this.apiKey) {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
     }
-    return withStackKey(this, headers);
+    return headers;
   }
 
   /**
@@ -3365,7 +3362,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({
@@ -3404,7 +3401,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -3439,7 +3436,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         signal: controller.signal,
@@ -3474,7 +3471,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({
@@ -3513,7 +3510,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ amount }),
@@ -3548,7 +3545,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ reason }),
@@ -3582,7 +3579,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -3623,7 +3620,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ reason, evidence }),
@@ -3658,7 +3655,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(true),
         body: JSON.stringify({ evidence }),
@@ -3692,7 +3689,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(),
         signal: controller.signal,
@@ -3744,7 +3741,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
         headers: this.getHeaders(true),
         signal: controller.signal,
@@ -3795,7 +3792,7 @@ export class EscrowClient {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(options),
@@ -3823,9 +3820,8 @@ export class EscrowClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await stackKeyFetch(this, `${this.baseUrl}/health`, {
         method: 'GET',
-        headers: withStackKey(this, {}),
       });
       return response.ok;
     } catch {
@@ -5047,7 +5043,7 @@ export class Erc8004Client {
     this.baseUrl = options.baseUrl || 'https://facilitator.ultravioletadao.xyz';
     this.timeout = options.timeout || 30000;
     this.retries = options.retries;
-    bindStackKey(this, options, this.baseUrl);
+    bindStackKey(this, options);
   }
 
   /**
@@ -5071,14 +5067,14 @@ export class Erc8004Client {
       url,
       {
         method: 'POST',
-        headers: withStackKey(this, {
+        headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
           ...extraHeaders,
-        }),
+        },
         body: JSON.stringify(body),
       },
-      { timeoutMs: this.timeout, retries: this.retries },
+      { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
     );
   }
 
@@ -5096,9 +5092,9 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
-        headers: withStackKey(this, { 'Accept': 'application/json' }),
+        headers: { 'Accept': 'application/json' },
         signal: controller.signal,
       });
 
@@ -5137,9 +5133,9 @@ export class Erc8004Client {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    const response = await fetch(url, {
+    const response = await stackKeyFetch(this, url, {
       method: 'GET',
-      headers: withStackKey(this, { Accept: 'application/json' }),
+      headers: { Accept: 'application/json' },
       signal: controller.signal,
     }).finally(() => clearTimeout(timeoutId));
 
@@ -5231,9 +5227,9 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
-        headers: withStackKey(this, { 'Accept': 'application/json' }),
+        headers: { 'Accept': 'application/json' },
         signal: controller.signal,
       });
 
@@ -5379,12 +5375,12 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
-        headers: withStackKey(this, {
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-        }),
+        },
         body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
@@ -5529,12 +5525,12 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'POST',
-        headers: withStackKey(this, {
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
-        }),
+        },
         body: JSON.stringify({ ...request, network: wireNetwork(request.network) }),
         signal: controller.signal,
       });
@@ -5709,9 +5705,9 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
-        headers: withStackKey(this, { 'Accept': 'application/json' }),
+        headers: { 'Accept': 'application/json' },
         signal: controller.signal,
       });
 
@@ -6031,9 +6027,9 @@ export class Erc8004Client {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-    const response = await fetch(url, {
+    const response = await stackKeyFetch(this, url, {
       method: 'GET',
-      headers: withStackKey(this, { Accept: 'application/json' }),
+      headers: { Accept: 'application/json' },
       signal: controller.signal,
     }).finally(() => clearTimeout(timeoutId));
 
@@ -6091,9 +6087,9 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
-        headers: withStackKey(this, { 'Accept': 'application/json' }),
+        headers: { 'Accept': 'application/json' },
         signal: controller.signal,
       });
 
@@ -6130,9 +6126,9 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
-        headers: withStackKey(this, { 'Accept': 'application/json' }),
+        headers: { 'Accept': 'application/json' },
         signal: controller.signal,
       });
 
@@ -6163,9 +6159,9 @@ export class Erc8004Client {
     const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
     try {
-      const response = await fetch(url, {
+      const response = await stackKeyFetch(this, url, {
         method: 'GET',
-        headers: withStackKey(this, { 'Accept': 'application/json' }),
+        headers: { 'Accept': 'application/json' },
         signal: controller.signal,
       });
 
@@ -6964,7 +6960,7 @@ export class AdvancedEscrowClient {
     this.gasLimit = options.gasLimit || 300000;
     this.timeout = options.timeout || ESCROW_TIMEOUT_MS[this.chainId] || DEFAULT_ESCROW_TIMEOUT_MS;
     this.retries = options.retries;
-    bindStackKey(this, options, this.facilitatorUrl);
+    bindStackKey(this, options);
 
     if (this.walletAdapter && !this.rpcUrl) {
       throw new Error(
@@ -7258,9 +7254,9 @@ export class AdvancedEscrowClient {
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
       try {
-        const response = await fetch(`${this.facilitatorUrl}/settle`, {
+        const response = await stackKeyFetch(this, `${this.facilitatorUrl}/settle`, {
           method: 'POST',
-          headers: withStackKey(this, { 'Content-Type': 'application/json' }),
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
           signal: controller.signal,
         });
@@ -7516,10 +7512,10 @@ export class AdvancedEscrowClient {
           `${this.facilitatorUrl}/settle`,
           {
             method: 'POST',
-            headers: withStackKey(this, { 'Content-Type': 'application/json' }),
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           },
-          { timeoutMs: this.timeout, retries: this.retries },
+          { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
         );
         if (error) {
           return { success: false, error: error.error, ...failureFields(error) };
@@ -7675,10 +7671,10 @@ export class AdvancedEscrowClient {
           `${this.facilitatorUrl}/settle`,
           {
             method: 'POST',
-            headers: withStackKey(this, { 'Content-Type': 'application/json' }),
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           },
-          { timeoutMs: this.timeout, retries: this.retries },
+          { timeoutMs: this.timeout, retries: this.retries, fetchImpl: stackKeyFetcher(this) },
         );
         if (error) {
           return { success: false, error: error.error, ...failureFields(error) };
@@ -7762,9 +7758,9 @@ export class AdvancedEscrowClient {
       },
     };
 
-    const response = await fetch(`${this.facilitatorUrl}/escrow/state`, {
+    const response = await stackKeyFetch(this, `${this.facilitatorUrl}/escrow/state`, {
       method: 'POST',
-      headers: withStackKey(this, { 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
 

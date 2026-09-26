@@ -30,7 +30,7 @@ import {
 } from './index';
 import type { AdvancedPaymentInfo, PaymentRequirements } from './index';
 import type { X402Header } from '../types';
-import { STACK_KEY_HEADER } from './stack-key';
+import { STACK_KEY_HEADER, StackKeyRedirectError, bindStackKey, stackKeyFetch } from './stack-key';
 
 /** Synthetic, and recognisable wherever it might leak. */
 const BODY = 'synthetic-test-key_'.repeat(3);
@@ -97,20 +97,26 @@ const ESCROW_SIGNER = {
 const escrowClient = (options: ConstructorParameters<typeof AdvancedEscrowClient>[1] = {}) =>
   new AdvancedEscrowClient(ESCROW_SIGNER, { chainId: 8453, retries: 0, ...options });
 
-type Call = { url: string; headers: Record<string, string> };
+type Call = { url: string; headers: Record<string, string>; redirect: RequestRedirect | undefined };
 
 /**
  * Stub `fetch` and record the headers EXACTLY as the SDK passed them: a real
- * `Headers` would normalise the value and hide what the SDK did.
+ * `Headers` would normalise the value and hide what the SDK did. `answer`
+ * replaces the default 200.
  */
-function stubFetch(): Call[] {
+function stubFetch(answer: () => Response = () =>
+  new Response(JSON.stringify(ANSWER), { status: 200, headers: { 'Content-Type': 'application/json' } })): Call[] {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
-    calls.push({ url, headers: { ...(init.headers as Record<string, string>) } });
-    return new Response(JSON.stringify(ANSWER), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    calls.push({ url, headers: { ...(init.headers as Record<string, string>) }, redirect: init.redirect });
+    return answer();
   }));
   return calls;
 }
+/** A 30x the way Node's fetch returns it for `redirect: 'manual'`. */
+const redirectTo = (status: number) => () => new Response(null, { status, headers: { Location: 'https://elsewhere.example/verify' } });
+/** The opaque redirect a browser returns for `redirect: 'manual'`. */
+const opaqueRedirect = () => ({ type: 'opaqueredirect', status: 0, ok: false, body: null, headers: new Headers() }) as unknown as Response;
 const sent = (call: Call) => call.headers[STACK_KEY_HEADER];
 
 /** Payment through `verify` + `settle`; returns what each carried. */
@@ -278,9 +284,13 @@ describe('stack key on the facilitator calls', () => {
 
   it('resolveAgentUri never carries it: that URI is not the facilitator', async () => {
     const calls = stubFetch();
-    await new Erc8004Client({ stackKey: KEY }).resolveAgentUri('https://agent.example/registration.json');
-    expect(calls).toHaveLength(1);
-    expect(STACK_KEY_HEADER in calls[0].headers).toBe(false);
+    const client = new Erc8004Client({ stackKey: KEY });
+    await client.resolveAgentUri('https://agent.example/registration.json');
+    // Not even when the agent's file happens to live on the house host: the
+    // gate would let the key through, so what keeps it off is this call.
+    await client.resolveAgentUri(`${HOUSE}/agents/1/registration.json`);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect([STACK_KEY_HEADER in call.headers, call.redirect]).toEqual([false, undefined]);
   });
 
   it('no key configured: no header, anywhere', async () => {
@@ -297,7 +307,7 @@ describe('stack key on the facilitator calls', () => {
   });
 
   it('a key read with a trailing \\r\\n (or other surrounding whitespace) goes out trimmed', async () => {
-    for (const raw of [`${KEY}\r\n`, `${KEY}\n`, `  ${KEY}\t`, `﻿${KEY}\r\n`]) {
+    for (const raw of [`${KEY}\r\n`, `${KEY}\n`, `  ${KEY}\t`, `\uFEFF${KEY}\r\n`]) {
       const calls = stubFetch();
       const result = await pay(new FacilitatorClient({ retries: 0, stackKey: raw }), calls);
       expect(result.calls).toEqual([KEY, KEY]);
@@ -336,13 +346,15 @@ describe('stack key on the facilitator calls', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const a = {};
     const b = {};
-    expect(() => fresh.bindStackKey(a, { stackKey: `uvdsk_${BODY.slice(0, 20)}\r\n${BODY.slice(20)}` }, HOUSE)).not.toThrow();
-    expect(() => fresh.bindStackKey(b, { stackKey: `sk_${OTHER_BODY}` }, HOUSE)).not.toThrow();
+    expect(() => fresh.bindStackKey(a, { stackKey: `uvdsk_${BODY.slice(0, 20)}\r\n${BODY.slice(20)}` })).not.toThrow();
+    expect(() => fresh.bindStackKey(b, { stackKey: `sk_${OTHER_BODY}` })).not.toThrow();
     expect(warn).toHaveBeenCalledTimes(1);
     expectNoKey(...warn.mock.calls.flat());
     expect(String(warn.mock.calls[0][0])).toContain('stackKey option');
-    expect(fresh.withStackKey(a, { Accept: 'application/json' })).toEqual({ Accept: 'application/json' });
-    expect(fresh.withStackKey(b, {})).toEqual({});
+    const calls = stubFetch();
+    await fresh.stackKeyFetch(a, `${HOUSE}/verify`, { headers: { Accept: 'application/json' } });
+    await fresh.stackKeyFetch(b, `${HOUSE}/verify`);
+    expect(calls.map((c) => c.headers)).toEqual([{ Accept: 'application/json' }, {}]);
   });
 
   it('a client built with an invalid key warns once, without the value, and still pays', async () => {
@@ -575,6 +587,99 @@ describe('every client of the facilitator carries the key', () => {
     const calls = stubFetch();
     expect(await callEach(escrowClient({ stackKey: KEY }), ADVANCED_ESCROW, calls)).toEqual(everyOne(ADVANCED_ESCROW, KEY));
     expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/settle', '/settle', '/settle', '/escrow/state']);
+  });
+});
+
+/** Every call of every facilitator client, once: 52 requests. */
+async function everyCall(key: { stackKey?: string }, calls: Call[]) {
+  await pay(new FacilitatorClient({ retries: 0, ...key }), calls);
+  await callEach(new FacilitatorClient({ retries: 0, ...key }), FACILITATOR_OTHERS, calls);
+  await callEach(new Erc8004Client({ retries: 0, ...key }), [...WRITES, ...READS], calls);
+  await callEach(new BazaarClient(key), BAZAAR, calls);
+  await callEach(new EscrowClient({ baseUrl: HOUSE, ...key }), ESCROW, calls);
+  await callEach(escrowClient(key), ADVANCED_ESCROW, calls);
+}
+
+describe('the key never follows a redirect', () => {
+  it('every request that carries the key goes out with redirect: manual; without a key, nothing changes', async () => {
+    const keyed = stubFetch();
+    await everyCall({ stackKey: KEY }, keyed);
+    expect(keyed).toHaveLength(52);
+    for (const call of keyed) expect([call.url, sent(call), call.redirect]).toEqual([call.url, KEY, 'manual']);
+
+    const plain = stubFetch();
+    await everyCall({}, plain);
+    for (const call of plain) expect([call.url, STACK_KEY_HEADER in call.headers, call.redirect]).toEqual([call.url, false, undefined]);
+  });
+
+  it('a redirect answered to the key is a clear SDK error, and the key goes out once', async () => {
+    const answers: Array<[number, () => Response]> = [
+      [301, redirectTo(301)], [302, redirectTo(302)], [303, redirectTo(303)], [307, redirectTo(307)], [308, redirectTo(308)],
+      [0, opaqueRedirect],
+    ];
+    for (const [status, answer] of answers) {
+      const calls = stubFetch(answer);
+      const client = new FacilitatorClient({ retries: 2, stackKey: KEY });
+      const thrown = await client.getSupported().catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(StackKeyRedirectError);
+      expect((thrown as StackKeyRedirectError).status).toBe(status);
+      expect((thrown as Error).message).toContain('the stack key does not follow redirects');
+
+      const verified = await client.verify(HEADER, REQUIREMENTS);
+      expect(verified.isValid).toBe(false);
+      expect(verified.invalidReason).toContain('the stack key does not follow redirects');
+      const settled = await client.settle(HEADER, REQUIREMENTS);
+      expect(settled.success).toBe(false);
+      expect(settled.error).toContain('the stack key does not follow redirects');
+      const feedback = await new Erc8004Client({ retries: 2, stackKey: KEY }).submitFeedback(
+        { x402Version: 1, network: 'base', feedback: { agentId: 1, value: 1 } } as never,
+      );
+      expect(feedback.success).toBe(false);
+      const release = await escrowClient({ retries: 2, stackKey: KEY }).releaseViaFacilitator(PI);
+      expect(release.success).toBe(false);
+
+      // One request each: no retry, no second attempt, no follow.
+      expect(calls).toHaveLength(5);
+      expectNoKey(thrown, (thrown as Error).message, verified, settled, feedback, release);
+    }
+  });
+
+  it('without a key a 3xx is not intercepted: the request is exactly what it was', async () => {
+    const calls = stubFetch(redirectTo(302));
+    const thrown = await new FacilitatorClient({ retries: 0 }).getSupported().catch((e: unknown) => e);
+    expect(thrown).not.toBeInstanceOf(StackKeyRedirectError);
+    expect(calls.map((c) => c.redirect)).toEqual([undefined]);
+  });
+
+  it('the gate runs on the URL of every request, not once per client', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const owner = {};
+    bindStackKey(owner, { stackKey: KEY });
+    const calls = stubFetch();
+    await stackKeyFetch(owner, `${HOUSE}/verify`, { method: 'POST' });
+    await stackKeyFetch(owner, 'https://elsewhere.example/verify', { method: 'POST' });
+    await stackKeyFetch(owner, `${HOUSE}/settle`);
+    expect(calls.map((c) => [c.url, sent(c), c.redirect])).toEqual([
+      [`${HOUSE}/verify`, KEY, 'manual'],
+      ['https://elsewhere.example/verify', undefined, undefined],
+      [`${HOUSE}/settle`, KEY, 'manual'],
+    ]);
+  });
+
+  it('before the check: one leading BOM, then spaces, tabs, CR and LF at the edges; nothing else', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sentWith = async (raw: string) => {
+      const calls = stubFetch();
+      await new FacilitatorClient({ retries: 0, stackKey: raw }).verify(HEADER, REQUIREMENTS);
+      return sent(calls[0]);
+    };
+    for (const raw of [`\uFEFF${KEY}`, `\uFEFF${KEY}\r\n`, ` \t${KEY}\r\n `, `${KEY}\n`, `\r\n${KEY}`]) {
+      expect(await sentWith(raw), JSON.stringify(raw.slice(0, 3))).toBe(KEY);
+    }
+    // A second BOM, a BOM anywhere but first, and other whitespace stay -- and fail the check.
+    for (const raw of [`\uFEFF\uFEFF${KEY}`, `${KEY}\uFEFF`, ` \uFEFF${KEY}`, `\u00A0${KEY}`, `${KEY}\u2028`, `\v${KEY}`, `\f${KEY}`]) {
+      expect(await sentWith(raw), JSON.stringify(raw.slice(0, 3))).toBeUndefined();
+    }
   });
 });
 

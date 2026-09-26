@@ -478,6 +478,9 @@ export {
   isAuthorizationAlreadyUsed,
   isAuthorizationInFlight,
   buildPaymentConflictResponse,
+  // A request carrying the stack key never follows a redirect: it fails with this.
+  STACK_KEY_HEADER,
+  StackKeyRedirectError,
 } from './backend';
 export type {
   ResourceInfoV2,
