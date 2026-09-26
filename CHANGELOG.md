@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.100.0] - 2026-09-25
+
+### Added
+
+- `stackKey` on `FacilitatorClientOptions` (so also on the Express and Hono middleware options, which now pass it to their client) and on `Erc8004ClientOptions`: the per-service credential of a service run by Ultravioleta DAO, sent as `X-UVD-Stack-Key`. The facilitator exempts a key it recognises from its rate-limit policy (`429`) and changes nothing else; a facilitator that does not know the header ignores it. `FacilitatorClient` sends it on `/verify` and `/settle`, automatic retries included. `Erc8004Client` sends it on every facilitator route, writes and reads, and never on `resolveAgentUri`, which fetches the agent's own URI.
+- Default: `process.env.UVD_STACK_KEY`, read once when the client is built. `stackKey: ''` sends none and does not read the environment. Without a key nothing changes: no header is sent.
+- A key that was read badly never breaks a payment. Surrounding whitespace (a trailing `\r\n`, a BOM) is removed; a value that then does not match `^uvdsk_[A-Za-z0-9_-]{43,128}$` is not sent, and the client warns once per process without the value. A value no header can carry makes `fetch` throw before sending (Node's message includes the value), which would have failed every `/verify` and `/settle` of the client.
+- The key is held outside the client object: `console.log`, `util.inspect` and `JSON.stringify` of a client never show it, and it is in no result, error or warning.
+- `src/backend/stack-key.test.ts`: 15 tests (fetch doubles that record the headers exactly as passed, and a local HTTP facilitator double for what Node's `fetch` does with a bad value). Each of 16 mutations that undoes one rule turns one of them red.
+
 ## [2.99.1] - 2026-09-24
 
 ### Fixed
