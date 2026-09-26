@@ -486,6 +486,7 @@ export type {
   VerifyRequestV2,
   SettleRequestV2,
   FacilitatorClientOptions,
+  StackKeyOptions,
   HonoMiddlewareOptions,
   PaymentAcceptance,
   PaymentMiddlewareOptions,
