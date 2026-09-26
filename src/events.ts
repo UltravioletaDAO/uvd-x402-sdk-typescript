@@ -40,6 +40,8 @@
  */
 
 import { DEFAULT_FACILITATOR_URL } from './facilitator';
+import { bindStackKey, stackKeyFetch } from './backend/stack-key';
+import type { StackKeyOptions } from './backend/stack-key';
 
 /** Operations the facilitator publishes. */
 export type TrafficEventKind = 'verify' | 'settle';
@@ -124,7 +126,12 @@ export class TrafficStreamError extends Error {
   }
 }
 
-export interface StreamTrafficEventsOptions {
+/**
+ * `stackKey` / `stackKeyHosts`: see {@link StackKeyOptions}; the key goes on
+ * the subscription when `facilitatorUrl` is a house facilitator, and a
+ * redirect answered to it throws `StackKeyRedirectError`.
+ */
+export interface StreamTrafficEventsOptions extends StackKeyOptions {
   /** Facilitator to subscribe to. Defaults to the Ultravioleta DAO facilitator. */
   facilitatorUrl?: string;
   /**
@@ -281,7 +288,10 @@ export async function* streamTrafficEvents(
   options: StreamTrafficEventsOptions = {}
 ): AsyncGenerator<TrafficEvent, void, undefined> {
   const baseUrl = (options.facilitatorUrl || DEFAULT_FACILITATOR_URL).replace(/\/$/, '');
-  const response = await fetch(`${baseUrl}/events`, {
+  // The key binds to this subscription only.
+  const owner = {};
+  bindStackKey(owner, options);
+  const response = await stackKeyFetch(owner, `${baseUrl}/events`, {
     method: 'GET',
     headers: { Accept: 'text/event-stream', ...(options.headers || {}) },
     signal: options.signal,

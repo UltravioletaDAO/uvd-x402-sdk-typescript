@@ -32,6 +32,8 @@ import {
 import { keccak_256 } from '@noble/hashes/sha3';
 
 import { getChainById, getChainByName } from './chains';
+import { StackKeyRedirectError, bindStackKey, stackKeyFetch } from './backend/stack-key';
+import type { StackKeyOptions } from './backend/stack-key';
 import { sha256, sha512 } from '@noble/hashes/sha2';
 
 export const EVIDENCE_HEADER = 'X-Durable-Evidence';
@@ -808,7 +810,11 @@ export function sealEvidenceTo(
 // The whole seller side, in one call
 // ============================================================================
 
-export interface AnchorOptions {
+/**
+ * `stackKey` / `stackKeyHosts`: see {@link StackKeyOptions}; the key goes on
+ * the anchor request when `facilitator` is a house facilitator.
+ */
+export interface AnchorOptions extends StackKeyOptions {
   paymentId: string;
   network: string;
   txHash: string;
@@ -1128,12 +1134,14 @@ export async function anchorEvidence(
       /\/+$/,
       '',
     );
-    const doFetch = opts.fetch ?? fetch;
-    const res = await doFetch(`${base}/dx402/anchor`, {
+    // The key binds to this call only.
+    const owner = {};
+    bindStackKey(owner, opts);
+    const res = await stackKeyFetch(owner, `${base}/dx402/anchor`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: wire,
-    });
+    }, opts.fetch);
     // Carry the facilitator's own diagnosis out rather than flattening every
     // failure to `anchor_failed`. A rejected signature answers 422
     // `dx402_signature_not_verified`; erasing it here would reproduce, one
@@ -1150,7 +1158,12 @@ export async function anchorEvidence(
     const out = (await res.json()) as Record<string, unknown>;
     if (unsigned) out.unsigned = unsigned;
     return out;
-  } catch {
+  } catch (error) {
+    // A redirect answered to the stack key is a skip like any other failure,
+    // but a named one: nothing else says why the anchor never landed.
+    if (error instanceof StackKeyRedirectError) {
+      return { v: 1, skipped: 'anchor_failed', status: error.status, error: error.message };
+    }
     return { v: 1, skipped: 'anchor_failed' };
   }
 }
@@ -1182,15 +1195,19 @@ export interface BackendOffer {
  * somebody else has to keep.
  *
  * Resolves to `[]` rather than rejecting when the facilitator is unreachable or
- * does not run DX402 — same discipline as {@link anchorEvidence}.
+ * does not run DX402 — same discipline as {@link anchorEvidence}. That includes
+ * a redirect answered to a request carrying the stack key (see
+ * {@link StackKeyOptions}), which is never followed.
  */
 export async function availableBackends(
   facilitator = 'https://facilitator.ultravioletadao.xyz',
-  opts: { fetch?: typeof fetch } = {},
+  opts: { fetch?: typeof fetch } & StackKeyOptions = {},
 ): Promise<BackendOffer[]> {
   try {
-    const doFetch = opts.fetch ?? fetch;
-    const res = await doFetch(`${facilitator.replace(/\/+$/, '')}/dx402/stats`);
+    // The key binds to this call only.
+    const owner = {};
+    bindStackKey(owner, opts);
+    const res = await stackKeyFetch(owner, `${facilitator.replace(/\/+$/, '')}/dx402/stats`, undefined, opts.fetch);
     if (!res.ok) return [];
     const body = (await res.json()) as { backends?: BackendOffer[] };
     return body.backends ?? [];
