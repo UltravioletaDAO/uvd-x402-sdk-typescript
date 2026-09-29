@@ -7,7 +7,7 @@
  *
  * Implementations:
  * - EnvKeyAdapter: Raw private key (from env var or constructor param)
- * - OWSWalletAdapter: Open Wallet Standard (browser/agent wallets)
+ * - OWSWalletAdapter: Open Wallet Standard vault (@open-wallet-standard/core, Node)
  *
  * Note: This is distinct from the existing `WalletAdapter` interface
  * in `types/index.ts`, which handles full wallet connection lifecycle
@@ -29,9 +29,10 @@
  *
  * @example OWSWalletAdapter (Open Wallet Standard)
  * ```ts
+ * import * as ows from '@open-wallet-standard/core';
  * import { OWSWalletAdapter } from 'uvd-x402-sdk';
  *
- * const wallet = new OWSWalletAdapter(owsWalletInstance);
+ * const wallet = new OWSWalletAdapter(ows, { wallet: 'agent-treasury', network: 'base' });
  * const auth = await wallet.signEIP3009({
  *   to: '0xRecipient...',
  *   amountUsdc: 0.50,

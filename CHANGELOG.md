@@ -4,6 +4,26 @@
 
 - Publishing: `publish.yml` runs only by hand (`workflow_dispatch` on `main`, with the version, which must equal `package.json`) and publishes by npm trusted publishing (OIDC) with provenance and no npm token; every run waits for the owner's approval in the `npm` environment, and a `v*` tag no longer publishes anything. `src/publish-workflow.test.ts` fails if the workflow reads secrets, gains another trigger, grants `id-token: write` outside the publishing job, or loses `environment: npm` or the `main` check.
 
+### Fixed
+
+- `OWSWalletAdapter` now calls `@open-wallet-standard/core` with its real API. It was written against a wallet object (`accounts`, `signMessage({ account, message })`, ...) that the library does not have: its functions take the wallet by name or id, the chain as CAIP-2, the passphrase and the vault path as positional arguments, and return the signature as hex without `0x`. No method worked against the published library; nothing in the repo tested it against the library.
+- Measured on 1.4.2, and handled: `signTypedData` needs `EIP712Domain` and `primaryType` in the document, and hashes `EIP712Domain` in the order given (the adapter derives it in ethers' order). It refuses a decimal string above `2**128 - 1` and odd-length hex (the adapter sends decimal below `2**128`, even hex above, two's complement for large negatives). `signTransaction` returns only the signature over keccak256 of the bytes it gets (the adapter assembles the signed transaction with ethers, EIP-155 `v` included).
+- Refused before signing, with `INVALID_AMOUNT`: an integer outside the range of its EIP-712 type. OWS 1.4.2 signs `2**256` as a uint256 as if it were `0`, and `256` as a uint8 as `0`. Refused with `INVALID_CONFIG`: whatever ethers would not encode (bad address checksum, bytes without `0x`, wrong `bytesN` length, a fixed array of the wrong length, an unknown domain key, a missing field), plus three inputs ethers does sign: an integer string with spaces, a bool given as `1`, and a `primaryType` that is not the root struct.
+- Checked after signing: every signature is recovered with ethers over the digest `EnvKeyAdapter` signs (`verifyMessage`, `verifyTypedData`, the signed transaction's sender), and one that does not recover to `getAddress()` is not returned (`PAYMENT_FAILED`).
+- `signTransaction` also takes an `ethers.Transaction` or a transaction object with `from` (what ethers' `populateTransaction` returns). A sender that is this wallet, given as `from` or implied by an existing signature, is taken out; any other is refused before signing.
+- The passphrase is held in a private field and scrubbed from error messages; errors no longer carry the library's original error object.
+
+### Changed (breaking, for `OWSWalletAdapter` only)
+
+- Constructor: `new OWSWalletAdapter(ows, { wallet, passphrase?, network?, vaultPath? })`, with `ows` the module (`import * as ows from '@open-wallet-standard/core'`). `passphrase` defaults to `OWS_PASSPHRASE`; `network` (default `'base'`) is the chain given to OWS when the typed data or transaction names none. The address is read from the vault when the adapter is created. The old form, a wallet object and an account index, throws `INVALID_CONFIG` saying so.
+- The exported type `OWSWallet` is replaced by `OWSCore` (the four library functions the adapter calls, as 1.4.2 declares them), `OWSWalletAdapterOptions`, `OWSSignResult` and `OWSAccountInfo`.
+- Peer dependency `@open-wallet-standard/core`: `^1.4.2` (was `^0.1.0 || ^1.0.0`; there never was a 0.1.0). The declarations of the four functions are the same since 1.0.0, but only 1.4.2 was measured. Still optional.
+
+### Tests and CI
+
+- `src/adapters/ows.test.ts` (61 tests) signs through the real library, in a temporary vault, with an ephemeral key also given to `EnvKeyAdapter`, without network, and compares bytes: messages, EIP-3009 on the 17 EVM networks of the registry at three amounts, typed data with uint256 up to `2**256 - 1` (`2**128` exactly included) and int256, lifecycle orders with random 32-byte salts, and seven transactions (EIP-1559, EIP-2930, legacy with and without EIP-155, contract creation) with and without `from`. It also pins the library's declarations of the four functions against `OWSCore`.
+- `@open-wallet-standard/core` 1.4.2 is a devDependency, pinned. Where it cannot load (Windows, musl) the suite is skipped with the reason in its name; with `CI` set it fails. CI gets a step, `OWS native library loads`, that fails if the library does not load.
+
 ## [2.100.0] - 2026-09-26
 
 ### Added

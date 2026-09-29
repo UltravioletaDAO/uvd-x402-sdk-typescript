@@ -326,7 +326,12 @@ export { X402Error, DEFAULT_CONFIG, CAIP2_IDENTIFIERS, CAIP2_TO_CHAIN } from './
 export type { SigningWalletAdapter, EIP3009Params, EIP3009Authorization } from './wallet';
 export { EnvKeyAdapter } from './adapters/env-key';
 export { OWSWalletAdapter } from './adapters/ows';
-export type { OWSWallet } from './adapters/ows';
+export type {
+  OWSCore,
+  OWSSignResult,
+  OWSAccountInfo,
+  OWSWalletAdapterOptions,
+} from './adapters/ows';
 
 // Facilitator configuration
 export { FACILITATOR_ADDRESSES, getFacilitatorAddress } from './facilitator';

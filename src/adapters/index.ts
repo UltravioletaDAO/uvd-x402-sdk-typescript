@@ -16,4 +16,10 @@ export {
 
 // Signing wallet adapters
 export { EnvKeyAdapter } from './env-key';
-export { OWSWalletAdapter, type OWSWallet } from './ows';
+export {
+  OWSWalletAdapter,
+  type OWSCore,
+  type OWSSignResult,
+  type OWSAccountInfo,
+  type OWSWalletAdapterOptions,
+} from './ows';

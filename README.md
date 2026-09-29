@@ -17,7 +17,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Buyer Policy**: Per-payment and cumulative budgets, payee allowlist and offer expiry, evaluated against the offer in hand **before signing** — six closed refusal codes in a fixed order
 - **Type-Safe**: Full TypeScript support
 - **React & Wagmi**: First-class integrations
-- **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard), or bring your own
+- **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard vault, Node), or bring your own
 - **ERC-8128 Signed Requests**: Authenticate HTTP requests with a wallet (RFC 9421 + EIP-191) — no API keys
 - **ERC-8004 Trustless Agents**: On-chain reputation and identity across 23 networks (21 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
@@ -560,16 +560,22 @@ const result = await wallet.signTypedData(JSON.stringify({
 
 ### OWSWalletAdapter (Open Wallet Standard)
 
-Delegates signing to any wallet that implements the [Open Wallet Standard](https://github.com/open-wallet-standard/open-wallet-standard). Works with browser wallets, agent vaults, and hardware-backed signers.
+Signs with a wallet kept in an [Open Wallet Standard](https://github.com/open-wallet-standard/core) vault. OWS stores the keys encrypted on disk and signs inside the library, so the key never reaches your process. Node only: `@open-wallet-standard/core` is a native module with prebuilt binaries for Linux (glibc) and macOS, x64 and arm64.
 
 ```bash
-npm install @open-wallet-standard/core  # optional peer dependency
+npm install @open-wallet-standard/core  # optional peer dependency, 1.4.2 or later 1.x
 ```
 
 ```typescript
+import * as ows from '@open-wallet-standard/core';
 import { OWSWalletAdapter } from 'uvd-x402-sdk';
 
-const wallet = new OWSWalletAdapter(owsWalletInstance);
+const wallet = new OWSWalletAdapter(ows, {
+  wallet: 'agent-treasury',               // name or id of the wallet in the vault
+  passphrase: process.env.OWS_PASSPHRASE,  // or an OWS API key; this is also the default
+  network: 'base',                         // chain used when the payload names none
+  // vaultPath: '/path/to/vault',          // default: the OWS default (~/.ows)
+});
 
 const auth = await wallet.signEIP3009({
   to: '0xRecipient...',
@@ -577,6 +583,16 @@ const auth = await wallet.signEIP3009({
   network: 'base',
 });
 ```
+
+What it guarantees, tested against `@open-wallet-standard/core` 1.4.2 with an ephemeral key imported into a temporary vault:
+
+- For inputs `EnvKeyAdapter` signs, it signs the same bytes: messages, EIP-3009 on every EVM network of the registry, typed data with uint256 up to `2**256 - 1` given as numbers, decimal strings or hex (the lifecycle order's `salt` included), and EIP-1559, EIP-2930 and legacy transactions (EIP-155 or not).
+- Integers are checked against their EIP-712 type before anything is signed. OWS itself signs `2**256` as a uint256 as if it were `0`; the adapter throws `INVALID_AMOUNT` instead.
+- Every signature is recovered with ethers over the digest `EnvKeyAdapter` signs. One that does not recover to `getAddress()` is not returned.
+- `signTransaction` takes the hex ethers serializes, an `ethers.Transaction`, or a transaction object with `from`. A `from` that is not this wallet is refused before signing.
+- The passphrase is never in the adapter's `JSON.stringify` / `util.inspect` output nor in its errors.
+
+It refuses a few inputs that `EnvKeyAdapter` (ethers) signs: an integer string with spaces, a bool given as `1`, and a `primaryType` that is not the root struct (ethers ignores `primaryType` and signs the root). A `vaultPath` that does not exist is created by OWS, so a typo gives "wallet not found".
 
 ### Custom Adapter
 
@@ -1538,10 +1554,11 @@ const state = await client.queryEscrowState(paymentInfo);
 ### With SigningWalletAdapter (OWS)
 
 ```typescript
+import * as ows from '@open-wallet-standard/core';
 import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
 import { OWSWalletAdapter } from 'uvd-x402-sdk';
 
-const wallet = new OWSWalletAdapter(owsWalletInstance);
+const wallet = new OWSWalletAdapter(ows, { wallet: 'agent-treasury', network: 'base' });
 const client = new AdvancedEscrowClient(null, {
   wallet,
   rpcUrl: 'https://mainnet.base.org',
