@@ -1,10 +1,26 @@
 # Scripts de Publicación
 
-Scripts para automatizar el proceso de publicación del SDK a npm.
+## Cómo se publica hoy
 
-## publish-npm.sh
+El SDK se publica solo por **trusted publishing (OIDC)**, sin token de npm, y cada publicación
+espera la aprobación del dueño:
 
-Script automatizado que maneja todo el flujo de publicación a npm:
+> c0der dispara `.github/workflows/publish.yml` en `main` con la versión
+> (`gh workflow run publish.yml --ref main -f version=X.Y.Z`) → el dueño aprueba en **Review
+> deployments** (environment `npm`) → el workflow publica por OIDC, con provenance.
+
+La versión tiene que estar ya en `package.json` de `main`: el job `check` falla si no coincide. El
+tag `vX.Y.Z` se sigue creando (con su GitHub Release), pero ya **no dispara nada**: `publish.yml`
+no corre con push, tags, releases ni merges. El paso a paso está en `.claude/commands/publish.md`.
+
+## publish-npm.sh (flujo anterior)
+
+> **Ya no publica.** Este script es del flujo en que el release `vX.Y.Z` disparaba la publicación
+> con un token de npm. Sigue subiendo la versión y creando el release, pero el tag ya no dispara
+> nada: la corrida que mira en el paso 8 no es una publicación, y el paso 9 no va a encontrar la
+> versión en npm hasta que se dispare `publish.yml` y el dueño lo apruebe, como se describe arriba.
+
+Script que maneja el flujo anterior de publicación a npm:
 
 ### Lo que hace:
 
@@ -101,7 +117,6 @@ Instalar con: npm install uvd-x402-sdk@2.23.0
 
 Si el workflow de GitHub Actions falla, el script te dará el link para revisar los logs. Las causas comunes son:
 
-- Token de npm expirado (contactar admin del repo)
 - Tests fallando (corregir antes de publicar)
 - Build errors (revisar typescript/lint errors)
 

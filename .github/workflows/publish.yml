@@ -1,31 +1,54 @@
 name: Publish to npm
 
+# Manual only: someone runs it from the Actions tab, on main, with the version to publish. It never
+# runs on push, tag, release or merge; the v<version> tag is still created, but it triggers nothing.
+# Trusted publishing (OIDC): no npm token is stored anywhere. The `publish` job waits in the `npm`
+# environment until the owner approves it under "Review deployments", and only that job gets
+# `id-token`. src/publish-workflow.test.ts fails if any of that stops being true.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+    inputs:
+      version:
+        description: "Version to publish; must equal package.json"
+        required: true
+        type: string
+
+permissions:
+  contents: read # the job that publishes adds id-token itself
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  check:
+    name: Check version and tests
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    timeout-minutes: 20
     steps:
-      # Pinned by commit SHA, not tag. A mutable tag lets whoever controls the
-      # action repo change what runs inside a workflow that holds a publish
-      # credential - the exact path used by the npm supply-chain campaigns
-      # reported this week. Refresh deliberately, not implicitly.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      # Actions pinned by commit SHA, not tag: a mutable tag lets whoever controls the action repo
+      # change what runs inside the workflow that publishes. Refresh deliberately.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          persist-credentials: false
 
-      - name: Install dependencies
-        run: npm ci
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: The input version must be the package version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$INPUT_VERSION" != "$pkg" ]; then
+            echo "::error::input $INPUT_VERSION, package.json $pkg"
+            exit 1
+          fi
+
+      - run: npm ci --ignore-scripts
 
       - name: Typecheck
         run: npm run typecheck
@@ -42,18 +65,35 @@ jobs:
       - name: Package smoke test
         run: npm pack --dry-run
 
-      # NOTE: this still authenticates with a long-lived NPM_TOKEN. `id-token:
-      # write` above only buys --provenance; the credential itself is a
-      # classic token, which is precisely what the current npm supply-chain
-      # attacks steal from CI.
-      #
-      # Migrating to npm trusted publishing (OIDC, no stored token) needs a
-      # one-time change on npmjs.com that cannot be made from this repo:
-      # link the package to this repository + workflow under
-      # Settings -> Trusted Publishers. Removing the token BEFORE that link
-      # exists breaks every release, so it stays until the npm side is done.
-      # Once it is: drop the `env:` block below and nothing else changes.
+  publish:
+    name: Publish to npm
+    needs: check
+    runs-on: ubuntu-latest
+    environment: npm
+    timeout-minutes: 20
+    permissions:
+      contents: read # checkout
+      id-token: write # trusted publishing (OIDC) and provenance, only in this job
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: npm must support trusted publishing (>= 11.5.1)
+        run: |
+          node -e "const [a,b,c]=process.argv[1].split('.').map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$(npm --version)" \
+            || { echo "::error::npm $(npm --version) cannot publish with OIDC"; exit 1; }
+
+      - run: npm ci --ignore-scripts
+
+      # npm exchanges this job's OIDC token for a short-lived publish credential, which works only
+      # while npmjs.com lists this repository and publish.yml as the package's trusted publisher.
+      # There is no token to add here. prepublishOnly re-runs the gates and builds dist/ first.
       - name: Publish
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

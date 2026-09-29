@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Publishing: `publish.yml` runs only by hand (`workflow_dispatch` on `main`, with the version, which must equal `package.json`) and publishes by npm trusted publishing (OIDC) with provenance and no npm token; every run waits for the owner's approval in the `npm` environment, and a `v*` tag no longer publishes anything. `src/publish-workflow.test.ts` fails if the workflow reads secrets, gains another trigger, grants `id-token: write` outside the publishing job, or loses `environment: npm` or the `main` check.
+
 ## [2.100.0] - 2026-09-26
 
 ### Added
