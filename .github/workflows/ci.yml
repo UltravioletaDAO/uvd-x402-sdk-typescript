@@ -59,6 +59,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # src/adapters/ows.test.ts signs through the real OWS library, a native
+      # module with prebuilt binaries for Linux glibc and macOS only. Where it
+      # cannot load, that suite is skipped; here it must load, so a runner or
+      # a lockfile that stops installing it fails this step instead of turning
+      # the OWS tests into silent skips.
+      - name: OWS native library loads
+        run: node -e "const ows = require('@open-wallet-standard/core'); for (const f of ['getWallet', 'signMessage', 'signTypedData', 'signTransaction']) if (typeof ows[f] !== 'function') throw new Error('@open-wallet-standard/core lacks ' + f); console.log('@open-wallet-standard/core', require('@open-wallet-standard/core/package.json').version)"
+
       - name: Typecheck
         run: npm run typecheck
 

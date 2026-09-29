@@ -6726,9 +6726,11 @@ export interface AdvancedEscrowClientOptions extends StackKeyOptions {
    *
    * @example
    * ```typescript
-   * import { OWSWalletAdapter, AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
+   * import * as ows from '@open-wallet-standard/core';
+   * import { OWSWalletAdapter } from 'uvd-x402-sdk';
+   * import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
    *
-   * const wallet = new OWSWalletAdapter(owsWallet);
+   * const wallet = new OWSWalletAdapter(ows, { wallet: 'agent-treasury', network: 'base' });
    * const client = new AdvancedEscrowClient(null, {
    *   wallet,
    *   rpcUrl: 'https://mainnet.base.org',
@@ -6902,10 +6904,11 @@ export function getEscrowOperatorGeneration(chainId: number): EscrowOperatorGene
  *
  * @example OWS Wallet mode (SigningWalletAdapter)
  * ```typescript
+ * import * as ows from '@open-wallet-standard/core';
  * import { OWSWalletAdapter } from 'uvd-x402-sdk';
  * import { AdvancedEscrowClient } from 'uvd-x402-sdk/backend';
  *
- * const wallet = new OWSWalletAdapter(owsWallet);
+ * const wallet = new OWSWalletAdapter(ows, { wallet: 'agent-treasury', network: 'base' });
  * const client = new AdvancedEscrowClient(null, {
  *   wallet,
  *   rpcUrl: 'https://mainnet.base.org',
@@ -6944,7 +6947,7 @@ export class AdvancedEscrowClient {
    *    first argument is ignored (pass `null`). Requires `rpcUrl` for on-chain
    *    transaction building and broadcast.
    *    ```ts
-   *    const wallet = new OWSWalletAdapter(owsWallet);
+   *    const wallet = new OWSWalletAdapter(ows, { wallet: 'agent-treasury' });
    *    const client = new AdvancedEscrowClient(null, { wallet, rpcUrl, chainId });
    *    ```
    *

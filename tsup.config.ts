@@ -41,5 +41,6 @@ export default defineConfig({
     '@mysten/sui',
     'xrpl',
     '@hiero-ledger/sdk',
+    '@open-wallet-standard/core',
   ],
 });
