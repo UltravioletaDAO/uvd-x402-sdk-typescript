@@ -24,6 +24,7 @@ on:
     #   scripts/derive-erc8128-f3-3.mjs  "Vectors are the same file" step
     #   scripts/xlang/**  the cross-language step and the agents it spawns
     #   .github/workflows/ci.yml         this file
+    #   .github/workflows/publish.yml    src/publish-workflow.test.ts reads it
     paths: &ci-paths
       - 'src/**'
       - 'README.md'
@@ -36,8 +37,13 @@ on:
       - 'scripts/derive-erc8128-f3-3.mjs'
       - 'scripts/xlang/**'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/publish.yml'
   pull_request:
     paths: *ci-paths
+
+# Both jobs only read: this repo, and the public Python SDK beside it.
+permissions:
+  contents: read
 
 jobs:
   validate:

@@ -1,78 +1,60 @@
 # Publish to npm
 
-Automatiza el proceso completo de publicación del SDK a npm.
+Publica una versión del SDK (`uvd-x402-sdk`) a npm.
+
+Se publica solo por **trusted publishing (OIDC)**: el workflow no usa ningún token de npm, y cada
+publicación espera la aprobación del dueño. El flujo es:
+
+> c0der dispara `publish.yml` en `main` con la versión → el dueño aprueba en **Review
+> deployments** → el workflow publica por OIDC, con provenance.
+
+El tag `vX.Y.Z` se sigue creando, pero ya **no dispara nada**: `publish.yml` no corre con push,
+tags, releases ni merges.
 
 ## Proceso:
 
-1. **Verificar estado del repositorio**
-   - Verificar que estamos en rama `main`
-   - Verificar que no hay cambios sin commitear
-   - Verificar que estamos al día con `origin/main`
-   - Mostrar la versión actual y commits pendientes
+1. **Verificar que la versión está lista**
+   - La versión ya está en `package.json` de `origin/main` (llega con su PR, junto con su sección del
+     CHANGELOG): `git fetch origin && git show origin/main:package.json | grep '"version"'`
+   - Esa versión no existe en npm: `npm view uvd-x402-sdk@X.Y.Z version` no devuelve nada
+   - El CI de `main` está verde
 
-2. **Determinar nueva versión**
-   - Preguntarle al usuario qué tipo de bump quiere (patch/minor/major)
-   - Calcular la nueva versión basándose en la actual
-   - Mostrar claramente: versión actual → nueva versión
-   - Pedir confirmación antes de proceder
+2. **Disparar el workflow**
+   - `gh workflow run publish.yml --ref main -f version=X.Y.Z`
+   - El job `check` ("Check version and tests") corre solo en `main` y falla si `X.Y.Z` no es la
+     versión de `package.json`; después corre typecheck, tests, lint, build y `npm pack --dry-run`
 
-3. **Actualizar versión**
-   - Editar `package.json` con la nueva versión
-   - Commitear el cambio con mensaje: `chore: bump version to X.Y.Z`
-   - Push a `origin/main`
+3. **Pedir la aprobación**
+   - El job `publish` queda esperando en el environment `npm`
+   - Avisar al dueño con el link de la corrida: Actions → la corrida → **Review deployments** →
+     `npm` → Approve. Solo el dueño lo aprueba; no hay otro camino
 
-4. **Crear GitHub Release**
-   - Generar release notes basándose en commits desde el último tag
-   - Si no hay tags previos, usar los últimos 5-10 commits
-   - Crear release con `gh release create vX.Y.Z`
-   - Incluir enlace al release en el output
+4. **Monitorear**
+   - `gh run list --workflow publish.yml --limit 1` para el run ID
+   - `gh run watch <run-id> --exit-status`; si falla, mostrar el link a los logs
 
-5. **Monitorear publicación**
-   - Esperar ~10 segundos para que el workflow inicie
-   - Obtener el run ID del workflow más reciente
-   - Monitorear con `gh run watch <run-id> --exit-status`
-   - Si falla, mostrar link a los logs
+5. **Verificar npm**
+   - `npm view uvd-x402-sdk version` coincide con `X.Y.Z` (puede tardar 1-2 minutos en propagarse)
 
-6. **Verificar npm**
-   - Esperar 5 segundos adicionales
-   - Ejecutar `npm view uvd-x402-sdk version`
-   - Confirmar que la versión publicada coincide con la esperada
-   - Mostrar mensaje de éxito con instrucción de instalación
-
-## Output esperado:
-
-```
-✅ Verificación completada
-   - Rama: main
-   - Versión actual: 2.22.0
-   - Commits sin push: 0
-
-📦 Nueva versión: 2.23.0 (minor bump)
-   Cambios incluidos:
-   - feat: add USDT0 support on Monad (c4e4dcf)
-   - fix: add clientAddresses param to getReputation() (f4e2d9f)
-
-🚀 Release creado: https://github.com/UltravioletaDAO/uvd-x402-sdk-typescript/releases/tag/v2.23.0
-
-⏳ Workflow ejecutando... (run ID: 21810493197)
-✅ Workflow completado en 42s
-
-✅ uvd-x402-sdk@2.23.0 publicado exitosamente en npm
-   npm install uvd-x402-sdk@2.23.0
-```
+6. **Crear el tag y el release**
+   - Sobre el commit que publicó la corrida: `gh run view <run-id> --json headSha -q .headSha`
+   - `gh release create vX.Y.Z --target <headSha> --title vX.Y.Z --notes "<cambios>"`
+   - Release notes desde los commits desde el último tag
 
 ## Manejo de errores:
 
-- Si hay cambios sin commitear → abortar con mensaje claro
-- Si no estamos en main → abortar
-- Si estamos detrás de origin/main → abortar y sugerir pull
-- Si el workflow falla → mostrar link a logs de GitHub Actions
-- Si npm no muestra la versión esperada → advertir que puede tardar en propagarse
+- `check` falla por la versión → `main` no tiene la versión pedida; no re-disparar con otra
+- `check` no corre (skipped) → el workflow se disparó desde otra rama; dispararlo en `main`
+- `publish` aborta con "cannot publish with OIDC" → el npm del runner es menor que 11.5.1
+- `npm publish` falla con `ENEEDAUTH`, 401 o 404 → npmjs.com no tiene este repo y `publish.yml`
+  como trusted publisher del paquete; lo configura el dueño en npmjs.com, no se arregla desde el repo
+- Nunca agregar un token de npm al workflow ni a los secretos: `src/publish-workflow.test.ts` falla
+  si `publish.yml` lee secretos, tiene otro disparador, da `id-token: write` fuera del job que
+  publica, pierde `environment: npm` o el chequeo de `main`
 
 ## Notas importantes:
 
-- NUNCA bumpar la versión si ya hay commits sin push (deben incluir el bump)
-- SIEMPRE pedir confirmación antes de crear el release
-- SIEMPRE verificar que el tag git apunte al commit correcto (lección aprendida)
-- Si un tag ya existe localmente pero no en remote, borrarlo antes de crear el release
-- Usar `gh release create` con `--title` y `--notes`, NO especificar commit manualmente
+- NUNCA disparar `publish.yml` sin que la versión esté en `main`
+- El tag y el release son registro: se crean después de publicar y no publican nada
+- `scripts/publish-npm.sh` (`npm run release`) es del flujo anterior: sube la versión y crea el
+  release, pero ya no publica (ver `scripts/README.md`)
