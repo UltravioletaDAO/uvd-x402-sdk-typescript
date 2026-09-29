@@ -589,10 +589,23 @@ What it guarantees, tested against `@open-wallet-standard/core` 1.4.2 with an ep
 - For inputs `EnvKeyAdapter` signs, it signs the same bytes: messages, EIP-3009 on every EVM network of the registry, typed data with uint256 up to `2**256 - 1` given as numbers, decimal strings or hex (the lifecycle order's `salt` included), and EIP-1559, EIP-2930 and legacy transactions (EIP-155 or not).
 - Integers are checked against their EIP-712 type before anything is signed. OWS itself signs `2**256` as a uint256 as if it were `0`; the adapter throws `INVALID_AMOUNT` instead.
 - Every signature is recovered with ethers over the digest `EnvKeyAdapter` signs. One that does not recover to `getAddress()` is not returned.
-- `signTransaction` takes the hex ethers serializes, an `ethers.Transaction`, or a transaction object with `from`. A `from` that is not this wallet is refused before signing.
+- `signTransaction` takes the hex ethers serializes, an `ethers.Transaction`, or a transaction object with `from`. A `from` that is not this wallet is refused before signing. A transaction without a `chainId` is signed pre-EIP-155, as `EnvKeyAdapter` signs it.
 - The passphrase is never in the adapter's `JSON.stringify` / `util.inspect` output nor in its errors.
 
-It refuses a few inputs that `EnvKeyAdapter` (ethers) signs: an integer string with spaces, a bool given as `1`, and a `primaryType` that is not the root struct (ethers ignores `primaryType` and signs the root). A `vaultPath` that does not exist is created by OWS, so a typo gives "wallet not found".
+It refuses (`INVALID_CONFIG`, nothing signed) some inputs that ethers signs:
+
+- Typed data: an integer string with spaces; a bool that is not a boolean (`1`, `0`, `"true"`, `"false"`; ethers signs `"false"` as true); `uint` / `int` without a width; a `primaryType` that is not the root struct (ethers ignores `primaryType` and signs the root).
+- Transaction objects (`ethers.Wallet` signs these): a `type` given as `'0x2'`, `'2'` or a bigint; `to: ''`; `data: ''`; and any key ethers' `Transaction.from` does not read, other than `from` and `hash`. The error names the key, and for `input` / `gas` it names the ethers field (`data` / `gasLimit`).
+
+A `vaultPath` that does not exist is created by OWS, so a typo gives "wallet not found".
+
+**Migrating from the old form.** Up to 2.100.0 the adapter took a wallet object with `accounts` (the `OWSWallet` type). That shape never worked with `@open-wallet-standard/core` 1.x. It still compiles but is deprecated, and `new OWSWalletAdapter(wallet)` now throws `INVALID_CONFIG`. If you wrapped the library in such an object, drop the wrapper and pass the module and the wallet:
+
+```typescript
+// before: new OWSWalletAdapter(createOWSWalletBridge(walletName, passphrase))
+import * as ows from '@open-wallet-standard/core';
+const wallet = new OWSWalletAdapter(ows, { wallet: walletName, passphrase });
+```
 
 ### Custom Adapter
 

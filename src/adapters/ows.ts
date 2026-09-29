@@ -122,6 +122,44 @@ export interface OWSCore {
 
 const OWS_FUNCTIONS = ['getWallet', 'signMessage', 'signTypedData', 'signTransaction'] as const;
 
+/**
+ * The wallet object the adapter took before it was written against
+ * `@open-wallet-standard/core` 1.4.2.
+ *
+ * @deprecated This shape is not the `@open-wallet-standard/core` API and
+ * never worked with OWS 1.x. It is still exported so that code importing it
+ * compiles, but `new OWSWalletAdapter(wallet)` with it throws `INVALID_CONFIG`.
+ * Migrate to {@link OWSCore}: pass the module and the wallet,
+ * `new OWSWalletAdapter(ows, { wallet: '<name or id>', passphrase })` with
+ * `import * as ows from '@open-wallet-standard/core'`.
+ */
+export interface OWSWallet {
+  accounts: ReadonlyArray<{
+    address: string;
+    chains?: ReadonlyArray<string>;
+  }>;
+  signMessage(params: {
+    account: { address: string };
+    message: string | Uint8Array;
+  }): Promise<{ signature: string }>;
+  signTypedData(params: {
+    account: { address: string };
+    domain: Record<string, unknown>;
+    types: Record<string, Array<{ name: string; type: string }>>;
+    primaryType: string;
+    message: Record<string, unknown>;
+  }): Promise<{ signature: string }>;
+  signTransaction(params: {
+    account: { address: string };
+    transaction: string;
+    chainId: string;
+  }): Promise<{ signedTransaction: string }>;
+}
+
+const MIGRATION =
+  "pass the module and the wallet: new OWSWalletAdapter(ows, { wallet: '<name or id>', passphrase }) " +
+  "with import * as ows from '@open-wallet-standard/core'";
+
 /** Options of {@link OWSWalletAdapter}. */
 export interface OWSWalletAdapterOptions {
   /** Name or id of the wallet in the OWS vault. */
@@ -187,6 +225,9 @@ const TRANSACTION_FIELDS = [
   'blobWrapperVersion',
   'blobs',
 ] as const;
+
+/** Keys of other transaction formats, and the ethers name of the same field. */
+const ETHERS_NAME_OF: Readonly<Record<string, string>> = { input: 'data', gas: 'gasLimit' };
 
 const TWO_127 = 1n << 127n;
 const TWO_128 = 1n << 128n;
@@ -405,6 +446,12 @@ function evmSignature(result: OWSSignResult, what: string): ethers.Signature {
 
 /** `eip155:<id>` of an SDK EVM network name or a CAIP-2 `eip155:` id. */
 function caip2(network: string): string {
+  if (typeof network !== 'string') {
+    throw new X402Error(
+      `OWSWalletAdapter: options.network must be a string (an SDK network name or eip155:<id>), got ${typeof network}`,
+      'INVALID_CONFIG'
+    );
+  }
   const caip = /^eip155:([1-9][0-9]*)$/.exec(network);
   if (caip) return network;
   const chain = getChainByName(network);
@@ -453,7 +500,22 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
    *   wallet is named, `CHAIN_NOT_SUPPORTED` if `network` is not EVM,
    *   `WALLET_NOT_FOUND` if the vault has no such wallet or it has no EVM account.
    */
-  constructor(ows: OWSCore, options: OWSWalletAdapterOptions) {
+  constructor(ows: OWSCore, options: OWSWalletAdapterOptions);
+  /**
+   * @deprecated The old form, a wallet object with `accounts`
+   * ({@link OWSWallet}). It still compiles, but it never worked with OWS 1.x
+   * and now throws `INVALID_CONFIG` without signing anything. Pass the module
+   * and the wallet: `new OWSWalletAdapter(ows, { wallet, passphrase })`.
+   */
+  constructor(owsWallet: OWSWallet, accountIndex?: number);
+  constructor(ows: OWSCore | OWSWallet, options?: OWSWalletAdapterOptions | number) {
+    if (isRecord(ows) && 'accounts' in ows && (options === undefined || typeof options === 'number')) {
+      throw new X402Error(
+        'OWSWalletAdapter no longer takes a wallet object with accounts (the deprecated OWSWallet ' +
+          `shape, which never worked with @open-wallet-standard/core 1.x); ${MIGRATION}. Nothing was signed.`,
+        'INVALID_CONFIG'
+      );
+    }
     const missing = OWS_FUNCTIONS.filter(
       (name) => typeof (ows as unknown as Record<string, unknown> | null)?.[name] !== 'function'
     );
@@ -465,26 +527,27 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
         'INVALID_CONFIG'
       );
     }
-    if (!options || typeof options.wallet !== 'string' || options.wallet === '') {
+    const opts = (isRecord(options) ? options : {}) as Partial<OWSWalletAdapterOptions>;
+    if (typeof opts.wallet !== 'string' || opts.wallet === '') {
       throw new X402Error('OWSWalletAdapter needs options.wallet: the name or id of a wallet in the vault', 'INVALID_CONFIG');
     }
 
     // The native binding echoes a mistyped argument in its error message, so a
     // passphrase that is not a string is refused here, without showing it.
-    if (options.passphrase != null && typeof options.passphrase !== 'string') {
+    if (opts.passphrase != null && typeof opts.passphrase !== 'string') {
       throw new X402Error('OWSWalletAdapter: options.passphrase must be a string', 'INVALID_CONFIG');
     }
 
-    this.#ows = ows;
-    this.#wallet = options.wallet;
+    this.#ows = ows as OWSCore;
+    this.#wallet = opts.wallet;
     this.#passphrase =
-      options.passphrase ??
+      opts.passphrase ??
       (typeof process !== 'undefined' ? process.env?.OWS_PASSPHRASE : undefined) ??
       null;
-    this.#vaultPath = options.vaultPath ?? null;
-    this.#chain = caip2(options.network ?? 'base');
+    this.#vaultPath = opts.vaultPath ?? null;
+    this.#chain = caip2(opts.network ?? 'base');
 
-    const info = this.#call('getWallet', () => ows.getWallet(this.#wallet, this.#vaultPath), 'WALLET_NOT_FOUND');
+    const info = this.#call('getWallet', () => this.#ows.getWallet(this.#wallet, this.#vaultPath), 'WALLET_NOT_FOUND');
     const account = (info?.accounts ?? []).find((a) => String(a.chainId).startsWith('eip155:'));
     if (!account) {
       throw new X402Error(`OWS wallet ${shown(this.#wallet)} has no EVM account`, 'WALLET_NOT_FOUND');
@@ -690,6 +753,16 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
         // Read field by field, not spread: an ethers.Transaction keeps its
         // fields behind getters, and a spread of it is an empty transaction.
         const source = input as Record<string, unknown>;
+        // An ethers.Transaction has no own keys; a plain object may only use
+        // the keys ethers reads, so that no field is dropped on the way.
+        for (const key of Object.keys(source)) {
+          if (key === 'from' || key === 'hash' || (TRANSACTION_FIELDS as readonly string[]).includes(key)) continue;
+          const ethersName = ETHERS_NAME_OF[key];
+          throw refuse(
+            `transaction key ${shown(key)} is not one ethers reads` +
+              (ethersName ? `; ethers calls it ${ethersName}` : '')
+          );
+        }
         if (source.from != null) senders.push(source.from);
         const fields: Record<string, unknown> = {};
         for (const key of TRANSACTION_FIELDS) {
@@ -700,6 +773,7 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
         throw new Error(`got ${typeof input}`);
       }
     } catch (error) {
+      if (error instanceof X402Error) throw error;
       throw refuse(
         `not a transaction ethers can read (${error instanceof Error ? error.message : error})`
       );

@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import util from 'node:util';
+import ts from 'typescript';
 import { ethers } from 'ethers';
 import type * as OwsModule from '@open-wallet-standard/core';
 import { OWSWalletAdapter, type OWSCore } from './ows';
@@ -72,12 +73,16 @@ function wrapped(overrides: Partial<OWSCore>): OWSCore {
 }
 
 /** An adapter over the real module whose `name` function is spied on. */
-function spied(name: 'signMessage' | 'signTypedData' | 'signTransaction') {
+function spied(
+  name: 'signMessage' | 'signTypedData' | 'signTransaction',
+  options: { network?: string } = {}
+) {
   const spy = vi.fn((...args: unknown[]) => (ows[name] as (...a: unknown[]) => unknown)(...args));
   const a = new OWSWalletAdapter(wrapped({ [name]: spy } as Partial<OWSCore>), {
     wallet: WALLET,
     passphrase: PASS,
     vaultPath: vault,
+    ...options,
   });
   return { a, spy };
 }
@@ -213,6 +218,41 @@ describe.skipIf(!real)(
         expect(
           () => new OWSWalletAdapter(ows, { wallet: WALLET, passphrase: PASS, vaultPath: vault, network: 'solana' })
         ).toThrow(/EVM network/);
+      });
+
+      it('takes the eip155 account even when the vault lists another chain first', () => {
+        const reordered = new OWSWalletAdapter(
+          wrapped({
+            getWallet: (nameOrId, vaultPathOpt) => {
+              const info = ows.getWallet(nameOrId, vaultPathOpt);
+              const evm = info.accounts.filter((a) => a.chainId.startsWith('eip155:'));
+              const others = info.accounts.filter((a) => !a.chainId.startsWith('eip155:'));
+              expect(others[0].chainId).toMatch(/^solana:/);
+              return { ...info, accounts: [...others, ...evm] };
+            },
+          }),
+          { wallet: WALLET, passphrase: PASS, vaultPath: vault }
+        );
+        expect(reordered.getAddress()).toBe(env.getAddress());
+      });
+
+      it('a network that is not a string is INVALID_CONFIG', () => {
+        for (const network of [8453, null, { name: 'base' }]) {
+          let error: X402Error | undefined;
+          try {
+            new OWSWalletAdapter(ows, { wallet: WALLET, passphrase: PASS, vaultPath: vault, network: network as unknown as string });
+          } catch (e) {
+            error = e as X402Error;
+          }
+          if (network === null) {
+            // null is "not given": the default network
+            expect(error).toBeUndefined();
+          } else {
+            expect(error).toBeInstanceOf(X402Error);
+            expect(error?.code).toBe('INVALID_CONFIG');
+            expect(error?.message).toContain('options.network must be a string');
+          }
+        }
       });
 
       it('an explicit passphrase wins over OWS_PASSPHRASE, which is the fallback', async () => {
@@ -462,6 +502,63 @@ describe.skipIf(!real)(
     });
 
     // ------------------------------------------------------------------------
+    describe('transaction types 3 and 4 as objects: same bytes as ethers.Wallet', () => {
+      const fees = { chainId: 8453, nonce: 3, gasLimit: 120_000n, maxFeePerGas: 3n * 10n ** 9n, maxPriorityFeePerGas: 10n ** 9n };
+
+      it('EIP-7702 (type 4) with an authorizationList', async () => {
+        const local = new ethers.Wallet(KEY);
+        const authorization = local.authorizeSync({ address: `0x${'33'.repeat(20)}`, nonce: 4, chainId: 8453 });
+        const fields = { ...fees, type: 4, to: adapter.getAddress(), data: '0x', authorizationList: [authorization] };
+        const signed = await adapter.signTransaction(fields);
+        expect(signed).toBe(await local.signTransaction(fields));
+        const parsed = ethers.Transaction.from(signed);
+        expect(parsed.type).toBe(4);
+        expect(parsed.authorizationList?.length).toBe(1);
+        expect(parsed.from).toBe(adapter.getAddress());
+      });
+
+      it('EIP-4844 (type 3) with blobVersionedHashes and maxFeePerBlobGas', async () => {
+        const local = new ethers.Wallet(KEY);
+        const fields = {
+          ...fees,
+          type: 3,
+          to: OTHER.address,
+          maxFeePerBlobGas: 7n * 10n ** 9n,
+          blobVersionedHashes: [`0x01${'44'.repeat(31)}`, `0x01${'55'.repeat(31)}`],
+        };
+        const signed = await adapter.signTransaction(fields);
+        expect(signed).toBe(await local.signTransaction(fields));
+        const parsed = ethers.Transaction.from(signed);
+        expect(parsed.maxFeePerBlobGas).toBe(7n * 10n ** 9n);
+        expect(parsed.blobVersionedHashes).toEqual(fields.blobVersionedHashes);
+      });
+    });
+
+    // ------------------------------------------------------------------------
+    describe('the chain given to the library', () => {
+      it('typed data: the domain chainId', async () => {
+        const { a, spy } = spied('signTypedData');
+        const json = JSON.stringify({ domain: { name: 'USDC', version: '2', chainId: 5042 }, types: U256, message: { amount: '1' } });
+        await a.signTypedData(json);
+        expect(spy.mock.calls[0][1]).toBe('eip155:5042');
+      });
+
+      it("transactions: the transaction's chainId, else the adapter's network", async () => {
+        const { a, spy } = spied('signTransaction');
+        await a.signTransaction({ type: 0, chainId: 1187947933, nonce: 0, gasLimit: 21000, gasPrice: 1, to: OTHER.address });
+        expect(spy.mock.calls[0][1]).toBe('eip155:1187947933');
+
+        const arc = spied('signTransaction', { network: 'arc' });
+        const preEip155 = { type: 0, nonce: 0, gasLimit: 21000, gasPrice: 1, to: OTHER.address };
+        const signed = await arc.a.signTransaction(preEip155);
+        expect(arc.spy.mock.calls[0][1]).toBe('eip155:5042');
+        // Without a chainId it is signed pre-EIP-155, as EnvKeyAdapter signs it.
+        expect(signed).toBe(await env.signTransaction(ethers.Transaction.from(preEip155).unsignedSerialized));
+        expect(ethers.Transaction.from(signed).chainId).toBe(0n);
+      });
+    });
+
+    // ------------------------------------------------------------------------
     describe('refused before signing (the library is not called)', () => {
       const cases: Array<[string, string, string]> = [
         ['uint256 = 2**256, decimal', typed(U256, { amount: (2n ** 256n).toString() }), 'INVALID_AMOUNT'],
@@ -515,6 +612,62 @@ describe.skipIf(!real)(
         expect(spy).not.toHaveBeenCalled();
       });
 
+      const eip1559 = { type: 2, chainId: 8453, nonce: 0, gasLimit: 90_000, maxFeePerGas: 10n ** 9n, maxPriorityFeePerGas: 1n, to: `0x${'11'.repeat(20)}` };
+
+      it('a transaction object with a key ethers does not read (input, gas)', async () => {
+        const { gasLimit: _gasLimit, ...withoutGasLimit } = eip1559;
+        for (const [fields, key, ethersName] of [
+          [{ ...eip1559, input: '0xd0e30db0' }, 'input', 'data'],
+          [{ ...withoutGasLimit, gas: 90_000 }, 'gas', 'gasLimit'],
+          [{ ...eip1559, customData: {} }, 'customData', null],
+        ] as const) {
+          const { a, spy } = spied('signTransaction');
+          const error = await rejection(a.signTransaction(fields as ethers.TransactionLike<string>));
+          expect(error.code).toBe('INVALID_CONFIG');
+          expect(error.message).toContain(`transaction key "${key}" is not one ethers reads`);
+          if (ethersName) expect(error.message).toContain(`ethers calls it ${ethersName}`);
+          expect(error.message).toContain('nothing was signed');
+          expect(spy).not.toHaveBeenCalled();
+        }
+      });
+
+      it('transaction objects ethers.Wallet signs but this adapter refuses', async () => {
+        const local = new ethers.Wallet(KEY);
+        for (const fields of [
+          { ...eip1559, type: '0x2' },
+          { ...eip1559, type: '2' },
+          { ...eip1559, type: 2n },
+          { ...eip1559, to: '' },
+          { ...eip1559, data: '' },
+        ]) {
+          const { a, spy } = spied('signTransaction');
+          const error = await rejection(a.signTransaction(fields as unknown as ethers.TransactionLike<string>));
+          expect(error.code, JSON.stringify(fields, (_k, v) => (typeof v === 'bigint' ? `${v}n` : v))).toBe('INVALID_CONFIG');
+          expect(spy).not.toHaveBeenCalled();
+          await expect(local.signTransaction(fields as unknown as ethers.TransactionRequest)).resolves.toMatch(/^0x02/);
+        }
+      });
+
+      it('typed data ethers signs but this adapter refuses: bools that are not booleans, integers without a width', async () => {
+        const bool = { Order: [{ name: 'b', type: 'bool' }] };
+        for (const json of [
+          typed(bool, { b: 'true' }),
+          typed(bool, { b: 'false' }),
+          typed(bool, { b: 0 }),
+          typed({ Order: [{ name: 'a', type: 'uint' }] }, { a: '1' }),
+          typed({ Order: [{ name: 'a', type: 'int' }] }, { a: '-1' }),
+        ]) {
+          const { a, spy } = spied('signTypedData');
+          expect((await rejection(a.signTypedData(json))).code, json).toBe('INVALID_CONFIG');
+          expect(spy).not.toHaveBeenCalled();
+          await expect(env.signTypedData(json), json).resolves.toBeTruthy();
+        }
+        // ethers signs the string "false" as true.
+        expect((await env.signTypedData(typed(bool, { b: 'false' }))).signature).toBe(
+          (await env.signTypedData(typed(bool, { b: true }))).signature
+        );
+      });
+
       it('a bool given as 1 (ethers signs it as true; this adapter refuses)', async () => {
         const { a, spy } = spied('signTypedData');
         const json = typed({ Order: [{ name: 'b', type: 'bool' }] }, { b: 1 });
@@ -547,6 +700,42 @@ describe.skipIf(!real)(
         expect((await rejection(lying.signMessage('pay 1 USDC'))).message).toContain('does not recover');
       });
 
+      it('a message with an unpaired surrogate: the library signs U+FFFD in its place', async () => {
+        const { a, spy } = spied('signMessage');
+        const error = await rejection(a.signMessage('pago \ud800'));
+        expect(error.code).toBe('PAYMENT_FAILED');
+        expect(error.message).toContain('does not recover');
+        expect(spy).toHaveBeenCalledTimes(1);
+        // What it did sign: the replacement character.
+        const raw = ows.signMessage(WALLET, 'eip155:8453', 'pago \ud800', PASS, 'utf8', null, vault);
+        expect(ethers.verifyMessage('pago \ufffd', `0x${raw.signature}`)).toBe(env.getAddress());
+        await expect(env.signMessage('pago \ud800')).rejects.toThrow(/surrogate/);
+      });
+
+      it('typed data that ethers cannot re-encode after the library signed it', async () => {
+        const json = typed({ Order: [{ name: 'note', type: 'string' }] }, { note: 'pago \ud800' });
+
+        // The library itself refuses the unpaired surrogate in the JSON.
+        const plain = spied('signTypedData');
+        const refused = await rejection(plain.a.signTypedData(json));
+        expect(refused.code).toBe('PAYMENT_FAILED');
+        expect(refused.message).toMatch(/^OWS signTypedData failed: /);
+        expect(plain.spy).toHaveBeenCalledTimes(1);
+
+        // Wrapped to sign it anyway, with U+FFFD in its place: ethers then
+        // throws re-encoding the caller's value, and no signature comes back.
+        const signing = vi.fn((w: string, c: string, doc: string, ...rest: Array<string | number | null | undefined>) =>
+          ows.signTypedData(w, c, doc.replace(/\\ud800/gi, '\\ufffd'), ...(rest as [string, number, string]))
+        );
+        const a = new OWSWalletAdapter(wrapped({ signTypedData: signing }), { wallet: WALLET, passphrase: PASS, vaultPath: vault });
+        const error = await rejection(a.signTypedData(json));
+        expect(error.code).toBe('INVALID_CONFIG');
+        expect(error.message).toContain('ethers cannot encode this typed data');
+        expect(error.message).toContain('the OWS signature is not returned');
+        expect(signing).toHaveBeenCalledTimes(1);
+        expect(signing.mock.results[0].value.signature).toMatch(/^[0-9a-f]{130}$/);
+      });
+
       it('transactions', async () => {
         const lying = new OWSWalletAdapter(
           wrapped({ signTransaction: (w, c, _hex, ...rest) => ows.signTransaction(w, c, 'deadbeef', ...rest) }),
@@ -560,3 +749,108 @@ describe.skipIf(!real)(
 );
 
 const transactionsForCheck = { type: 2, chainId: 8453, nonce: 1, gasLimit: 21000, maxFeePerGas: 1, maxPriorityFeePerGas: 1 };
+
+// ============================================================================
+// The old form. These need neither the library nor a vault.
+// ============================================================================
+
+/** Type-check `source` as a file next to this one, with the repo's tsconfig. */
+function typecheck(source: string): { errors: string[]; suggestions: number[] } {
+  const configPath = path.resolve(__dirname, '../../tsconfig.json');
+  const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic: () => undefined,
+  });
+  if (!parsed) throw new Error('tsconfig.json did not parse');
+  const file = path.resolve(__dirname, '__compat_fixture__.ts').replace(/\\/g, '/');
+  const same = (name: string) => name.replace(/\\/g, '/') === file;
+  const host = ts.createCompilerHost(parsed.options);
+  const getSourceFile = host.getSourceFile.bind(host);
+  host.getSourceFile = (name, language, ...rest) =>
+    same(name) ? ts.createSourceFile(name, source, language) : getSourceFile(name, language, ...rest);
+  const fileExists = host.fileExists.bind(host);
+  host.fileExists = (name) => same(name) || fileExists(name);
+  const readFile = host.readFile.bind(host);
+  host.readFile = (name) => (same(name) ? source : readFile(name));
+  const program = ts.createProgram([file], { ...parsed.options, noEmit: true }, host);
+  const sourceFile = program.getSourceFile(file);
+  if (!sourceFile) throw new Error('the fixture was not loaded');
+  return {
+    errors: ts.getPreEmitDiagnostics(program).map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n')),
+    suggestions: program.getSuggestionDiagnostics(sourceFile).map((d) => d.code),
+  };
+}
+
+/** How ows-mcp-server (execution-market) uses the adapter today, from the package root. */
+const OLD_USAGE = (construct: string) => `
+import { OWSWalletAdapter } from '../index';
+import type { OWSWallet } from '../index';
+
+function createOWSWalletBridge(walletName: string, passphrase?: string): OWSWallet {
+  return {
+    accounts: [{ address: '0x0000000000000000000000000000000000000001', chains: ['eip155:1'] }],
+    async signMessage(params: { account: { address: string }; message: string | Uint8Array }) {
+      return { signature: String(params.message) + walletName + (passphrase ?? '') };
+    },
+    async signTypedData(params: {
+      account: { address: string };
+      domain: Record<string, unknown>;
+      types: Record<string, Array<{ name: string; type: string }>>;
+      primaryType: string;
+      message: Record<string, unknown>;
+    }) {
+      return { signature: params.primaryType };
+    },
+    async signTransaction(params: { account: { address: string }; transaction: string; chainId: string }) {
+      return { signedTransaction: params.transaction + params.chainId };
+    },
+  };
+}
+
+export function build(): OWSWalletAdapter {
+  const owsBridge = createOWSWalletBridge('agent', 'pass');
+  let adapter: OWSWalletAdapter;
+  adapter = ${construct};
+  return adapter;
+}
+`;
+
+describe('the old form (deprecated): it compiles, and it throws without signing', () => {
+  it('importing OWSWallet and new OWSWalletAdapter(bridge) still type-check, marked deprecated', () => {
+    const old = typecheck(OLD_USAGE('new OWSWalletAdapter(owsBridge)'));
+    expect(old.errors).toEqual([]);
+    // 6387: "The signature '(...)' of 'OWSWalletAdapter' is deprecated."
+    expect(old.suggestions).toContain(6387);
+
+    // The check is real: a call that matches neither form does not compile.
+    const wrong = typecheck(OLD_USAGE("new OWSWalletAdapter(owsBridge, { wallet: 'agent' })"));
+    expect(wrong.errors.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('new OWSWalletAdapter(bridge) throws INVALID_CONFIG naming the new form, and signs nothing', () => {
+    const calls: string[] = [];
+    const bridge = {
+      accounts: [{ address: OTHER.address, chains: ['eip155:1'] }],
+      signMessage: async () => (calls.push('signMessage'), { signature: '0x' }),
+      signTypedData: async () => (calls.push('signTypedData'), { signature: '0x' }),
+      signTransaction: async () => (calls.push('signTransaction'), { signedTransaction: '0x' }),
+    };
+    for (const construct of [
+      () => new OWSWalletAdapter(bridge),
+      () => new OWSWalletAdapter(bridge, 0),
+    ]) {
+      let error: X402Error | undefined;
+      try {
+        construct();
+      } catch (e) {
+        error = e as X402Error;
+      }
+      expect(error).toBeInstanceOf(X402Error);
+      expect(error?.code).toBe('INVALID_CONFIG');
+      expect(error?.message).toContain('no longer takes a wallet object with accounts');
+      expect(error?.message).toContain("new OWSWalletAdapter(ows, { wallet: '<name or id>', passphrase })");
+      expect(error?.message).toContain("import * as ows from '@open-wallet-standard/core'");
+    }
+    expect(calls).toEqual([]);
+  });
+});

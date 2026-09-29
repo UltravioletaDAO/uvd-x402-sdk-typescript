@@ -19,6 +19,7 @@ export { EnvKeyAdapter } from './env-key';
 export {
   OWSWalletAdapter,
   type OWSCore,
+  type OWSWallet,
   type OWSSignResult,
   type OWSAccountInfo,
   type OWSWalletAdapterOptions,
