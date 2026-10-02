@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [2.101.0] - 2026-10-02
+
+### Added (Bazaar)
+
+- `bazaarExtension(options)` (exported from the root and from `uvd-x402-sdk/backend`) builds the `bazaar` entry of a v2 challenge's `extensions` as the x402 spec defines it (`specs/extensions/bazaar.md` in coinbase/x402, main @ dd927a26): `{ bazaar: { info: { input, output }, schema } }`. `info.input` carries `type: "http"` and `method`; for POST, PUT and PATCH also `bodyType` (`json` by default, `form-data`, `text`) and `body`, the example body, which is required; for GET, HEAD and DELETE optional `queryParams`; `headers` for both. `info.output` carries `type` (`json` by default), `format` and `example`. `schema` is the JSON Schema (draft 2020-12) that `info` validates against, with `bodySchema`, `queryParamsSchema` and `output.schema` placed where they validate the examples. Until now no helper in this SDK built the extension, so a seller could not tell the facilitator that its endpoint is a POST: the method travels in `info.input.method` and the example body in `info.input.body`, which is what a facilitator needs to probe a POST endpoint with a POST instead of a GET.
+- Refused with an error that names the field: a method the spec does not name (`CONNECT`, `OPTIONS`, ...), a body method without `body`, a query method with `body`, `bodyType` or `bodySchema`, a `body` that does not match its `bodyType` (an object for `json` and `form-data`, a string for `text`), and non-object `queryParams`, `headers` (values must be strings), schemas or `output`. The method is accepted in any case and with spaces around it, and emitted uppercased.
+- `create402Response(requirements, { extensions })`: the object becomes the body's `extensions`. It is a v2 field, so a response that would be v1 throws instead of dropping it. Without `extensions` the response is exactly what it was.
+- New exports: `BAZAAR_QUERY_METHODS`, `BAZAAR_BODY_METHODS`, `BAZAAR_BODY_TYPES` and the types `BazaarExtensionOptions`, `BazaarQueryEndpoint`, `BazaarBodyEndpoint`, `BazaarOutput`, `BazaarQueryMethod`, `BazaarBodyMethod`, `BazaarBodyType`; from `uvd-x402-sdk/backend` also `DEFAULT_MAX_SEARCH_LEN`, `KIND_FILTERS` and `DiscoveryKind`.
+
+### Changed (Bazaar)
+
+- `BazaarClient` refuses `q` above 400 characters (`DEFAULT_MAX_SEARCH_LEN`), not 128: the facilitator's relevance search takes a request in natural language. The cap is the new option `maxSearchLen` (a positive integer; anything else throws when the client is built). Against a facilitator up to 2.46.1, which answers a `q` above 128 with a 400, pass `maxSearchLen: MAX_SEARCH_LEN` to keep refusing it before the request. Characters are now counted as the facilitator counts them, in code points: a `q` of 300 emoji (600 UTF-16 units) is no longer refused.
+- `MAX_SEARCH_LEN` is still exported and still 128; it now documents the cap of facilitators up to 2.46.1. `getResourceByUrl()` still searches with the URL's first 128 characters (or `maxSearchLen`, if lower), so the lookup works against old and new facilitators, and it no longer cuts a character in half (an astral character at the cut was sent as U+FFFD).
+- `listResources()` (and `iterateResources()`, on every page) takes five optional routing filters: `maxPriceUsd` (a number `>= 0`), `method` (sent uppercased), `hasInputSchema` (`true` or `false`), `kind` (`'api' | 'content'`) and `excludeHost` (a host name, sent lowercased; a URL is refused). They need a facilitator released after 2.46.1. 2.46.1 answers any query parameter it does not know with a 400 that names it, so each filter is sent only when passed, and a call that passes none sends exactly the query it sent before. A value that is passed is sent (`maxPriceUsd: 0` and `hasInputSchema: false` included) or refused before the request, never dropped; `null` counts as not passed.
+
+### Tests
+
+- `src/backend/bazaar-extension.test.ts` (47 tests): the spec's GET and POST examples rebuilt byte for byte; every method, body type and refusal; every `info` the helper builds validated against its own `schema` with a checker of the keywords the schemas use (`type`, `const`, `enum`, `properties`, `required`, `additionalProperties`); `create402Response` with and without `extensions`, v1 included.
+- `src/backend/bazaar.test.ts` (16 to 52 tests): the 400 cap and `maxSearchLen` at their edges, characters counted as code points, the exact query of a call without the new filters, each filter's wire name and refusals, falsy values sent, `getResourceByUrl` at 128 characters and at a surrogate pair. All with a fetch double; nothing leaves the machine.
+
+### Also in this release (merged after 2.100.0)
+
 - Publishing: `publish.yml` runs only by hand (`workflow_dispatch` on `main`, with the version, which must equal `package.json`) and publishes by npm trusted publishing (OIDC) with provenance and no npm token; every run waits for the owner's approval in the `npm` environment, and a `v*` tag no longer publishes anything. `src/publish-workflow.test.ts` fails if the workflow reads secrets, gains another trigger, grants `id-token: write` outside the publishing job, or loses `environment: npm` or the `main` check.
 
 ### Fixed

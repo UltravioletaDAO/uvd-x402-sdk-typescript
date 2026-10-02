@@ -439,6 +439,13 @@ export {
   createPaymentMiddleware,
   createHonoMiddleware,
   create402Response,
+  // The `bazaar` entry of a v2 challenge's `extensions` (x402 bazaar spec):
+  // how the endpoint is called (POST with a body, GET with a query), and what
+  // it answers. Pass it to create402Response as `extensions`.
+  bazaarExtension,
+  BAZAAR_QUERY_METHODS,
+  BAZAAR_BODY_METHODS,
+  BAZAAR_BODY_TYPES,
   extractPaymentFromHeaders,
   buildPaymentRequirements,
   buildVerifyRequest,
@@ -510,6 +517,13 @@ export type {
   FacilitatorCallOptions,
   AdmittedAuthorizationCode,
   PaymentConflictResponse,
+  BazaarExtensionOptions,
+  BazaarQueryEndpoint,
+  BazaarBodyEndpoint,
+  BazaarOutput,
+  BazaarQueryMethod,
+  BazaarBodyMethod,
+  BazaarBodyType,
 } from './backend';
 
 // Native Hedera; the optional signing peer remains lazily loaded.
