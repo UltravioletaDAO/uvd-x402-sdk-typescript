@@ -1687,6 +1687,16 @@ console.log(`${page.items.length} of ${page.pagination.total}`);
 // Free-text search. The parameter is `q`; anything else is rejected with a 400.
 const hits = await bazaar.listResources({ q: 'logs' });
 
+// Routing filters. Each one is sent only when you pass it.
+const posts = await bazaar.listResources({
+  q: 'look up who owns a phone number, callable by an agent with a POST',
+  method: 'POST',            // sent uppercased
+  maxPriceUsd: 0.05,         // price at most 5 cents
+  hasInputSchema: true,      // only resources that declare their input
+  kind: 'api',               // 'api' | 'content'
+  excludeHost: 'tenjin.blog' // a host name, not a URL
+});
+
 // Walk the whole filtered catalog, one page at a time
 for await (const r of bazaar.iterateResources({ health: 'alive' })) {
   if (isAlive(r)) console.log(r.url);
@@ -1713,6 +1723,50 @@ console.log(stats.total, stats.visible, stats.byHealth.alive);
 ```
 
 Timestamps (`firstSeen`, `lastSeen`, `lastUpdated`, `health.lastChecked`) are Unix epoch **seconds**. Use `epochToDate()` to get a `Date`.
+
+**Search length.** `q` can be up to 400 characters (`DEFAULT_MAX_SEARCH_LEN`), long enough for a request in natural language. Characters are counted as the facilitator counts them (code points: an emoji is one, not two). A longer `q` is refused before the request. Change the cap with `new BazaarClient({ maxSearchLen })`; against a facilitator up to 2.46.1, whose substring search takes at most 128, pass `maxSearchLen: MAX_SEARCH_LEN` to fail before the request instead of getting its 400. `getResourceByUrl()` searches with the URL's first 128 characters, which every facilitator accepts.
+
+**Routing filters** (`maxPriceUsd`, `method`, `hasInputSchema`, `kind`, `excludeHost`) need a facilitator that serves them, released after 2.46.1. A facilitator up to 2.46.1 answers any query parameter it does not know with a 400 that names it, so the client sends each of these only when you pass it: a call that sets none of them sends exactly what it sent before. A value you pass is sent or refused before the request (a negative price, a method that is not an HTTP method, a URL in `excludeHost`), never dropped. `null` counts as not passed.
+
+### Declaring your endpoint to the Bazaar (`bazaarExtension`)
+
+A seller can tell the facilitator how its endpoint is called inside the 402 itself, with the `bazaar` extension of x402 v2 ([spec](https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md)). The facilitator catalogs the endpoint from it. The method travels in `info.input.method` and the example body in `info.input.body`: that is what a facilitator needs to probe a POST endpoint with a POST instead of a GET.
+
+```typescript
+import { bazaarExtension, create402Response } from 'uvd-x402-sdk';
+
+// POST (or PUT / PATCH) with a JSON body
+const { status, headers, body } = create402Response(
+  {
+    amount: '0.05',
+    recipient: '0xYourWallet...',
+    resource: 'https://api.example.com/phone-lookup',
+    chainName: 'base',
+    x402Version: 2,
+  },
+  {
+    extensions: bazaarExtension({
+      method: 'POST',
+      body: { phone: '+573001234567' },          // example body, required for POST/PUT/PATCH
+      bodySchema: {                              // optional JSON Schema of the body
+        type: 'object',
+        properties: { phone: { type: 'string' } },
+        required: ['phone'],
+      },
+      output: { example: { owner: 'ACME S.A.S.', carrier: 'Claro' } },
+    }),
+  }
+);
+
+// GET (or HEAD / DELETE) with query parameters
+bazaarExtension({
+  method: 'GET',
+  queryParams: { city: 'Bogota' },
+  output: { example: { city: 'Bogota', temperature: 18 } },
+});
+```
+
+The result is `{ bazaar: { info, schema } }`: `info.input` (`type: "http"`, `method`, then `bodyType` and `body` for a body method, or `queryParams` for a query method, plus optional `headers`), `info.output` (`type`, default `json`, and `example`), and `schema`, the JSON Schema (draft 2020-12) that `info` validates against. `bodyType` is `json` (default), `form-data` or `text` (then `body` is a string). A body method without `body`, a query method with one, or a method the spec does not name (`CONNECT`, `OPTIONS`, ...) throws. `extensions` is a v2 field: `create402Response` throws if the response would be v1 rather than dropping it, and without `extensions` it returns exactly what it returned before.
 
 ## x402 v2 requests (`buildVerifyRequestV2` / `buildSettleRequestV2`)
 
