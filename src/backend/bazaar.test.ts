@@ -6,9 +6,12 @@ import {
   HEALTH_FILTERS,
   KIND_FILTERS,
   MAX_SEARCH_LEN,
+  METHOD_FILTERS,
   TIER_FILTERS,
+  bazaarExtension,
   epochToDate,
   isAlive,
+  type DiscoveryResource,
   type DiscoveryResponse,
 } from './index';
 
@@ -65,6 +68,130 @@ function mockFetch(body: unknown, status = 200) {
 
 function requestedUrl(fetchMock: ReturnType<typeof mockFetch>, call = 0): URL {
   return new URL(fetchMock.mock.calls[call][0] as string);
+}
+
+// ---------------------------------------------------------------------------
+// What the facilitator does with what this client sends, transcribed from
+// x402-rs main @ 6b0fefea (VERSION 2.49.0; facilitator.ultravioletadao.xyz
+// /version answered 2.49.0 on 2026-10-09 UTC). Written apart from the
+// client's own checks, so a test compares the client against the server and
+// not against itself.
+// ---------------------------------------------------------------------------
+
+/** discovery_search.rs `parse_max_price_usd`: decimal digits, no sign, no exponent, at most 32 characters. */
+function facilitatorTakesPrice(raw: string): boolean {
+  const s = raw.trim();
+  if (s === '' || Array.from(s).length > 32) return false;
+  const dot = s.indexOf('.');
+  const [whole, fraction] = dot === -1 ? [s, ''] : [s.slice(0, dot), s.slice(dot + 1)];
+  if (whole === '' && fraction === '') return false;
+  return /^[0-9]*$/.test(whole) && /^[0-9]*$/.test(fraction);
+}
+
+/** json_depth.rs `json_value_depth`: the root is level 0, each child one more. */
+function facilitatorDepth(root: unknown): number {
+  let max = 0;
+  const stack: Array<[unknown, number]> = [[root, 0]];
+  while (stack.length > 0) {
+    const [v, d] = stack.pop()!;
+    max = Math.max(max, d);
+    if (v !== null && typeof v === 'object') {
+      for (const x of Object.values(v)) stack.push([x, d + 1]);
+    }
+  }
+  return max;
+}
+
+/**
+ * discovery_price.rs `sanitize_extensions`, which `RegisterResourceRequest::into_resource`
+ * applies: kept as is, or dropped (no error) above 64 levels or 16 KiB of JSON.
+ */
+function facilitatorKeptExtensions(ext: unknown): unknown {
+  if (ext === undefined || ext === null) return undefined;
+  if (facilitatorDepth(ext) > 64) return undefined;
+  return Buffer.byteLength(JSON.stringify(ext), 'utf8') <= 16 * 1024 ? ext : undefined;
+}
+
+/**
+ * types_v2.rs `DiscoveryResource::has_input_schema`: `extensions.bazaar.info.input`,
+ * or `extensions.bazaar.schema.properties.input`, is a non-empty object.
+ */
+function facilitatorHasInputSchema(ext: unknown): boolean {
+  const get = (v: unknown, k: string) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? (v as Record<string, unknown>)[k]
+      : undefined;
+  const declared = (v: unknown) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0;
+  const bazaar = get(ext, 'bazaar');
+  return (
+    declared(get(get(bazaar, 'info'), 'input')) ||
+    declared(get(get(get(bazaar, 'schema'), 'properties'), 'input'))
+  );
+}
+
+/**
+ * discovery_health.rs `declared_request`, first rule: `info.input.method`, case
+ * and spaces aside; HEAD and DELETE probe as GET. A listing that declares no
+ * method is a GET for the `method` filter.
+ */
+function facilitatorMethod(ext: unknown): string {
+  const input = (ext as { bazaar?: { info?: { input?: { method?: unknown } } } })?.bazaar
+    ?.info?.input;
+  const m = typeof input?.method === 'string' ? input.method.trim().toUpperCase() : '';
+  return ['POST', 'PUT', 'PATCH'].includes(m) ? m : 'GET';
+}
+
+/**
+ * A facilitator double for `POST /discovery/register` and
+ * `GET /discovery/resources`: it reads the register body field by field as
+ * `RegisterResourceRequest` (types_v2.rs) declares them, keeps `extensions`
+ * through `sanitize_extensions`, and answers `hasInputSchema` and `method`
+ * the way the rules above decide them.
+ */
+function fakeFacilitator() {
+  const listings: DiscoveryResource[] = [];
+  const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    const reply = (status: number, body: unknown) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+    if (url.pathname === '/discovery/register' && init?.method === 'POST') {
+      const req = JSON.parse(String(init.body)) as Record<string, unknown>;
+      const extensions = facilitatorKeptExtensions(req.extensions);
+      listings.push({
+        url: req.url as string,
+        type: req.type as string,
+        x402Version: 2,
+        description: req.description as string,
+        accepts: (req.accepts ?? []) as DiscoveryResource['accepts'],
+        ...(req.metadata !== undefined ? { metadata: req.metadata as Record<string, unknown> } : {}),
+        ...(extensions !== undefined ? { extensions } : {}),
+        hasInputSchema: facilitatorHasInputSchema(extensions),
+      });
+      return reply(201, { success: true, url: req.url });
+    }
+    if (url.pathname === '/discovery/resources') {
+      const p = url.searchParams;
+      const items = listings.filter(
+        (r) =>
+          (!p.has('hasInputSchema') ||
+            String(r.hasInputSchema) === p.get('hasInputSchema')) &&
+          (!p.has('method') || facilitatorMethod(r.extensions) === p.get('method'))
+      );
+      return reply(200, {
+        x402Version: 2,
+        items,
+        pagination: { limit: 10, offset: 0, total: items.length },
+      });
+    }
+    return reply(404, { error: 'not found' });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return { fetchMock, listings };
 }
 
 describe('BazaarClient', () => {
@@ -326,15 +453,103 @@ describe('BazaarClient', () => {
     it('normalizes case and spaces where they carry no meaning', async () => {
       const fetchMock = mockFetch(LIVE_PAGE);
       await new BazaarClient().listResources({
-        method: ' post ',
+        method: ' post ' as 'post',
         excludeHost: ' API.Example.COM ',
-        kind: ' content ' as 'content',
+        kind: ' Content ' as 'content',
       });
 
       const params = requestedUrl(fetchMock).searchParams;
       expect(params.get('method')).toBe('POST');
       expect(params.get('excludeHost')).toBe('api.example.com');
       expect(params.get('kind')).toBe('content');
+    });
+
+    it.each(
+      METHOD_FILTERS.flatMap((m) => [m, m.toLowerCase(), m[0] + m.slice(1).toLowerCase()])
+    )('sends method %s as the facilitator names it', async (method) => {
+      const fetchMock = mockFetch(LIVE_PAGE);
+      await new BazaarClient().listResources({ method: method as 'GET' });
+      expect(requestedUrl(fetchMock).searchParams.get('method')).toBe(method.toUpperCase());
+    });
+
+    it.each([
+      // value, as sent: decimal notation, never an exponent
+      [0.05, '0.05'],
+      [5, '5'],
+      [-0, '0'],
+      [0.000001, '0.000001'],
+      [1e-7, '0.0000001'],
+      [1.5e-7, '0.00000015'],
+      [1.2345e-10, '0.00000000012345'],
+      [1e-30, `0.${'0'.repeat(29)}1`],
+      [1e21, `1${'0'.repeat(21)}`],
+      [1.5e21, `15${'0'.repeat(20)}`],
+      [1e31, `1${'0'.repeat(31)}`],
+    ])('sends maxPriceUsd %s as %s', async (value, sent) => {
+      const fetchMock = mockFetch(LIVE_PAGE);
+      await new BazaarClient().listResources({ maxPriceUsd: value });
+      const price = requestedUrl(fetchMock).searchParams.get('maxPriceUsd');
+      expect(price).toBe(sent);
+      expect(facilitatorTakesPrice(price!)).toBe(true);
+    });
+
+    it('sends every maxPriceUsd the facilitator can read, the same number, and refuses the rest', async () => {
+      // String(1e-7) is "1e-7", which parse_max_price_usd answers with a 400.
+      expect(facilitatorTakesPrice(String(1e-7))).toBe(false);
+      const fetchMock = mockFetch(LIVE_PAGE);
+      const client = new BazaarClient();
+      let sent = 0;
+      let refused = 0;
+      for (let exp = -40; exp <= 40; exp++) {
+        for (const mantissa of [1, 1.5, 2.25, 9.999999, 123456789]) {
+          const value = mantissa * 10 ** exp;
+          const before = fetchMock.mock.calls.length;
+          try {
+            await client.listResources({ maxPriceUsd: value });
+          } catch (e) {
+            expect(String(e)).toMatch(/maxPriceUsd must fit in 32 characters/);
+            expect(fetchMock.mock.calls.length).toBe(before);
+            refused++;
+            continue;
+          }
+          const price = requestedUrl(fetchMock, before).searchParams.get('maxPriceUsd')!;
+          expect(facilitatorTakesPrice(price), `${value} sent as ${price}`).toBe(true);
+          expect(Number(price)).toBe(value);
+          sent++;
+        }
+      }
+      expect(sent).toBeGreaterThan(200);
+      expect(refused).toBeGreaterThan(50);
+    });
+
+    it('sends excludeHost as the facilitator reads it: hosts, comma-separated', async () => {
+      const fetchMock = mockFetch(LIVE_PAGE);
+      const client = new BazaarClient();
+      const sent = async (excludeHost: string) => {
+        const before = fetchMock.mock.calls.length;
+        await client.listResources({ excludeHost });
+        return requestedUrl(fetchMock, before).searchParams.get('excludeHost');
+      };
+
+      expect(await sent('tenjin.blog, Api.Example.com ,,tenjin.blog')).toBe(
+        'tenjin.blog,api.example.com'
+      );
+      expect(await sent('tenjin.blog.')).toBe('tenjin.blog');
+      expect(await sent('[::1]')).toBe('[::1]');
+      expect(await sent('127.0.0.1')).toBe('127.0.0.1');
+      expect(await sent('bücher.de')).toBe('xn--bcher-kva.de');
+
+      // parse_exclude_hosts counts before it removes duplicates: 20 hosts go
+      // out, and a 21st part is a 400 even when it repeats one of them.
+      const twenty = Array.from({ length: 20 }, (_, i) => `h${i}.example`);
+      expect(await sent(twenty.join(','))).toBe(twenty.join(','));
+      for (const extra of ['h20.example', 'h0.example']) {
+        const before = fetchMock.mock.calls.length;
+        await expect(
+          client.listResources({ excludeHost: [...twenty, extra].join(',') })
+        ).rejects.toThrow('excludeHost names at most 20 hosts');
+        expect(fetchMock.mock.calls.length).toBe(before);
+      }
     });
 
     it('treats null as not passed', async () => {
@@ -356,19 +571,51 @@ describe('BazaarClient', () => {
       [{ maxPriceUsd: Number.NaN }, /maxPriceUsd/],
       [{ maxPriceUsd: Number.POSITIVE_INFINITY }, /maxPriceUsd/],
       [{ maxPriceUsd: '0.05' }, /maxPriceUsd/],
-      [{ method: '' }, /method must be an HTTP method/],
-      [{ method: '   ' }, /method must be an HTTP method/],
-      [{ method: 'GET /search' }, /method must be an HTTP method/],
-      [{ method: 'P0ST' }, /method must be an HTTP method/],
+      // 33 characters in decimal: parse_max_price_usd takes at most 32
+      [{ maxPriceUsd: 1e-31 }, /maxPriceUsd must fit in 32 characters written in decimal/],
+      [{ maxPriceUsd: 1e32 }, /maxPriceUsd must fit in 32 characters/],
+      [{ maxPriceUsd: Number.MAX_VALUE }, /maxPriceUsd must fit in 32 characters/],
+      [{ maxPriceUsd: Number.MIN_VALUE }, /maxPriceUsd must fit in 32 characters/],
+      [{ method: '' }, /method must be one of GET, POST, PUT, PATCH/],
+      [{ method: '   ' }, /method must be one of GET, POST, PUT, PATCH/],
+      [{ method: 'GET /search' }, /method must be one of/],
+      [{ method: 'P0ST' }, /method must be one of/],
+      // Methods the facilitator's `method` filter does not take (400)
+      [{ method: 'HEAD' }, /method must be one of GET, POST, PUT, PATCH, got "HEAD"/],
+      [{ method: 'DELETE' }, /method must be one of/],
+      [{ method: 'OPTIONS' }, /method must be one of/],
+      [{ method: 'CONNECT' }, /method must be one of/],
+      [{ method: 'delete' }, /method must be one of/],
+      // toUpperCase() makes 'POST' of the long s; the facilitator does not
+      [{ method: 'poſt' }, /method must be one of/],
+      [{ method: 1 }, /method must be one of/],
       [{ hasInputSchema: 'true' }, /hasInputSchema must be true or false/],
       [{ hasInputSchema: 1 }, /hasInputSchema must be true or false/],
-      [{ kind: '' }, /kind must be a kind such as api or content/],
-      [{ kind: '  ' }, /kind must be a kind/],
-      [{ excludeHost: 'https://tenjin.blog' }, /excludeHost must be a host name/],
-      [{ excludeHost: 'tenjin.blog/api' }, /excludeHost must be a host name/],
-      [{ excludeHost: 'tenjin .blog' }, /excludeHost must be a host name/],
-      [{ excludeHost: 'user@tenjin.blog' }, /excludeHost must be a host name/],
-      [{ excludeHost: '' }, /excludeHost must be a host name/],
+      [{ kind: '' }, /kind must be one of api, content/],
+      [{ kind: '  ' }, /kind must be one of api, content/],
+      // Kinds the facilitator's `kind` filter does not take (400)
+      [{ kind: 'tool' }, /kind must be one of api, content, got "tool"/],
+      [{ kind: 'apis' }, /kind must be one of/],
+      [{ kind: 'api,content' }, /kind must be one of/],
+      [{ kind: 'аpi' }, /kind must be one of/],
+      [{ excludeHost: 'https://tenjin.blog' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin.blog/api' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin .blog' }, /excludeHost must be host names/],
+      // A URL drops a tab or a line break inside the host without a word:
+      // 'tenjin\t.blog' would go out as tenjin.blog. Refused, not removed.
+      [{ excludeHost: 'tenjin\t.blog' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin\n.blog' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin.blog,api\r.example.com' }, /excludeHost must be host names/],
+      [{ excludeHost: 'user@tenjin.blog' }, /excludeHost must be host names/],
+      [{ excludeHost: '' }, /excludeHost must be host names/],
+      [{ excludeHost: ' , ,' }, /excludeHost must be host names/],
+      [{ excludeHost: '.' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin.blog?x' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin.blog#x' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin\\blog' }, /excludeHost must be host names/],
+      [{ excludeHost: 'tenjin.blog,https://other.example' }, /excludeHost must be host names.*other/],
+      [{ excludeHost: 'a<b.example' }, /excludeHost must be host names/],
+      [{ excludeHost: ['tenjin.blog'] }, /excludeHost must be host names/],
     ])('refuses %o before the request goes out', async (filter, message) => {
       const fetchMock = mockFetch(LIVE_PAGE);
       await expect(
@@ -379,13 +626,18 @@ describe('BazaarClient', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('keeps a port in excludeHost', async () => {
-      const fetchMock = mockFetch(LIVE_PAGE);
-      await new BazaarClient().listResources({ excludeHost: 'localhost:8080' });
-      expect(requestedUrl(fetchMock).searchParams.get('excludeHost')).toBe(
-        'localhost:8080'
-      );
-    });
+    it.each(['localhost:8080', 'tenjin.blog:443', 'tenjin.blog:', '[::1]:8080', 'tenjin.blog,api.example.com:8443'])(
+      'refuses a port in excludeHost (%s), which the facilitator answers with a 400',
+      async (excludeHost) => {
+        // parse_exclude_hosts refuses `:` outside an IPv6 literal and any URL
+        // port; this client used to send 'localhost:8080' as it came.
+        const fetchMock = mockFetch(LIVE_PAGE);
+        await expect(new BazaarClient().listResources({ excludeHost })).rejects.toThrow(
+          /excludeHost must be host names .*without a port/
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+    );
 
     it('surfaces the 400 of a facilitator that does not know them yet', async () => {
       // The body x402-rs 2.46.1 builds for an unknown parameter
@@ -560,6 +812,198 @@ describe('BazaarClient', () => {
       expect(body.accepts).toHaveLength(1);
       expect(body.metadata.category).toBe('finance');
     });
+
+    const RESOURCE = {
+      url: 'https://api.example.com/phone-lookup',
+      description: 'Who owns a phone number',
+      accepts: [
+        {
+          scheme: 'exact',
+          network: 'eip155:8453',
+          asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          amount: '50000',
+          payTo: '0x1234567890123456789012345678901234567890',
+          maxTimeoutSeconds: 60,
+        },
+      ],
+      metadata: { category: 'data', tags: ['phone'] },
+    };
+    const RESOURCE_BODY =
+      '{"url":"https://api.example.com/phone-lookup","type":"http","description":"Who owns a phone number",' +
+      '"accepts":[{"scheme":"exact","network":"eip155:8453","asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",' +
+      '"amount":"50000","payTo":"0x1234567890123456789012345678901234567890","maxTimeoutSeconds":60}],' +
+      '"metadata":{"category":"data","tags":["phone"]}}';
+    const POST_EXTENSION = () =>
+      bazaarExtension({
+        method: 'POST',
+        body: { phone: '+573001234567' },
+        bodySchema: {
+          type: 'object',
+          properties: { phone: { type: 'string' } },
+          required: ['phone'],
+        },
+        output: { example: { owner: 'ACME S.A.S.', carrier: 'Claro' } },
+      });
+    const sentBody = (fetchMock: { mock: { calls: unknown[][] } }, call = 0) =>
+      (fetchMock.mock.calls[call][1] as RequestInit).body as string;
+
+    it('without extensions, sends exactly the body it sent before the option existed', async () => {
+      const fetchMock = mockFetch({ success: true });
+      const client = new BazaarClient();
+      await client.registerResource(RESOURCE);
+      await client.registerResource({ ...RESOURCE, extensions: undefined });
+      await client.registerResource({
+        ...RESOURCE,
+        extensions: null as unknown as Record<string, unknown>,
+      });
+
+      for (const call of [0, 1, 2]) expect(sentBody(fetchMock, call)).toBe(RESOURCE_BODY);
+    });
+
+    it('sends the result of bazaarExtension() as the body\'s extensions, as it came', async () => {
+      const fetchMock = mockFetch({ success: true });
+      const extensions = POST_EXTENSION();
+      await new BazaarClient().registerResource({ ...RESOURCE, extensions });
+
+      const body = JSON.parse(sentBody(fetchMock));
+      // Every other byte of the body is what it was; `extensions` goes last.
+      expect(sentBody(fetchMock)).toBe(
+        `${RESOURCE_BODY.slice(0, -1)},"extensions":${JSON.stringify(extensions)}}`
+      );
+      expect(Object.keys(body)).toEqual([
+        'url',
+        'type',
+        'description',
+        'accepts',
+        'metadata',
+        'extensions',
+      ]);
+      expect(body.extensions).toEqual(extensions);
+      expect(body.extensions.bazaar.info.input).toEqual({
+        type: 'http',
+        method: 'POST',
+        bodyType: 'json',
+        body: { phone: '+573001234567' },
+      });
+      expect(body.extensions.bazaar.info.output.example).toEqual({
+        owner: 'ACME S.A.S.',
+        carrier: 'Claro',
+      });
+      expect(body.extensions.bazaar.schema.properties.input.properties.body.required).toEqual([
+        'phone',
+      ]);
+      // What the facilitator keeps, and what it then says about the listing
+      expect(facilitatorKeptExtensions(body.extensions)).toEqual(extensions);
+      expect(facilitatorHasInputSchema(body.extensions)).toBe(true);
+      expect(facilitatorMethod(body.extensions)).toBe('POST');
+    });
+
+    it('keeps other extension keys beside bazaar', async () => {
+      const fetchMock = mockFetch({ success: true });
+      const extensions = { ...POST_EXTENSION(), 'sign-in-with-x': { chains: ['eip155:8453'] } };
+      await new BazaarClient().registerResource({ ...RESOURCE, extensions });
+
+      expect(JSON.parse(sentBody(fetchMock)).extensions).toEqual(extensions);
+    });
+
+    it('round trip: registered with bazaarExtension, the listing has an input schema and is found as a POST', async () => {
+      const { listings } = fakeFacilitator();
+      const client = new BazaarClient();
+      await client.registerResource({ ...RESOURCE, extensions: POST_EXTENSION() });
+      await client.registerResource({ ...RESOURCE, url: 'https://api.example.com/bare' });
+
+      expect(listings.map((r) => [r.url, r.hasInputSchema])).toEqual([
+        ['https://api.example.com/phone-lookup', true],
+        ['https://api.example.com/bare', false],
+      ]);
+
+      const declared = await client.listResources({ hasInputSchema: true, method: 'POST' });
+      expect(declared.items.map((r) => r.url)).toEqual(['https://api.example.com/phone-lookup']);
+      const input = (declared.items[0].extensions as ReturnType<typeof bazaarExtension>).bazaar
+        .info.input;
+      expect(input).toMatchObject({ method: 'POST', body: { phone: '+573001234567' } });
+
+      const bare = await client.listResources({ hasInputSchema: false });
+      expect(bare.items.map((r) => r.url)).toEqual(['https://api.example.com/bare']);
+    });
+
+    it('round trip with a GET declaration: has an input schema, found as a GET', async () => {
+      fakeFacilitator();
+      const client = new BazaarClient();
+      await client.registerResource({
+        ...RESOURCE,
+        extensions: bazaarExtension({ method: 'GET', queryParams: { phone: '+573001234567' } }),
+      });
+
+      const page = await client.listResources({ hasInputSchema: true, method: 'GET' });
+      expect(page.items).toHaveLength(1);
+      expect((await client.listResources({ method: 'POST' })).items).toHaveLength(0);
+    });
+
+    it.each([
+      [[POST_EXTENSION()], /extensions must be an object.*got an array/],
+      ['{"bazaar":{}}', /extensions must be an object/],
+      [42, /extensions must be an object/],
+      [true, /extensions must be an object/],
+    ])('refuses extensions %j before the request goes out', async (extensions, message) => {
+      const fetchMock = mockFetch({ success: true });
+      await expect(
+        new BazaarClient().registerResource({
+          ...RESOURCE,
+          extensions: extensions as unknown as Record<string, unknown>,
+        })
+      ).rejects.toThrow(message);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('sends extensions of exactly 16 KiB, counted in UTF-8 bytes, and refuses one byte more', async () => {
+      // 'é' is one UTF-16 unit and two bytes: a cap counted in units would let
+      // through a blob the facilitator drops.
+      const sized = (bytes: number) => {
+        const base = { bazaar: POST_EXTENSION().bazaar, pad: '' };
+        const room = bytes - Buffer.byteLength(JSON.stringify(base), 'utf8');
+        return { ...base, pad: 'é'.repeat(Math.floor(room / 2)) + 'x'.repeat(room % 2) };
+      };
+      const fits = sized(16 * 1024);
+      const over = sized(16 * 1024 + 1);
+      expect(Buffer.byteLength(JSON.stringify(fits), 'utf8')).toBe(16384);
+      expect(JSON.stringify(fits).length).toBeLessThan(16384);
+      expect(facilitatorKeptExtensions(fits)).toBe(fits);
+      expect(facilitatorKeptExtensions(over)).toBeUndefined();
+
+      const fetchMock = mockFetch({ success: true });
+      await new BazaarClient().registerResource({ ...RESOURCE, extensions: fits });
+      expect(JSON.parse(sentBody(fetchMock)).extensions).toEqual(fits);
+
+      await expect(
+        new BazaarClient().registerResource({ ...RESOURCE, extensions: over })
+      ).rejects.toThrow('extensions must be at most 16384 bytes as JSON, got 16385');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('sends extensions 64 levels deep and refuses 65, as the facilitator counts levels', async () => {
+      const nested = (levels: number) => {
+        let v: unknown = 'leaf';
+        for (let i = 0; i < levels; i++) v = i % 2 ? { k: v } : [v];
+        return { bazaar: POST_EXTENSION().bazaar, deep: v };
+      };
+      // `deep` is level 1, so its leaf sits at levels + 1
+      const fits = nested(63);
+      const over = nested(64);
+      expect(facilitatorDepth(fits)).toBe(64);
+      expect(facilitatorDepth(over)).toBe(65);
+      expect(facilitatorKeptExtensions(fits)).toBe(fits);
+      expect(facilitatorKeptExtensions(over)).toBeUndefined();
+
+      const fetchMock = mockFetch({ success: true });
+      await new BazaarClient().registerResource({ ...RESOURCE, extensions: fits });
+      expect(JSON.parse(sentBody(fetchMock)).extensions).toEqual(fits);
+
+      await expect(
+        new BazaarClient().registerResource({ ...RESOURCE, extensions: over })
+      ).rejects.toThrow('extensions must be at most 64 levels deep, got 65');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('getStats', () => {
@@ -588,7 +1032,9 @@ describe('BazaarClient', () => {
       expect(HEALTH_FILTERS).toContain('quarantined');
       expect(HEALTH_FILTERS).toContain('any');
       expect(TIER_FILTERS).toEqual(['first_party', 'vip', 'verified', 'listed']);
+      // x402-rs discovery_search.rs `KINDS` and `METHODS`
       expect(KIND_FILTERS).toEqual(['api', 'content']);
+      expect(METHOD_FILTERS).toEqual(['GET', 'POST', 'PUT', 'PATCH']);
     });
   });
 });

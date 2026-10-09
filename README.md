@@ -1665,7 +1665,7 @@ Register and discover paid x402 resources across the network.
 The Bazaar is served by the facilitator itself under `/discovery/*`. No API key, no separate host.
 
 ```typescript
-import { BazaarClient, isAlive } from 'uvd-x402-sdk/backend';
+import { BazaarClient, bazaarExtension, isAlive } from 'uvd-x402-sdk/backend';
 
 const bazaar = new BazaarClient();
 
@@ -1690,11 +1690,11 @@ const hits = await bazaar.listResources({ q: 'logs' });
 // Routing filters. Each one is sent only when you pass it.
 const posts = await bazaar.listResources({
   q: 'look up who owns a phone number, callable by an agent with a POST',
-  method: 'POST',            // sent uppercased
+  method: 'POST',            // GET | POST | PUT | PATCH, sent uppercased
   maxPriceUsd: 0.05,         // price at most 5 cents
   hasInputSchema: true,      // only resources that declare their input
   kind: 'api',               // 'api' | 'content'
-  excludeHost: 'tenjin.blog' // a host name, not a URL
+  excludeHost: 'tenjin.blog' // host names, comma-separated; not a URL, no port
 });
 
 // Walk the whole filtered catalog, one page at a time
@@ -1715,6 +1715,9 @@ await bazaar.registerResource({
     maxTimeoutSeconds: 60,
   }],
   metadata: { category: 'ai', tags: ['image'] },
+  // How to call it (see bazaarExtension below). Without it the listing
+  // says hasInputSchema: false.
+  extensions: bazaarExtension({ method: 'POST', body: { prompt: 'a red fox' } }),
 });
 
 // Aggregate catalog metrics
@@ -1726,11 +1729,13 @@ Timestamps (`firstSeen`, `lastSeen`, `lastUpdated`, `health.lastChecked`) are Un
 
 **Search length.** `q` can be up to 400 characters (`DEFAULT_MAX_SEARCH_LEN`), long enough for a request in natural language. Characters are counted as the facilitator counts them (code points: an emoji is one, not two). A longer `q` is refused before the request. Change the cap with `new BazaarClient({ maxSearchLen })`; against a facilitator up to 2.46.1, whose substring search takes at most 128, pass `maxSearchLen: MAX_SEARCH_LEN` to fail before the request instead of getting its 400. `getResourceByUrl()` searches with the URL's first 128 characters, which every facilitator accepts.
 
-**Routing filters** (`maxPriceUsd`, `method`, `hasInputSchema`, `kind`, `excludeHost`) need a facilitator that serves them, released after 2.46.1. A facilitator up to 2.46.1 answers any query parameter it does not know with a 400 that names it, so the client sends each of these only when you pass it: a call that sets none of them sends exactly what it sent before. A value you pass is sent or refused before the request (a negative price, a method that is not an HTTP method, a URL in `excludeHost`), never dropped. `null` counts as not passed.
+**Routing filters** (`maxPriceUsd`, `method`, `hasInputSchema`, `kind`, `excludeHost`) need facilitator 2.47.0 or later. A facilitator up to 2.46.1 answers any query parameter it does not know with a 400 that names it, so the client sends each of these only when you pass it: a call that sets none of them sends exactly what it sent before. A value you pass is sent or refused before the request, never dropped, by the rules the facilitator reads it with: `maxPriceUsd` is a number `>= 0`, sent in decimal (`1e-7` goes out as `0.0000001`) and refused if that takes more than 32 characters; `method` is `GET`, `POST`, `PUT` or `PATCH` in any case; `kind` is `api` or `content`; `excludeHost` is a host name, or up to 20 separated by commas, each matched with its subdomains, with no scheme, path or port. `null` counts as not passed.
+
+**Registering with `extensions`.** `registerResource({ ..., extensions })` sends the object as the body's `extensions`, which the facilitator keeps as it comes: from `extensions.bazaar.info.input` the listing gets `hasInputSchema: true`, and it is found by `method: 'POST'` when that is what it declares. Pass the same `bazaarExtension(...)` you put in your 402. It must be a plain object of at most 16 KiB as JSON and 64 levels deep (the facilitator drops a bigger one without an error, so the client refuses it before the request). Without `extensions` the request body is exactly what it was.
 
 ### Declaring your endpoint to the Bazaar (`bazaarExtension`)
 
-A seller can tell the facilitator how its endpoint is called inside the 402 itself, with the `bazaar` extension of x402 v2 ([spec](https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md)). The facilitator catalogs the endpoint from it. The method travels in `info.input.method` and the example body in `info.input.body`: that is what a facilitator needs to probe a POST endpoint with a POST instead of a GET.
+A seller can tell the facilitator how its endpoint is called inside the 402 itself, with the `bazaar` extension of x402 v2 ([spec](https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md)). The facilitator catalogs the endpoint from it. The method travels in `info.input.method` and the example body in `info.input.body`: that is what a facilitator needs to probe a POST endpoint with a POST instead of a GET. Pass the same object as `extensions` to `BazaarClient.registerResource()` (above) when you register the endpoint yourself.
 
 ```typescript
 import { bazaarExtension, create402Response } from 'uvd-x402-sdk';

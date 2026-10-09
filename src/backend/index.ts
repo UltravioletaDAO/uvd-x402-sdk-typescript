@@ -2640,7 +2640,7 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
 
 /**
  * Longest `q` that facilitators up to 2.46.1 accept: their substring search
- * answers a longer one with a 400.
+ * answers a longer one with a 400. From 2.47.0 on they take 400.
  *
  * {@link BazaarClient} no longer refuses `q` at this length: its cap is
  * `maxSearchLen` ({@link DEFAULT_MAX_SEARCH_LEN} unless set), sized for the
@@ -2699,6 +2699,15 @@ export type DiscoveryKind = 'api' | 'content';
 
 /** Values accepted by the `kind` filter. */
 export const KIND_FILTERS = ['api', 'content'] as const;
+
+/**
+ * Values accepted by the `method` filter: the methods a listing's declaration
+ * resolves to. The facilitator reads a declared HEAD or DELETE as GET.
+ */
+export const METHOD_FILTERS = ['GET', 'POST', 'PUT', 'PATCH'] as const;
+
+/** An HTTP method the `method` filter takes. */
+export type DiscoveryMethod = (typeof METHOD_FILTERS)[number];
 
 /** How a resource got into the registry. */
 export type DiscoverySource =
@@ -2837,21 +2846,32 @@ export interface DiscoveryListOptions {
    */
   q?: string;
 
-  // The five filters below need a facilitator that serves them. 2.46.1 (live
-  // on 2026-10-02) does not, and answers ANY parameter it does not know with a
-  // 400 naming it. So each one goes on the wire only when it is passed: a call
+  // The five filters below are served by facilitators from 2.47.0 on. Up to
+  // 2.46.1 a facilitator answers ANY parameter it does not know with a 400
+  // naming it. So each one goes on the wire only when it is passed: a call
   // that sets none of them sends exactly what it sent before they existed.
-  // One that is passed is sent or refused before the request, never dropped.
+  // One that is passed is sent or refused before the request, never dropped:
+  // it is checked here by the rules the facilitator parses it with (x402-rs
+  // src/discovery_search.rs: parse_max_price_usd, parse_method, parse_kind,
+  // parse_exclude_hosts), so a value that goes out is one it takes.
 
-  /** Only resources whose price is at most this many US dollars (`>= 0`) */
+  /**
+   * Only resources whose price is at most this many US dollars (`>= 0`). Sent
+   * in decimal notation, never with an exponent (`1e-7` goes out as
+   * `0.0000001`); a value that needs more than 32 characters that way is refused.
+   */
   maxPriceUsd?: number;
-  /** Only resources called with this HTTP method (sent uppercased, e.g. `POST`) */
-  method?: string;
+  /** Only resources called with this HTTP method: GET, POST, PUT or PATCH, any case (sent uppercased) */
+  method?: DiscoveryMethod | Lowercase<DiscoveryMethod>;
   /** Only resources that declare (`true`) or do not declare (`false`) an input schema */
   hasInputSchema?: boolean;
-  /** Only APIs, or only paid content */
+  /** Only APIs, or only paid content (sent lowercased) */
   kind?: DiscoveryKind;
-  /** Leave out every resource on this host (a host name, not a URL) */
+  /**
+   * Leave out every resource on this host and its subdomains. A host name
+   * such as `api.example.com`, or up to 20 of them separated by commas; not a
+   * URL and without a port. Sent lowercased, without a trailing dot.
+   */
   excludeHost?: string;
 }
 
@@ -2867,6 +2887,17 @@ export interface DiscoveryRegisterOptions {
   accepts?: DiscoveryAccepts[];
   /** Free-form metadata (category, provider, tags) */
   metadata?: Record<string, unknown>;
+  /**
+   * Resource-level x402 extensions, sent as the body's `extensions`: the
+   * result of {@link bazaarExtension}, or an object with its `bazaar` key and
+   * others. The facilitator keeps it as it comes. From
+   * `extensions.bazaar.info.input` the listing gets `hasInputSchema: true`,
+   * and its prober the method and example body to call the endpoint with.
+   *
+   * At most 16 KiB as JSON (UTF-8) and 64 levels deep: the facilitator drops a
+   * bigger one without an error, so it is refused before the request.
+   */
+  extensions?: Record<string, unknown>;
 }
 
 /** Aggregate catalog metrics from `GET /discovery/stats`. */
@@ -2916,49 +2947,164 @@ function firstChars(s: string, max: number): string {
   return Array.from(s).slice(0, max).join('');
 }
 
-/** `maxPriceUsd` as sent: a finite, non-negative number. */
+/** Longest `maxPriceUsd` the facilitator takes, in characters. */
+const MAX_PRICE_CHARS = 32;
+
+/** Hosts one `excludeHost` may name. */
+const MAX_EXCLUDED_HOSTS = 20;
+
+/** Longest `extensions` the facilitator keeps, in bytes of its JSON. */
+const MAX_EXTENSIONS_BYTES = 16 * 1024;
+
+/** Deepest `extensions` the facilitator keeps. */
+const MAX_EXTENSIONS_DEPTH = 64;
+
+/**
+ * A non-negative number in decimal notation: `String(n)` without its exponent.
+ * `String` writes one only below 1e-6 (`1e-7`) and from 1e21 (`1e+21`).
+ */
+function decimalString(n: number): string {
+  const s = String(n);
+  const e = s.indexOf('e');
+  if (e === -1) return s;
+  const [whole, fraction = ''] = s.slice(0, e).split('.');
+  const digits = whole + fraction;
+  const point = whole.length + Number(s.slice(e + 1));
+  return point <= 0
+    ? `0.${'0'.repeat(-point)}${digits}`
+    : digits + '0'.repeat(point - digits.length);
+}
+
+/**
+ * `maxPriceUsd` as sent: a finite, non-negative number written in decimal.
+ * The facilitator refuses an exponent and more than 32 characters.
+ */
 function maxPriceParam(value: unknown): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new Error(
       `maxPriceUsd must be a finite number >= 0, got ${String(value)}`
     );
   }
-  return String(value);
+  const price = decimalString(value);
+  if (price.length > MAX_PRICE_CHARS) {
+    throw new Error(
+      `maxPriceUsd must fit in ${MAX_PRICE_CHARS} characters written in decimal, got ${String(value)}`
+    );
+  }
+  return price;
 }
 
-/** `method` as sent: an HTTP method token, uppercased. */
+/**
+ * `value` trimmed, if it is a string of ASCII letters, else ''. Checked before
+ * changing case: `toUpperCase()` turns the long s of `'poſt'` into `'POST'`,
+ * which the facilitator, comparing ASCII, would not.
+ */
+function asciiWord(value: unknown): string {
+  const word = typeof value === 'string' ? value.trim() : '';
+  return /^[A-Za-z]+$/.test(word) ? word : '';
+}
+
+/** `method` as sent: one of {@link METHOD_FILTERS}, uppercased. */
 function methodParam(value: unknown): string {
-  const method = typeof value === 'string' ? value.trim().toUpperCase() : '';
-  if (!/^[A-Z]+$/.test(method)) {
+  const method = asciiWord(value).toUpperCase();
+  if (!(METHOD_FILTERS as readonly string[]).includes(method)) {
     throw new Error(
-      `method must be an HTTP method such as GET or POST, got ${JSON.stringify(value)}`
+      `method must be one of ${METHOD_FILTERS.join(', ')}, got ${JSON.stringify(value)}`
     );
   }
   return method;
 }
 
-/** `kind` as sent: one of {@link KIND_FILTERS}, or a newer kind the server knows. */
+/** `kind` as sent: one of {@link KIND_FILTERS}, lowercased. */
 function kindParam(value: unknown): string {
-  const kind = typeof value === 'string' ? value.trim() : '';
-  if (kind === '') {
+  const kind = asciiWord(value).toLowerCase();
+  if (!(KIND_FILTERS as readonly string[]).includes(kind)) {
     throw new Error(
-      `kind must be a kind such as ${KIND_FILTERS.join(' or ')}, got ${JSON.stringify(value)}`
+      `kind must be one of ${KIND_FILTERS.join(', ')}, got ${JSON.stringify(value)}`
     );
   }
   return kind;
 }
 
-/** `excludeHost` as sent: a bare host name, lowercased. */
+/**
+ * `excludeHost` as sent: host names, comma-separated, each read the way the
+ * facilitator reads it, as the host of `http://<host>/`. A scheme, path, port,
+ * credentials, query or fragment is refused, not stripped: a URL here would
+ * match no host, and excluding nothing looks exactly like a filter that
+ * worked. Each host goes out lowercased, without a trailing dot, and once.
+ */
 function excludeHostParam(value: unknown): string {
-  const host = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  // A URL here would match no host, and excluding nothing looks exactly like
-  // a filter that worked.
-  if (host === '' || /[\s/?#@]/.test(host)) {
+  const invalid = (part: unknown) =>
+    new Error(
+      `excludeHost must be host names such as api.example.com, comma-separated, not a URL and without a port, got ${JSON.stringify(part)}`
+    );
+  if (typeof value !== 'string') throw invalid(value);
+  const hosts: string[] = [];
+  for (const raw of value.split(',')) {
+    const part = raw.trim();
+    if (part === '') continue;
+    if (hosts.length >= MAX_EXCLUDED_HOSTS) {
+      throw new Error(`excludeHost names at most ${MAX_EXCLUDED_HOSTS} hosts`);
+    }
+    // With these refused, what is left of a URL is the host and a port. A
+    // colon is a port, except inside an IPv6 literal such as [::1], whose
+    // port the URL catches. Whitespace is refused, not removed.
+    if (/[\s/\\?#@]/.test(part) || (part.includes(':') && !part.startsWith('['))) {
+      throw invalid(part);
+    }
+    let url: URL;
+    try {
+      url = new URL(`http://${part}/`);
+    } catch {
+      throw invalid(part);
+    }
+    if (url.port !== '') throw invalid(part);
+    // The URL has already lowercased it, and an IDN is punycode.
+    const host = url.hostname.replace(/\.+$/, '');
+    if (host === '') throw invalid(part);
+    if (!hosts.includes(host)) hosts.push(host);
+  }
+  if (hosts.length === 0) throw invalid(value);
+  return hosts.join(',');
+}
+
+/**
+ * Nesting depth of a JSON value as the facilitator counts it: a scalar, or an
+ * empty object or array, is 0; `{ "a": 1 }` is 1.
+ */
+function jsonDepth(value: unknown): number {
+  if (value === null || typeof value !== 'object') return 0;
+  let depth = 0;
+  for (const v of Object.values(value)) depth = Math.max(depth, 1 + jsonDepth(v));
+  return depth;
+}
+
+/**
+ * `extensions` as sent to `POST /discovery/register`: a plain object the
+ * facilitator keeps. It drops one above 16 KiB of JSON or 64 levels deep
+ * without an error, so that is refused here.
+ */
+function extensionsParam(value: unknown): Record<string, unknown> {
+  if (!isPlainObject(value)) {
     throw new Error(
-      `excludeHost must be a host name such as api.example.com, not a URL, got ${JSON.stringify(value)}`
+      `extensions must be an object such as the result of bazaarExtension(), got ${Array.isArray(value) ? 'an array' : JSON.stringify(value)}`
     );
   }
-  return host;
+  // Measured on what goes on the wire, as the facilitator measures it.
+  const json = JSON.stringify(value);
+  const bytes = new TextEncoder().encode(json).length;
+  if (bytes > MAX_EXTENSIONS_BYTES) {
+    throw new Error(
+      `extensions must be at most ${MAX_EXTENSIONS_BYTES} bytes as JSON, got ${bytes}: the facilitator drops a bigger one`
+    );
+  }
+  const depth = jsonDepth(JSON.parse(json));
+  if (depth > MAX_EXTENSIONS_DEPTH) {
+    throw new Error(
+      `extensions must be at most ${MAX_EXTENSIONS_DEPTH} levels deep, got ${depth}: the facilitator drops a deeper one`
+    );
+  }
+  return value;
 }
 
 /** Render an epoch-seconds field as a `Date`. */
@@ -3005,6 +3151,8 @@ export function isAlive(resource: DiscoveryResource): boolean {
  *     maxTimeoutSeconds: 60,
  *   }],
  *   metadata: { category: 'ai', tags: ['image'] },
+ *   // How to call it: a POST with this body. Same object as in its 402.
+ *   extensions: bazaarExtension({ method: 'POST', body: { prompt: 'a red fox' } }),
  * });
  * ```
  */
@@ -3065,7 +3213,7 @@ export class BazaarClient {
    * ```ts
    * const page = await bazaar.listResources({ network: 'eip155:8453', health: 'alive' });
    *
-   * // Routing filters (need a facilitator newer than 2.46.1, see DiscoveryListOptions)
+   * // Routing filters (need facilitator 2.47.0 or later, see DiscoveryListOptions)
    * const posts = await bazaar.listResources({
    *   q: 'look up the owner of a phone number',
    *   method: 'POST',
@@ -3183,12 +3331,20 @@ export class BazaarClient {
    * Registration is open and rate limited; re-registering a known URL updates
    * the existing record rather than creating a duplicate.
    *
+   * Pass `extensions: bazaarExtension({...})` to declare how the endpoint is
+   * called: without it the listing says `hasInputSchema: false`. Without
+   * `extensions` the body is exactly what it was before the option existed.
+   *
    * @param options - Resource details
    * @returns The registry's acknowledgement
+   * @throws Error before the request when `extensions` is not a plain object,
+   *   or is bigger or deeper than the facilitator keeps
    */
   async registerResource(
     options: DiscoveryRegisterOptions
   ): Promise<Record<string, unknown>> {
+    const extensions =
+      options.extensions != null ? extensionsParam(options.extensions) : undefined;
     const payload: Record<string, unknown> = {
       url: options.url,
       type: options.type || 'http',
@@ -3196,6 +3352,7 @@ export class BazaarClient {
     };
     if (options.accepts) payload.accepts = options.accepts;
     if (options.metadata) payload.metadata = options.metadata;
+    if (extensions !== undefined) payload.extensions = extensions;
 
     return this.request<Record<string, unknown>>('/discovery/register', {
       method: 'POST',
@@ -3355,8 +3512,9 @@ function bazaarFail(message: string): never {
  * own method (a POST endpoint with a POST and the example body), and an agent
  * can call it straight from the challenge.
  *
- * Pass the result as `extensions` to {@link create402Response}, or merge its
- * `bazaar` key into an `extensions` object you build.
+ * Pass the result as `extensions` to {@link create402Response} and to
+ * {@link BazaarClient.registerResource}, or merge its `bazaar` key into an
+ * `extensions` object you build.
  *
  * Spec: https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md
  *
