@@ -2639,8 +2639,9 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
 // `/discovery/*`. There is no separate Bazaar host.
 
 /**
- * Longest `q` that facilitators up to 2.46.1 accept: their substring search
- * answers a longer one with a 400. From 2.47.0 on they take 400.
+ * Longest `q` that older facilitators accept (up to 2.46.1, and some 2.47.0
+ * builds): their substring search answers a longer one with a 400. From
+ * 2.48.0 on they take 400.
  *
  * {@link BazaarClient} no longer refuses `q` at this length: its cap is
  * `maxSearchLen` ({@link DEFAULT_MAX_SEARCH_LEN} unless set), sized for the
@@ -2846,14 +2847,15 @@ export interface DiscoveryListOptions {
    */
   q?: string;
 
-  // The five filters below are served by facilitators from 2.47.0 on. Up to
-  // 2.46.1 a facilitator answers ANY parameter it does not know with a 400
-  // naming it. So each one goes on the wire only when it is passed: a call
-  // that sets none of them sends exactly what it sent before they existed.
-  // One that is passed is sent or refused before the request, never dropped:
-  // it is checked here by the rules the facilitator parses it with (x402-rs
-  // src/discovery_search.rs: parse_max_price_usd, parse_method, parse_kind,
-  // parse_exclude_hosts), so a value that goes out is one it takes.
+  // The five filters below are served by facilitators from 2.48.0 on (and by
+  // some 2.47.0 builds). One without them (every one up to 2.46.1) answers
+  // ANY parameter it does not know with a 400 naming it. So each one goes on
+  // the wire only when it is passed: a call that sets none of them sends
+  // exactly what it sent before they existed. One that is passed is sent or
+  // refused before the request, never dropped: it is checked here by the
+  // rules the facilitator parses it with (x402-rs src/discovery_search.rs:
+  // parse_max_price_usd, parse_method, parse_kind, parse_exclude_hosts), so a
+  // value that goes out is one it takes.
 
   /**
    * Only resources whose price is at most this many US dollars (`>= 0`). Sent
@@ -2932,7 +2934,8 @@ export interface BazaarClientOptions extends StackKeyOptions {
   /**
    * Longest `q` sent, in characters (default: {@link DEFAULT_MAX_SEARCH_LEN}).
    * A longer one is refused before the request. Set {@link MAX_SEARCH_LEN}
-   * (128) against a facilitator up to 2.46.1.
+   * (128) against an older facilitator (up to 2.46.1, and some 2.47.0
+   * builds).
    */
   maxSearchLen?: number;
 }
@@ -3213,7 +3216,7 @@ export class BazaarClient {
    * ```ts
    * const page = await bazaar.listResources({ network: 'eip155:8453', health: 'alive' });
    *
-   * // Routing filters (need facilitator 2.47.0 or later, see DiscoveryListOptions)
+   * // Routing filters (need facilitator 2.48.0 or later, see DiscoveryListOptions)
    * const posts = await bazaar.listResources({
    *   q: 'look up the owner of a phone number',
    *   method: 'POST',
@@ -3328,12 +3331,17 @@ export class BazaarClient {
   /**
    * Register a paid resource in the discovery registry.
    *
-   * Registration is open and rate limited; re-registering a known URL updates
-   * the existing record rather than creating a duplicate.
+   * Registration is open and rate limited. A URL that is already in the
+   * catalog is answered with a 409 (this method throws `Bazaar API error:
+   * 409 - ...`) and its record stays as it was: the facilitator serves no
+   * public route that updates one (the 409's hint names a `PUT` it does not
+   * serve).
    *
    * Pass `extensions: bazaarExtension({...})` to declare how the endpoint is
-   * called: without it the listing says `hasInputSchema: false`. Without
-   * `extensions` the body is exactly what it was before the option existed.
+   * called: without it the listing says `hasInputSchema: false`. It only
+   * counts on a URL's first registration: a URL already listed without it
+   * does not gain it by registering again. Without `extensions` the body is
+   * exactly what it was before the option existed.
    *
    * @param options - Resource details
    * @returns The registry's acknowledgement
