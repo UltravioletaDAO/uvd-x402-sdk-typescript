@@ -1718,11 +1718,18 @@ export class FacilitatorClient {
  *   // Verify and serve...
  * });
  * ```
+ *
+ * `options.extensions` becomes the body's `extensions` (x402 v2 only), e.g.
+ * `{ extensions: bazaarExtension({ method: 'POST', body: {} }) }`, which
+ * declares the endpoint as a POST. Without it the body is exactly what it was
+ * before the option existed.
  */
 export function create402Response(
   requirements: PaymentRequirementsOptions,
   options: {
     accepts?: PaymentAcceptance[];
+    /** x402 v2 `extensions`, such as the result of {@link bazaarExtension} */
+    extensions?: Record<string, unknown>;
   } = {}
 ): {
   status: 402;
@@ -1736,6 +1743,18 @@ export function create402Response(
       || (options.accepts || []).some((accept) => accept.network.includes(':'))
       ? 2
       : 1);
+  if (options.extensions !== undefined) {
+    if (!isObject(options.extensions) || Array.isArray(options.extensions)) {
+      throw new Error('create402Response: extensions must be an object');
+    }
+    // v1 has no `extensions`; dropping them would hide the declaration from
+    // the facilitator without a word.
+    if (version !== 2) {
+      throw new Error(
+        'create402Response: extensions need an x402 v2 response; pass x402Version: 2 or a CAIP-2 network'
+      );
+    }
+  }
   const advertisedRequirements = [
     normalizeRequirementForVersion(primaryRequirement, version),
     ...(options.accepts || []).map((accept) =>
@@ -1743,6 +1762,7 @@ export function create402Response(
     ),
   ];
   const body = create402ResponseBody(advertisedRequirements[0], advertisedRequirements, version);
+  if (options.extensions !== undefined) body.extensions = { ...options.extensions };
 
   return {
     status: 402,
@@ -2619,12 +2639,25 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
 // `/discovery/*`. There is no separate Bazaar host.
 
 /**
- * Maximum length of the free-text `q` filter.
+ * Longest `q` that older facilitators accept (up to 2.46.1, and some 2.47.0
+ * builds): their substring search answers a longer one with a 400. From
+ * 2.48.0 on they take 400.
  *
- * Mirrors the facilitator's `MAX_SEARCH_LEN`; a longer needle is rejected
- * server-side with a 400.
+ * {@link BazaarClient} no longer refuses `q` at this length: its cap is
+ * `maxSearchLen` ({@link DEFAULT_MAX_SEARCH_LEN} unless set), sized for the
+ * natural-language search that replaces the substring one. Pass
+ * `maxSearchLen: MAX_SEARCH_LEN` to keep refusing before the request against
+ * an older facilitator. `getResourceByUrl()` still cuts its needle to this
+ * length, so the lookup works against both.
  */
 export const MAX_SEARCH_LEN = 128;
+
+/**
+ * Default cap on `q` in {@link BazaarClient}: the length of a natural-language
+ * request the facilitator's relevance search takes. Counted in characters
+ * (code points), as the facilitator counts them, not in UTF-16 units.
+ */
+export const DEFAULT_MAX_SEARCH_LEN = 400;
 
 /**
  * Liveness of a registered resource, as measured by the facilitator's prober.
@@ -2661,6 +2694,21 @@ export const TIER_FILTERS = [
   'verified',
   'listed',
 ] as const;
+
+/** What a resource sells: an API to call, or paid content to read. */
+export type DiscoveryKind = 'api' | 'content';
+
+/** Values accepted by the `kind` filter. */
+export const KIND_FILTERS = ['api', 'content'] as const;
+
+/**
+ * Values accepted by the `method` filter: the methods a listing's declaration
+ * resolves to. The facilitator reads a declared HEAD or DELETE as GET.
+ */
+export const METHOD_FILTERS = ['GET', 'POST', 'PUT', 'PATCH'] as const;
+
+/** An HTTP method the `method` filter takes. */
+export type DiscoveryMethod = (typeof METHOD_FILTERS)[number];
 
 /** How a resource got into the registry. */
 export type DiscoverySource =
@@ -2793,8 +2841,40 @@ export interface DiscoveryListOptions {
   health?: DiscoveryHealthStatus | 'any';
   /** Filter by curated tier */
   tier?: DiscoveryTier;
-  /** Free-text search over url / description / provider / category / tags */
+  /**
+   * Free-text search over url / description / provider / category / tags.
+   * At most `maxSearchLen` characters (see {@link BazaarClientOptions}).
+   */
   q?: string;
+
+  // The five filters below are served by facilitators from 2.48.0 on (and by
+  // some 2.47.0 builds). One without them (every one up to 2.46.1) answers
+  // ANY parameter it does not know with a 400 naming it. So each one goes on
+  // the wire only when it is passed: a call that sets none of them sends
+  // exactly what it sent before they existed. One that is passed is sent or
+  // refused before the request, never dropped: it is checked here by the
+  // rules the facilitator parses it with (x402-rs src/discovery_search.rs:
+  // parse_max_price_usd, parse_method, parse_kind, parse_exclude_hosts), so a
+  // value that goes out is one it takes.
+
+  /**
+   * Only resources whose price is at most this many US dollars (`>= 0`). Sent
+   * in decimal notation, never with an exponent (`1e-7` goes out as
+   * `0.0000001`); a value that needs more than 32 characters that way is refused.
+   */
+  maxPriceUsd?: number;
+  /** Only resources called with this HTTP method: GET, POST, PUT or PATCH, any case (sent uppercased) */
+  method?: DiscoveryMethod | Lowercase<DiscoveryMethod>;
+  /** Only resources that declare (`true`) or do not declare (`false`) an input schema */
+  hasInputSchema?: boolean;
+  /** Only APIs, or only paid content (sent lowercased) */
+  kind?: DiscoveryKind;
+  /**
+   * Leave out every resource on this host and its subdomains. A host name
+   * such as `api.example.com`, or up to 20 of them separated by commas; not a
+   * URL and without a port. Sent lowercased, without a trailing dot.
+   */
+  excludeHost?: string;
 }
 
 /** Options for `registerResource()`. */
@@ -2809,6 +2889,17 @@ export interface DiscoveryRegisterOptions {
   accepts?: DiscoveryAccepts[];
   /** Free-form metadata (category, provider, tags) */
   metadata?: Record<string, unknown>;
+  /**
+   * Resource-level x402 extensions, sent as the body's `extensions`: the
+   * result of {@link bazaarExtension}, or an object with its `bazaar` key and
+   * others. The facilitator keeps it as it comes. From
+   * `extensions.bazaar.info.input` the listing gets `hasInputSchema: true`,
+   * and its prober the method and example body to call the endpoint with.
+   *
+   * At most 16 KiB as JSON (UTF-8) and 64 levels deep: the facilitator drops a
+   * bigger one without an error, so it is refused before the request.
+   */
+  extensions?: Record<string, unknown>;
 }
 
 /** Aggregate catalog metrics from `GET /discovery/stats`. */
@@ -2840,6 +2931,183 @@ export interface BazaarClientOptions extends StackKeyOptions {
   baseUrl?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
+  /**
+   * Longest `q` sent, in characters (default: {@link DEFAULT_MAX_SEARCH_LEN}).
+   * A longer one is refused before the request. Set {@link MAX_SEARCH_LEN}
+   * (128) against an older facilitator (up to 2.46.1, and some 2.47.0
+   * builds).
+   */
+  maxSearchLen?: number;
+}
+
+/** Length of `q` the way the facilitator counts it: characters, not UTF-16 units. */
+function searchLength(q: string): number {
+  return Array.from(q).length;
+}
+
+/** The first `max` characters of `s`, never half of a surrogate pair. */
+function firstChars(s: string, max: number): string {
+  return Array.from(s).slice(0, max).join('');
+}
+
+/** Longest `maxPriceUsd` the facilitator takes, in characters. */
+const MAX_PRICE_CHARS = 32;
+
+/** Hosts one `excludeHost` may name. */
+const MAX_EXCLUDED_HOSTS = 20;
+
+/** Longest `extensions` the facilitator keeps, in bytes of its JSON. */
+const MAX_EXTENSIONS_BYTES = 16 * 1024;
+
+/** Deepest `extensions` the facilitator keeps. */
+const MAX_EXTENSIONS_DEPTH = 64;
+
+/**
+ * A non-negative number in decimal notation: `String(n)` without its exponent.
+ * `String` writes one only below 1e-6 (`1e-7`) and from 1e21 (`1e+21`).
+ */
+function decimalString(n: number): string {
+  const s = String(n);
+  const e = s.indexOf('e');
+  if (e === -1) return s;
+  const [whole, fraction = ''] = s.slice(0, e).split('.');
+  const digits = whole + fraction;
+  const point = whole.length + Number(s.slice(e + 1));
+  return point <= 0
+    ? `0.${'0'.repeat(-point)}${digits}`
+    : digits + '0'.repeat(point - digits.length);
+}
+
+/**
+ * `maxPriceUsd` as sent: a finite, non-negative number written in decimal.
+ * The facilitator refuses an exponent and more than 32 characters.
+ */
+function maxPriceParam(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(
+      `maxPriceUsd must be a finite number >= 0, got ${String(value)}`
+    );
+  }
+  const price = decimalString(value);
+  if (price.length > MAX_PRICE_CHARS) {
+    throw new Error(
+      `maxPriceUsd must fit in ${MAX_PRICE_CHARS} characters written in decimal, got ${String(value)}`
+    );
+  }
+  return price;
+}
+
+/**
+ * `value` trimmed, if it is a string of ASCII letters, else ''. Checked before
+ * changing case: `toUpperCase()` turns the long s of `'poſt'` into `'POST'`,
+ * which the facilitator, comparing ASCII, would not.
+ */
+function asciiWord(value: unknown): string {
+  const word = typeof value === 'string' ? value.trim() : '';
+  return /^[A-Za-z]+$/.test(word) ? word : '';
+}
+
+/** `method` as sent: one of {@link METHOD_FILTERS}, uppercased. */
+function methodParam(value: unknown): string {
+  const method = asciiWord(value).toUpperCase();
+  if (!(METHOD_FILTERS as readonly string[]).includes(method)) {
+    throw new Error(
+      `method must be one of ${METHOD_FILTERS.join(', ')}, got ${JSON.stringify(value)}`
+    );
+  }
+  return method;
+}
+
+/** `kind` as sent: one of {@link KIND_FILTERS}, lowercased. */
+function kindParam(value: unknown): string {
+  const kind = asciiWord(value).toLowerCase();
+  if (!(KIND_FILTERS as readonly string[]).includes(kind)) {
+    throw new Error(
+      `kind must be one of ${KIND_FILTERS.join(', ')}, got ${JSON.stringify(value)}`
+    );
+  }
+  return kind;
+}
+
+/**
+ * `excludeHost` as sent: host names, comma-separated, each read the way the
+ * facilitator reads it, as the host of `http://<host>/`. A scheme, path, port,
+ * credentials, query or fragment is refused, not stripped: a URL here would
+ * match no host, and excluding nothing looks exactly like a filter that
+ * worked. Each host goes out lowercased, without a trailing dot, and once.
+ */
+function excludeHostParam(value: unknown): string {
+  const invalid = (part: unknown) =>
+    new Error(
+      `excludeHost must be host names such as api.example.com, comma-separated, not a URL and without a port, got ${JSON.stringify(part)}`
+    );
+  if (typeof value !== 'string') throw invalid(value);
+  const hosts: string[] = [];
+  for (const raw of value.split(',')) {
+    const part = raw.trim();
+    if (part === '') continue;
+    if (hosts.length >= MAX_EXCLUDED_HOSTS) {
+      throw new Error(`excludeHost names at most ${MAX_EXCLUDED_HOSTS} hosts`);
+    }
+    // With these refused, what is left of a URL is the host and a port. A
+    // colon is a port, except inside an IPv6 literal such as [::1], whose
+    // port the URL catches. Whitespace is refused, not removed.
+    if (/[\s/\\?#@]/.test(part) || (part.includes(':') && !part.startsWith('['))) {
+      throw invalid(part);
+    }
+    let url: URL;
+    try {
+      url = new URL(`http://${part}/`);
+    } catch {
+      throw invalid(part);
+    }
+    if (url.port !== '') throw invalid(part);
+    // The URL has already lowercased it, and an IDN is punycode.
+    const host = url.hostname.replace(/\.+$/, '');
+    if (host === '') throw invalid(part);
+    if (!hosts.includes(host)) hosts.push(host);
+  }
+  if (hosts.length === 0) throw invalid(value);
+  return hosts.join(',');
+}
+
+/**
+ * Nesting depth of a JSON value as the facilitator counts it: a scalar, or an
+ * empty object or array, is 0; `{ "a": 1 }` is 1.
+ */
+function jsonDepth(value: unknown): number {
+  if (value === null || typeof value !== 'object') return 0;
+  let depth = 0;
+  for (const v of Object.values(value)) depth = Math.max(depth, 1 + jsonDepth(v));
+  return depth;
+}
+
+/**
+ * `extensions` as sent to `POST /discovery/register`: a plain object the
+ * facilitator keeps. It drops one above 16 KiB of JSON or 64 levels deep
+ * without an error, so that is refused here.
+ */
+function extensionsParam(value: unknown): Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    throw new Error(
+      `extensions must be an object such as the result of bazaarExtension(), got ${Array.isArray(value) ? 'an array' : JSON.stringify(value)}`
+    );
+  }
+  // Measured on what goes on the wire, as the facilitator measures it.
+  const json = JSON.stringify(value);
+  const bytes = new TextEncoder().encode(json).length;
+  if (bytes > MAX_EXTENSIONS_BYTES) {
+    throw new Error(
+      `extensions must be at most ${MAX_EXTENSIONS_BYTES} bytes as JSON, got ${bytes}: the facilitator drops a bigger one`
+    );
+  }
+  const depth = jsonDepth(JSON.parse(json));
+  if (depth > MAX_EXTENSIONS_DEPTH) {
+    throw new Error(
+      `extensions must be at most ${MAX_EXTENSIONS_DEPTH} levels deep, got ${depth}: the facilitator drops a deeper one`
+    );
+  }
+  return value;
 }
 
 /** Render an epoch-seconds field as a `Date`. */
@@ -2886,18 +3154,28 @@ export function isAlive(resource: DiscoveryResource): boolean {
  *     maxTimeoutSeconds: 60,
  *   }],
  *   metadata: { category: 'ai', tags: ['image'] },
+ *   // How to call it: a POST with this body. Same object as in its 402.
+ *   extensions: bazaarExtension({ method: 'POST', body: { prompt: 'a red fox' } }),
  * });
  * ```
  */
 export class BazaarClient {
   private readonly baseUrl: string;
   private readonly timeout: number;
+  private readonly maxSearchLen: number;
 
   constructor(options: BazaarClientOptions = {}) {
     this.baseUrl = (
       options.baseUrl || 'https://facilitator.ultravioletadao.xyz'
     ).replace(/\/+$/, '');
     this.timeout = options.timeout || 30000;
+    const maxSearchLen = options.maxSearchLen ?? DEFAULT_MAX_SEARCH_LEN;
+    if (!Number.isSafeInteger(maxSearchLen) || maxSearchLen < 1) {
+      throw new Error(
+        `maxSearchLen must be a positive integer, got ${String(options.maxSearchLen)}`
+      );
+    }
+    this.maxSearchLen = maxSearchLen;
     bindStackKey(this, options);
   }
 
@@ -2937,14 +3215,35 @@ export class BazaarClient {
    * @example
    * ```ts
    * const page = await bazaar.listResources({ network: 'eip155:8453', health: 'alive' });
+   *
+   * // Routing filters (need facilitator 2.48.0 or later, see DiscoveryListOptions)
+   * const posts = await bazaar.listResources({
+   *   q: 'look up the owner of a phone number',
+   *   method: 'POST',
+   *   maxPriceUsd: 0.05,
+   *   kind: 'api',
+   * });
    * ```
    */
   async listResources(
     options: DiscoveryListOptions = {}
   ): Promise<DiscoveryResponse> {
-    if (options.q !== undefined && options.q.length > MAX_SEARCH_LEN) {
-      throw new Error(`q must be at most ${MAX_SEARCH_LEN} characters`);
+    if (options.q !== undefined && searchLength(options.q) > this.maxSearchLen) {
+      throw new Error(`q must be at most ${this.maxSearchLen} characters`);
     }
+    // Checked here, before the request, so a bad value never reaches the
+    // facilitator and a valid one is never dropped.
+    const maxPriceUsd =
+      options.maxPriceUsd != null ? maxPriceParam(options.maxPriceUsd) : undefined;
+    const method = options.method != null ? methodParam(options.method) : undefined;
+    if (options.hasInputSchema != null && typeof options.hasInputSchema !== 'boolean') {
+      throw new Error(
+        `hasInputSchema must be true or false, got ${JSON.stringify(options.hasInputSchema)}`
+      );
+    }
+    const kind = options.kind != null ? kindParam(options.kind) : undefined;
+    const excludeHost =
+      options.excludeHost != null ? excludeHostParam(options.excludeHost) : undefined;
 
     const params = new URLSearchParams();
     params.set('limit', String(options.limit ?? 10));
@@ -2959,6 +3258,12 @@ export class BazaarClient {
     if (options.health) params.set('health', options.health);
     if (options.tier) params.set('tier', options.tier);
     if (options.q) params.set('q', options.q);
+    if (maxPriceUsd !== undefined) params.set('maxPriceUsd', maxPriceUsd);
+    if (method !== undefined) params.set('method', method);
+    if (options.hasInputSchema != null)
+      params.set('hasInputSchema', String(options.hasInputSchema));
+    if (kind !== undefined) params.set('kind', kind);
+    if (excludeHost !== undefined) params.set('excludeHost', excludeHost);
 
     return this.request<DiscoveryResponse>(
       `/discovery/resources?${params.toString()}`
@@ -3006,7 +3311,8 @@ export class BazaarClient {
    * Look up a single resource by its URL.
    *
    * The registry keys on URL and has no by-id lookup, so this searches and
-   * then matches exactly.
+   * then matches exactly. The needle is the URL's first {@link MAX_SEARCH_LEN}
+   * characters (or `maxSearchLen`, if lower), which every facilitator accepts.
    *
    * @param resourceUrl - Exact URL of the resource
    * @returns The resource, or null when it is not registered
@@ -3015,7 +3321,7 @@ export class BazaarClient {
     resourceUrl: string
   ): Promise<DiscoveryResource | null> {
     const page = await this.listResources({
-      q: resourceUrl.slice(0, MAX_SEARCH_LEN),
+      q: firstChars(resourceUrl, Math.min(MAX_SEARCH_LEN, this.maxSearchLen)),
       limit: 100,
       health: 'any',
     });
@@ -3025,15 +3331,28 @@ export class BazaarClient {
   /**
    * Register a paid resource in the discovery registry.
    *
-   * Registration is open and rate limited; re-registering a known URL updates
-   * the existing record rather than creating a duplicate.
+   * Registration is open and rate limited. A URL that is already in the
+   * catalog is answered with a 409 (this method throws `Bazaar API error:
+   * 409 - ...`) and its record stays as it was: the facilitator serves no
+   * public route that updates one (the 409's hint names a `PUT` it does not
+   * serve).
+   *
+   * Pass `extensions: bazaarExtension({...})` to declare how the endpoint is
+   * called: without it the listing says `hasInputSchema: false`. It only
+   * counts on a URL's first registration: a URL already listed without it
+   * does not gain it by registering again. Without `extensions` the body is
+   * exactly what it was before the option existed.
    *
    * @param options - Resource details
    * @returns The registry's acknowledgement
+   * @throws Error before the request when `extensions` is not a plain object,
+   *   or is bigger or deeper than the facilitator keeps
    */
   async registerResource(
     options: DiscoveryRegisterOptions
   ): Promise<Record<string, unknown>> {
+    const extensions =
+      options.extensions != null ? extensionsParam(options.extensions) : undefined;
     const payload: Record<string, unknown> = {
       url: options.url,
       type: options.type || 'http',
@@ -3041,6 +3360,7 @@ export class BazaarClient {
     };
     if (options.accepts) payload.accepts = options.accepts;
     if (options.metadata) payload.metadata = options.metadata;
+    if (extensions !== undefined) payload.extensions = extensions;
 
     return this.request<Record<string, unknown>>('/discovery/register', {
       method: 'POST',
@@ -3104,6 +3424,268 @@ export type BazaarDiscoverOptions = DiscoveryListOptions;
 
 /** @deprecated Use {@link DiscoveryRegisterOptions}. */
 export type BazaarRegisterOptions = DiscoveryRegisterOptions;
+
+// ============================================================================
+// BAZAAR EXTENSION (seller side)
+// ============================================================================
+//
+// The `bazaar` entry of a v2 challenge's `extensions`, as the x402 spec defines
+// it: specs/extensions/bazaar.md in coinbase/x402 (main @ dd927a26, 2026-04-21),
+// https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md
+//
+// `info.input` says how to call the endpoint, `info.output` what it answers,
+// and `schema` is a JSON Schema (draft 2020-12) that `info` must validate
+// against: a facilitator validates before cataloging. `info.input.method` and
+// `info.input.body` are what a facilitator needs to probe a POST endpoint with
+// a POST instead of a GET.
+
+/** Methods whose input travels in the query string (spec: QueryDiscoveryInfo). */
+export const BAZAAR_QUERY_METHODS = ['GET', 'HEAD', 'DELETE'] as const;
+
+/** Methods whose input travels in a request body (spec: BodyDiscoveryInfo). */
+export const BAZAAR_BODY_METHODS = ['POST', 'PUT', 'PATCH'] as const;
+
+/** Encodings of a request body that the spec names. */
+export const BAZAAR_BODY_TYPES = ['json', 'form-data', 'text'] as const;
+
+export type BazaarQueryMethod = (typeof BAZAAR_QUERY_METHODS)[number];
+export type BazaarBodyMethod = (typeof BAZAAR_BODY_METHODS)[number];
+export type BazaarBodyType = (typeof BAZAAR_BODY_TYPES)[number];
+
+/** What the endpoint answers, for `info.output`. */
+export interface BazaarOutput {
+  /** Response content type, e.g. `json` or `text` (default: `json`) */
+  type?: string;
+  /** Additional format information */
+  format?: string;
+  /** A representative successful response */
+  example?: unknown;
+  /** JSON Schema of the response, which `example` must satisfy */
+  schema?: Record<string, unknown>;
+}
+
+interface BazaarInputCommon {
+  /** Example query parameters, as `info.input.queryParams` */
+  queryParams?: Record<string, unknown>;
+  /** JSON Schema of the query parameters (default: any object) */
+  queryParamsSchema?: Record<string, unknown>;
+  /** Example custom headers, as `info.input.headers` */
+  headers?: Record<string, string>;
+  /** What the endpoint answers */
+  output?: BazaarOutput;
+}
+
+/** An endpoint whose input travels in the query string. */
+export interface BazaarQueryEndpoint extends BazaarInputCommon {
+  /** GET, HEAD or DELETE */
+  method: BazaarQueryMethod;
+  body?: never;
+  bodyType?: never;
+  bodySchema?: never;
+}
+
+/** An endpoint whose input travels in a request body. */
+export interface BazaarBodyEndpoint extends BazaarInputCommon {
+  /** POST, PUT or PATCH */
+  method: BazaarBodyMethod;
+  /**
+   * Example request body (required by the spec). An object for `json` and
+   * `form-data`, a string for `text`. A facilitator probing the endpoint may
+   * send it, unpaid, to read the 402: pass `{}` if the endpoint needs nothing.
+   */
+  body: Record<string, unknown> | string;
+  /** Encoding of the body (default: `json`) */
+  bodyType?: BazaarBodyType;
+  /** JSON Schema of the body, which `body` must satisfy (default: any object, or any string for `text`) */
+  bodySchema?: Record<string, unknown>;
+}
+
+/** Options for {@link bazaarExtension}: the method decides which shape applies. */
+export type BazaarExtensionOptions = BazaarQueryEndpoint | BazaarBodyEndpoint;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return isObject(value) && !Array.isArray(value);
+}
+
+function bazaarFail(message: string): never {
+  throw new Error(`bazaarExtension: ${message}`);
+}
+
+/**
+ * Build the `bazaar` extension for an x402 v2 402 response.
+ *
+ * Declares how the endpoint is called (`info.input`: method, query parameters,
+ * body), what it answers (`info.output`), and the JSON Schema that validates
+ * both. With it a facilitator can catalog the endpoint and probe it with its
+ * own method (a POST endpoint with a POST and the example body), and an agent
+ * can call it straight from the challenge.
+ *
+ * Pass the result as `extensions` to {@link create402Response} and to
+ * {@link BazaarClient.registerResource}, or merge its `bazaar` key into an
+ * `extensions` object you build.
+ *
+ * Spec: https://github.com/coinbase/x402/blob/main/specs/extensions/bazaar.md
+ *
+ * @throws Error when the method is not one the spec names, when a POST, PUT
+ *   or PATCH has no `body`, when a GET, HEAD or DELETE has one, or when the
+ *   body does not match its `bodyType`.
+ *
+ * @example
+ * ```ts
+ * // POST endpoint with a JSON body
+ * const { body } = create402Response(
+ *   { amount: '0.05', recipient: '0x...', resource: 'https://api.example.com/search',
+ *     chainName: 'base', x402Version: 2 },
+ *   {
+ *     extensions: bazaarExtension({
+ *       method: 'POST',
+ *       body: { query: 'example' },
+ *       bodySchema: {
+ *         type: 'object',
+ *         properties: { query: { type: 'string' } },
+ *         required: ['query'],
+ *       },
+ *       output: { example: { results: [] } },
+ *     }),
+ *   }
+ * );
+ *
+ * // GET endpoint with query parameters
+ * bazaarExtension({ method: 'GET', queryParams: { city: 'Bogota' }, output: { example: { temp: 18 } } });
+ * ```
+ */
+export function bazaarExtension(options: BazaarExtensionOptions): {
+  bazaar: { info: Record<string, unknown>; schema: Record<string, unknown> };
+} {
+  if (!isPlainObject(options)) bazaarFail('options must be an object');
+
+  const method =
+    typeof options.method === 'string' ? options.method.trim().toUpperCase() : '';
+  const isQuery = (BAZAAR_QUERY_METHODS as readonly string[]).includes(method);
+  const isBody = (BAZAAR_BODY_METHODS as readonly string[]).includes(method);
+  if (!isQuery && !isBody) {
+    bazaarFail(
+      `method must be one of ${[...BAZAAR_QUERY_METHODS, ...BAZAAR_BODY_METHODS].join(', ')}, got ${JSON.stringify(options.method)}`
+    );
+  }
+
+  const { queryParams, queryParamsSchema, headers, output } = options;
+  if (queryParams !== undefined && !isPlainObject(queryParams)) {
+    bazaarFail('queryParams must be an object');
+  }
+  if (queryParamsSchema !== undefined && !isPlainObject(queryParamsSchema)) {
+    bazaarFail('queryParamsSchema must be an object (a JSON Schema)');
+  }
+  if (
+    headers !== undefined &&
+    (!isPlainObject(headers) || Object.values(headers).some((v) => typeof v !== 'string'))
+  ) {
+    bazaarFail('headers must be an object of strings');
+  }
+
+  const input: Record<string, unknown> = { type: 'http', method };
+  const inputSchemaProps: Record<string, unknown> = {
+    type: { type: 'string', const: 'http' },
+    method: {
+      type: 'string',
+      enum: [...(isBody ? BAZAAR_BODY_METHODS : BAZAAR_QUERY_METHODS)],
+    },
+  };
+
+  if (isBody) {
+    const { body, bodySchema } = options as BazaarBodyEndpoint;
+    const bodyType = (options as BazaarBodyEndpoint).bodyType ?? 'json';
+    if (!(BAZAAR_BODY_TYPES as readonly string[]).includes(bodyType)) {
+      bazaarFail(
+        `bodyType must be one of ${BAZAAR_BODY_TYPES.join(', ')}, got ${JSON.stringify(bodyType)}`
+      );
+    }
+    if (body === undefined || body === null) {
+      bazaarFail(
+        `${method} needs body, the example request body (pass {} if the endpoint takes none)`
+      );
+    }
+    if (bodyType === 'text' ? typeof body !== 'string' : !isPlainObject(body)) {
+      bazaarFail(
+        bodyType === 'text'
+          ? 'body must be a string when bodyType is text'
+          : `body must be an object when bodyType is ${bodyType}`
+      );
+    }
+    if (bodySchema !== undefined && !isPlainObject(bodySchema)) {
+      bazaarFail('bodySchema must be an object (a JSON Schema)');
+    }
+    input.bodyType = bodyType;
+    input.body = body;
+    inputSchemaProps.bodyType = { type: 'string', enum: [...BAZAAR_BODY_TYPES] };
+    inputSchemaProps.body =
+      bodySchema ?? { type: bodyType === 'text' ? 'string' : 'object' };
+  } else {
+    const rest = options as Partial<BazaarBodyEndpoint>;
+    if (rest.body !== undefined || rest.bodyType !== undefined || rest.bodySchema !== undefined) {
+      bazaarFail(
+        `${method} takes its input in the query string: use queryParams, or POST, PUT or PATCH for a body`
+      );
+    }
+  }
+
+  if (queryParams !== undefined) input.queryParams = queryParams;
+  if (headers !== undefined) input.headers = headers;
+  inputSchemaProps.queryParams = queryParamsSchema ?? { type: 'object' };
+  inputSchemaProps.headers = {
+    type: 'object',
+    additionalProperties: { type: 'string' },
+  };
+
+  const info: Record<string, unknown> = { input };
+  const schemaProps: Record<string, unknown> = {
+    input: {
+      type: 'object',
+      properties: inputSchemaProps,
+      required: isBody ? ['type', 'method', 'bodyType', 'body'] : ['type', 'method'],
+      additionalProperties: false,
+    },
+  };
+
+  if (output !== undefined) {
+    if (!isPlainObject(output)) bazaarFail('output must be an object');
+    if (output.type !== undefined && (typeof output.type !== 'string' || output.type === '')) {
+      bazaarFail('output.type must be a non-empty string such as json or text');
+    }
+    if (output.format !== undefined && typeof output.format !== 'string') {
+      bazaarFail('output.format must be a string');
+    }
+    if (output.schema !== undefined && !isPlainObject(output.schema)) {
+      bazaarFail('output.schema must be an object (a JSON Schema)');
+    }
+    info.output = {
+      type: output.type ?? 'json',
+      ...(output.format !== undefined ? { format: output.format } : {}),
+      ...(output.example !== undefined ? { example: output.example } : {}),
+    };
+    schemaProps.output = {
+      type: 'object',
+      properties: {
+        type: { type: 'string' },
+        format: { type: 'string' },
+        example: output.schema ?? {},
+      },
+      required: ['type'],
+    };
+  }
+
+  return {
+    bazaar: {
+      info,
+      schema: {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        type: 'object',
+        properties: schemaProps,
+        required: ['input'],
+      },
+    },
+  };
+}
 
 // ============================================================================
 // ESCROW & REFUND EXTENSION
