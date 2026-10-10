@@ -77,6 +77,7 @@ import type {
 } from '../types';
 import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
 import { toAtomicUnits } from '../utils/amount';
+import { assertTypedDataIntegersExact, toUint } from '../utils/uint';
 import {
   REVIEW_WINDOW_SEC,
   REFUND_WINDOW_SEC,
@@ -5067,6 +5068,31 @@ export interface PrepareRelayFeedbackResponse {
 }
 
 /**
+ * A v4 `typedData` with an integer the facilitator wrote as a JSON number
+ * above 2**53 - 1 is already rounded when `response.json()` hands it over, and
+ * a wallet that signs it authorises a different struct. Reported as a failure,
+ * like every refusal on this rail, and the document is not passed on.
+ */
+function refuseInexactRelayTypedData(
+  prepared: PrepareRelayFeedbackResponse,
+  network: Erc8004Network
+): PrepareRelayFeedbackResponse {
+  if (prepared?.typedData === undefined) return prepared;
+  try {
+    assertTypedDataIntegersExact(prepared.typedData, 'typedData');
+    return prepared;
+  } catch (error) {
+    return {
+      success: false,
+      delegated: false,
+      chainId: 0,
+      error: error instanceof Error ? error.message : String(error),
+      network,
+    };
+  }
+}
+
+/**
  * Request body for `POST /feedback/evm/submit`.
  *
  * The feedback parameters are not redundant with `prepare`: the facilitator
@@ -6164,7 +6190,7 @@ export class Erc8004Client {
         };
       }
 
-      return await response.json();
+      return refuseInexactRelayTypedData(await response.json(), request.network);
     } catch (error) {
       clearTimeout(timeoutId);
       return {
@@ -6513,12 +6539,12 @@ export class Erc8004Client {
   async prepareRelayedResponse(
     request: PrepareRelayResponseRequest
   ): Promise<PrepareRelayFeedbackResponse> {
-    return this.postRelay('/feedback/response/evm/prepare', request, {
-      success: false,
-      delegated: false,
-      chainId: 0,
-      network: request.network,
-    });
+    const prepared = await this.postRelay<PrepareRelayFeedbackResponse>(
+      '/feedback/response/evm/prepare',
+      request,
+      { success: false, delegated: false, chainId: 0, network: request.network }
+    );
+    return refuseInexactRelayTypedData(prepared, request.network);
   }
 
   /**
@@ -8762,7 +8788,9 @@ export class AdvancedEscrowClient {
     tuple: any[],
     amount: string,
   ): Promise<AdvancedTransactionResult> {
-    const requested = BigInt(amount);
+    // A number above 2**53 - 1 was rounded on its way in; compared against
+    // the chain it could match a capturable amount the caller never asked for.
+    const requested = toUint(amount, 'refundInEscrow amount', 'INVALID_AMOUNT');
     if (requested <= 0n) {
       return { success: false, error: `refundInEscrow amount must be positive, got ${amount}. Nothing was sent.` };
     }

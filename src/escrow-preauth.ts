@@ -53,6 +53,7 @@
 import { ethers } from 'ethers';
 import { getChainByName } from './chains';
 import { X402Error } from './types';
+import { inexactNumberMessage, toUint } from './utils/uint';
 import {
   needsAccountWrap,
   replaySafeTypedData,
@@ -254,6 +255,25 @@ function hex32(value: string): string {
   return value.startsWith('0x') ? value : `0x${value}`;
 }
 
+/**
+ * The salt as the uint256 the hash takes, from the bytes32 hex string the
+ * escrow wire carries (x402-rs: `FixedBytes<32>`). Anything else is refused: a
+ * number past 2**53 - 1 was rounded on its way in, and a bigint or a safe
+ * number has no hex form both SDKs agree on (the Python twin reads
+ * `str(salt)` as hex, so 12345 would hash as 0x12345).
+ */
+function escrowSaltToBigInt(salt: unknown): bigint {
+  if (typeof salt === 'string') return BigInt(hex32(salt));
+  if (typeof salt === 'number' && Number.isInteger(salt) && !Number.isSafeInteger(salt)) {
+    throw new X402Error(inexactNumberMessage('paymentInfo.salt', salt), 'INVALID_CONFIG');
+  }
+  throw new X402Error(
+    `paymentInfo.salt must be the bytes32 hex string the escrow wire carries, got the ${typeof salt} ` +
+      `${typeof salt === 'bigint' ? `${salt}n` : String(salt)}`,
+    'INVALID_CONFIG'
+  );
+}
+
 /** 32 random bytes as 0x-hex (WebCrypto when available, ethers otherwise). */
 function randomSalt(): string {
   const webCrypto = (globalThis as { crypto?: Crypto }).crypto;
@@ -279,6 +299,10 @@ function randomSalt(): string {
  * @param paymentInfoTypehash - 32-byte hex typehash from the server config.
  * @param pi - paymentInfo exactly as serialized on the wire.
  * @returns 32-byte hex nonce (0x-prefixed, lowercase).
+ * @throws {X402Error} `INVALID_CONFIG` when `maxAmount` is a number above
+ *   2**53 - 1 (it was rounded by `JSON.parse`, and hashing it would commit to
+ *   a different paymentInfo than the one that is sent), or when `salt` is not
+ *   a string.
  */
 export function computeEscrowNonce(
   chainId: number,
@@ -288,19 +312,22 @@ export function computeEscrowNonce(
 ): string {
   const coder = ethers.AbiCoder.defaultAbiCoder();
 
+  // `maxAmount` and `salt` are the two that do not fit in a double: as JSON
+  // numbers they arrive rounded, and `BigInt()` would hash the rounded value.
+  // The uint48 / uint16 fields fit, and ethers refuses an unsafe number there.
   const piTuple = [
     ethers.getAddress(pi.operator),
     ZERO_ADDRESS, // payer = 0 for the payer-agnostic hash
     ethers.getAddress(pi.receiver),
     ethers.getAddress(pi.token),
-    BigInt(pi.maxAmount), // uint120
+    toUint(pi.maxAmount, 'paymentInfo.maxAmount'), // uint120
     pi.preApprovalExpiry, // uint48
     pi.authorizationExpiry, // uint48
     pi.refundExpiry, // uint48
     pi.minFeeBps, // uint16
     pi.maxFeeBps, // uint16
     ethers.getAddress(pi.feeReceiver),
-    BigInt(hex32(pi.salt)), // uint256
+    escrowSaltToBigInt(pi.salt), // uint256
   ];
 
   const piHash = ethers.keccak256(
@@ -379,7 +406,8 @@ export interface EscrowPreAuthParams {
  * @throws {X402Error} `INVALID_CONFIG` on an incomplete network config,
  *   unknown tier, a `maxFeeBps` that cannot cover the operator's static
  *   fee, or a USDC domain that differs from {@link VERIFIED_USDC_DOMAINS};
- *   `INVALID_AMOUNT` on a bounty outside (0, deposit limit].
+ *   `INVALID_AMOUNT` on a bounty outside (0, deposit limit], or one that is
+ *   not a decimal / 0x-hex string, a bigint, or a number up to 2**53 - 1.
  */
 export async function buildEscrowPreAuth(
   wallet: EscrowPreAuthSigner,
@@ -410,7 +438,7 @@ export async function buildEscrowPreAuth(
     );
   }
 
-  const maxAmount = BigInt(params.bountyAtomic);
+  const maxAmount = toUint(params.bountyAtomic, 'bountyAtomic', 'INVALID_AMOUNT');
   if (maxAmount <= 0n) {
     throw new X402Error(
       `Bounty must be positive, got ${maxAmount} atomic units`,

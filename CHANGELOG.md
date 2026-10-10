@@ -15,7 +15,44 @@
 
 - `src/backend/fetch-paywall.test.ts` (21 tests): an Astro endpoint (an `APIRoute` called with its `APIContext`) and a Next.js route handler (called with a `NextRequest` and `{ params: Promise }`) behind the paywall, against a facilitator double on 127.0.0.1 with every other host refused: unpaid 402; paid and served with its params under one `Idempotency-Key` for verify and settle; a receipt merged into the route's own headers, and onto a redirect; a refused payment (402); no verdict (503 + `Retry-After`); `X-UVD-Purchase` binding the exact POST body, which the handler still reads; a body other than the bound one (400); an unconfirmed settle (500, the handler does not run); a handler that throws or returns `Response.error()` after a receipted settle (500 with the receipt), one that throws with no receipt (the error propagates), and the control flow that passes through: a thrown `Response` (rethrown with the receipt), Next.js' `redirect()` error and a SvelteKit-style thrown object (rethrown as they are, through Hono too); a `settle()` that ends after the handler returned. Also the same twelve outcomes through Hono and through the paywall; a verify receipt too large for a header (refused before the settle) and a settle receipt too large (served with the verify receipt); and the inputs it refuses, an Express `req` among them. Neither framework is installed: astro 7 needs Node >= 22.12 while CI runs Node 20, and next unpacks to 190 MB.
 
-## [2.101.0] - unreleased (dated the day it is published)
+## [2.102.0] - unreleased (dated the day it is published)
+
+### Fixed
+
+- A uint that arrives as a JSON number above `Number.MAX_SAFE_INTEGER` (2**53 - 1) is refused. It is never signed or hashed rounded. `JSON.parse` turns such a number into the nearest double, so a 32-byte `salt` written as a number came out as 7.76e+76 (for `0xab…ab`). The SDK then signed `BigInt()` of that double: a different `LifecycleOrder`, which the facilitator answers with `bad_signature`, and no error anywhere. The new error names the field, e.g. `paymentInfo.salt is the JSON number 7.76…e+76, larger in magnitude than Number.MAX_SAFE_INTEGER (2**53 - 1): JSON.parse has already rounded it…`. A decimal or 0x-hex string, or a bigint, carries any width and is accepted as before. The guard covers:
+  - `buildLifecycleTypedData` and `buildLifecycleAuth`: `amount` (`INVALID_AMOUNT`), `deadline`, every uint of `paymentInfo`, and the domain's `chainId` (`INVALID_CONFIG`).
+  - `lifecycleAuthFromSignature`: a document whose integer fields crossed JSON as such numbers (`INVALID_CONFIG`).
+  - `EnvKeyAdapter.signTypedData` and `wagmiLifecycleSigner`, which read typed data from a JSON string. Both now refuse before the wallet is asked, by the declared types: every `uintN` / `intN` of `message`, nested structs and arrays included, plus `domain.chainId`. `message` is walked as the root struct ethers signs and, when `primaryType` names another struct, as that one too: viem, wagmi and `eth_signTypedData_v4` sign the struct `primaryType` names. A number in a field the types do not declare is not hashed and is left alone. Before, ethers already refused such a value in `EnvKeyAdapter`, but as `overflow`, without naming the field. `OWSWalletAdapter` already refused; its message now says the value was rounded.
+  - `computeEscrowNonce`: `maxAmount`. Its `salt` must be the bytes32 hex string the escrow wire carries (x402-rs reads it as `FixedBytes<32>`): a bigint or a number is refused with an `X402Error`, where it used to throw a `TypeError`. The Python SDK reads `str(salt)` as hex, so a numeric salt has no form both SDKs would hash alike.
+  - `buildEscrowPreAuth`: `bountyAtomic` (`INVALID_AMOUNT`).
+  - `AdvancedEscrowClient.refundInEscrow` on a v3 operator (Arc, Arc Testnet): the `amount` that is compared with `capturableAmount` before `void`. The refusal comes back as `success: false`, before any chain read.
+  - `Erc8004Client.prepareRelayedFeedback` and `prepareRelayedResponse`: a v4 `typedData` from the facilitator with such an integer comes back as `success: false`, with the field named in `error` and without the document.
+  - `X402Client.fetch`: a 402 offer whose `amount` / `maxAmountRequired` is such a number (or a negative or fractional number) is unreadable, like an offer in a scheme this build cannot pay. A readable offer beside it is still paid at its exact price. If none is left, the `POLICY_REFUSED` error says which amount and why.
+  - `EVMProvider.encodePaymentHeader`: `value`, `validAfter` and `validBefore` of the payload. A `value` given as a safe number now goes out as a string, the wire type.
+  - `StellarProvider.encodePaymentHeader` (`amount`, `nonce`, `signatureExpirationLedger`) and `SuiProvider.encodePaymentHeader` (`amount`), which copy the payload into the header as it came.
+- Integer strings are stricter where the lifecycle order (the `deadline` that `lifecycleAuthFromSignature` reads included), the escrow pre-auth and the v3 `refundInEscrow` read them: decimal digits or 0x-hex only. Now refused, where `BigInt()` took them: `""` (read as `0n`, so an empty lifecycle `amount` was signed as zero), surrounding spaces (a v3 `refundInEscrow` amount of `' 5000000'` was compared as 5000000), a `+` sign, `'-0'` (read as 0), and `0o` / `0b`.
+- In the lifecycle order, a `paymentInfo.salt` string with more than 64 hex digits is refused. It is not a bytes32. It is what a decimal salt looks like (up to 78 digits) when read as hex, and both SDKs read a salt string as hex (Python: `int(salt, 16)`). Pass a decimal salt as a bigint.
+
+### Not changed
+
+- What the SDK emits. Every uint of the lifecycle order, of the escrow pre-auth and of the ERC-3009 authorizations it builds was already a string, and stays one. The JSON numbers left on its wire are bounded by their type: the `paymentInfo` expiries (uint48, below 2**48) and fee bounds (uint16), `chainId`, and `lifecycleAuth.deadline` (the facilitator's `u64`; `lifecycleAuthFromSignature` already refused one above 2**53 - 1).
+
+### Tests
+
+- `src/uint-json.test.ts` (87 tests) walks a real 32-byte salt (0xab*32) through every path above. As a JSON number it is refused, with the field named, and the signer is never called. As hex or a bigint it gives the digest and the signature the Python SDK computes for the same order (uvd-x402-sdk-python 0.95.0, pinned). Also covered:
+  - `toUint` at its edges: 2**53 - 1 accepted and 2**53 refused; `''`, `' 5'`, `'-5'` and `'1e6'` refused; `0X` hex accepted.
+  - The typed-data walk: nested structs, arrays, a negative `int`, an undeclared field left alone, and the struct `primaryType` names when it is not the root.
+  - A 402 with the bad amount beside a good offer, and the relayed-feedback documents.
+  - 2**60 + 1, which JSON rounds to an integer with no exponent, as a 402 price and as an EVM `value`.
+  - The Stellar and Sui headers.
+- `src/backend/escrow-arc-d.test.ts`: the v3 `void` amount. `src/adapters/ows.test.ts`: the OWS message.
+- `scripts/xlang/cross-language-conformance.mjs` sends both runtimes the `release/real-salt` order with the salt written as a JSON number. TypeScript refuses it and names the salt. Python reads the digits exactly and signs the `release/real-salt` bytes.
+
+### Docs
+
+- `docs/reports/2026-10-10-uint-como-numero-consumidores.md`: a read-only inventory of the consumer repos that write uints as JSON numbers, with file:line and a verdict per hit.
+
+## [2.101.0] - 2026-10-09
 
 ### Added (Bazaar)
 

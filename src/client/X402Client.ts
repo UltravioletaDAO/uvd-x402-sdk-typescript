@@ -34,6 +34,7 @@ import {
   canonicalRecipient,
 } from '../policy';
 import type { PolicyApproval, ReadChallenge } from '../policy';
+import { toUint } from '../utils/uint';
 import {
   SUPPORTED_CHAINS,
   getChainByName,
@@ -492,7 +493,12 @@ export class X402Client {
       // error it always had.
       const unreadableCount = challenge.unreadableCount ?? challenge.unreadable.length;
       if (unreadableCount > 0) {
-        throw new PolicyRefusedError(noReadableOffer(challenge.unreadable));
+        const refusal = noReadableOffer(challenge.unreadable);
+        throw new PolicyRefusedError(
+          challenge.inexactAmounts.length > 0
+            ? { ...refusal, message: `${refusal.message}; ${challenge.inexactAmounts.join('; ')}` }
+            : refusal
+        );
       }
       throw new X402Error(
         '402 response offered no usable payment options',
@@ -666,7 +672,7 @@ export class X402Client {
   private parse402(
     body: unknown,
     tokenType: TokenType
-  ): ReadChallenge & { version: X402Version } {
+  ): ReadChallenge & { version: X402Version; inexactAmounts: string[] } {
     const doc = (body ?? {}) as Record<string, unknown>;
     const version: X402Version = Number(doc.x402Version) === 2 ? 2 : 1;
 
@@ -678,6 +684,7 @@ export class X402Client {
 
     const offers: X402PaymentOffer[] = [];
     const unreadable: string[] = [];
+    const inexactAmounts: string[] = [];
     let unreadableCount = 0;
 
     /** Count an entry this build cannot pay, by scheme name when it has one. */
@@ -727,6 +734,19 @@ export class X402Client {
         cannotRead(accept);
         continue;
       }
+      // The price is a uint and the wire carries it as a string. As a JSON
+      // number above 2**53 - 1 it was rounded by `probe.json()`, and paying it
+      // would sign a different amount than the seller asked for: the offer is
+      // unreadable, and the refusal says why.
+      if (typeof amount === 'number') {
+        try {
+          toUint(amount, `the ${declaredScheme} offer's amount`, 'INVALID_AMOUNT');
+        } catch (error) {
+          inexactAmounts.push(error instanceof Error ? error.message : String(error));
+          cannotRead(accept);
+          continue;
+        }
+      }
       if (typeof payTo !== 'string' || !payTo) {
         cannotRead(accept);
         continue;
@@ -764,7 +784,7 @@ export class X402Client {
         ? (doc.extensions as Record<string, unknown>)
         : undefined;
 
-    return { version, offers, unreadable, unreadableCount, extensions };
+    return { version, offers, unreadable, unreadableCount, extensions, inexactAmounts };
   }
 
   /**
