@@ -30,6 +30,7 @@
 import { ethers } from 'ethers';
 import { getChainByName } from '../chains';
 import { X402Error } from '../types';
+import { parseTypedDataJson } from '../utils/uint';
 import type {
   SigningWalletAdapter,
   EIP3009Params,
@@ -84,6 +85,9 @@ export class EnvKeyAdapter implements SigningWalletAdapter {
    *
    * @param typedData - JSON string with `domain`, `types`, `primaryType`, and `message` fields
    * @returns Object with signature and v/r/s components
+   * @throws {X402Error} `INVALID_CONFIG` when an integer field of `message`
+   *   (or `domain.chainId`) is a JSON number above 2**53 - 1: `JSON.parse`
+   *   rounded it, so it is refused instead of signed. Write uints as strings.
    */
   async signTypedData(typedData: string): Promise<{
     signature: string;
@@ -91,7 +95,7 @@ export class EnvKeyAdapter implements SigningWalletAdapter {
     r: string;
     s: string;
   }> {
-    const parsed = JSON.parse(typedData) as {
+    const parsed = parseTypedDataJson(typedData) as {
       domain: ethers.TypedDataDomain;
       types: Record<string, Array<{ name: string; type: string }>>;
       primaryType: string;
