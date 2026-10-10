@@ -8,7 +8,7 @@
  * pay twice.
  *
  * The SDK already got this right, but only inside two private functions, one
- * per framework (`respondUnavailable` for Express, `honoUnavailable` for Hono).
+ * per framework (`respondUnavailable` for Express, and one inside the Hono middleware).
  * An integrator writing the handler by hand — Lambda, Hono, Next route, Fastify
  * — could not reach either, so they re-derived it, and re-derived it wrong.
  * `buildUnavailableResponse` is that decision as data: status, headers and body,

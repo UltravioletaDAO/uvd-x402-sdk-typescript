@@ -59,6 +59,11 @@ const settleReceipt = () => ({
   ...VERIFY_RECEIPT, operation: 'settle', status: 'confirmed', proof: null,
   settlement: { id: TX, idType: 'evm-transaction-hash' },
 });
+/** A valid receipt whose request is too large for a 32 KiB header once encoded. */
+function oversized<R extends { request: Record<string, unknown> }>(receipt: R): R {
+  const request = { ...receipt.request, note: 'x'.repeat(40_000) };
+  return { ...receipt, request, requestHash: receiptCommitment('uvd-x402-request-v1', request), proof: null };
+}
 
 // ---------------------------------------------------------------------------
 // The facilitator double, on loopback, and the closed network
@@ -122,6 +127,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   expect(leftLoopback, 'a request tried to leave loopback').toEqual([]);
 });
 
@@ -354,6 +360,33 @@ describe('a Next.js route handler behind createFetchPaywall', () => {
     expect(served).toEqual([]);
   });
 
+  it('a handler that fails after a receipted settle: 500 that keeps the receipt, the error logged', async () => {
+    facilitator.settle = withReceipt(SETTLED, settleReceipt());
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failure = new Error('database down');
+    const throwing = createFetchPaywall(options())(async (_request: NextRequest) => { throw failure; });
+    const response = await nextServes(throwing, { 'X-PAYMENT': xPayment() });
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Content-Type')).toBe('text/plain; charset=UTF-8');
+    expect(await response.text()).toBe('Internal Server Error');
+    expect(receiptFromResponse(response)?.settlement?.id).toBe(TX);
+    expect(logged).toHaveBeenCalledWith(failure);
+    // A Response no header can be added to, even by copying it, ends the same way.
+    const broken = createFetchPaywall(options())(async (_request: NextRequest) => Response.error());
+    const answer = await nextServes(broken, { 'X-PAYMENT': xPayment() });
+    expect(answer.status).toBe(500);
+    expect(receiptFromResponse(answer)?.settlement?.id).toBe(TX);
+    expect(paths()).toEqual(['verify', 'settle', 'verify', 'settle']);
+  });
+
+  it('a handler that fails with no receipt to keep: the error reaches the framework', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const throwing = createFetchPaywall(options())(async (_request: NextRequest) => { throw new Error('database down'); });
+    await expect(nextServes(throwing, { 'X-PAYMENT': xPayment() })).rejects.toThrow('database down');
+    expect(paths()).toEqual(['verify', 'settle']);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
   it('a settle() still running when the handler returns leaves the returned response alone', async () => {
     facilitator.settle = withReceipt(SETTLED, settleReceipt());
     let settling: Promise<unknown> | undefined;
@@ -378,48 +411,55 @@ describe('createFetchPaywall', () => {
   const URL_ = 'https://shop.example/data';
 
   it('answers every outcome as createHonoMiddleware does: they share one core', async () => {
-    const cases: Array<{ name: string; payment?: string; verify?: Answer; settle?: Answer }> = [
+    type Case = { name: string; headers?: Record<string, string>; verify?: Answer; settle?: Answer; throws?: boolean };
+    const paid = { 'X-PAYMENT': xPayment() };
+    const receipts = { verify: withReceipt(VERIFIED, VERIFY_RECEIPT), settle: withReceipt(SETTLED, settleReceipt()) };
+    const cases: Case[] = [
       { name: 'unpaid' },
-      { name: 'unreadable X-PAYMENT', payment: 'not a payment' },
-      { name: 'an amount no accept advertises', payment: xPayment('9999') },
-      { name: 'refused', payment: xPayment(), verify: { body: { isValid: false, invalidReason: 'invalid_exact_evm_payload_signature' } } },
-      { name: 'already settled, with its receipt', payment: xPayment(),
+      { name: 'unreadable X-PAYMENT', headers: { 'X-PAYMENT': 'not a payment' } },
+      { name: 'an amount no accept advertises', headers: { 'X-PAYMENT': xPayment('9999') } },
+      { name: 'refused', headers: paid, verify: { body: { isValid: false, invalidReason: 'invalid_exact_evm_payload_signature' } } },
+      { name: 'already settled, with its receipt', headers: paid,
         verify: withReceipt({ body: { isValid: false, invalidReason: AUTHORIZATION_ALREADY_SETTLED } }, VERIFY_RECEIPT) },
-      { name: 'in flight', payment: xPayment(), verify: { body: { isValid: false, invalidReason: AUTHORIZATION_IN_FLIGHT } } },
-      { name: 'no verdict', payment: xPayment(), verify: { status: 503, headers: { 'Retry-After': '7' }, body: { error: 'upstream unavailable' } } },
-      { name: 'settle unconfirmed', payment: xPayment(), settle: UNCONFIRMED },
-      { name: 'settle refused as used', payment: xPayment(),
+      { name: 'in flight', headers: paid, verify: { body: { isValid: false, invalidReason: AUTHORIZATION_IN_FLIGHT } } },
+      { name: 'no verdict', headers: paid, verify: { status: 503, headers: { 'Retry-After': '7' }, body: { error: 'upstream unavailable' } } },
+      { name: 'settle unconfirmed', headers: paid, settle: UNCONFIRMED },
+      { name: 'settle refused as used', headers: paid,
         settle: { status: 409, body: { success: false, error: AUTHORIZATION_ALREADY_SETTLED, retryable: false, safeToReplay: false } } },
-      { name: 'paid, with receipts', payment: xPayment(),
-        verify: withReceipt(VERIFIED, VERIFY_RECEIPT), settle: withReceipt(SETTLED, settleReceipt()) },
+      { name: 'paid, with receipts', headers: paid, ...receipts },
+      { name: 'paid through PAYMENT-SIGNATURE', headers: { 'PAYMENT-SIGNATURE': xPayment() }, ...receipts },
+      { name: 'paid, and the handler throws', headers: paid, ...receipts, throws: true },
     ];
-    const seen = (response: Response) => ({
+    const seen = async (response: Response) => ({
       status: response.status,
       contentType: response.headers.get('Content-Type'),
       retryAfter: response.headers.get('Retry-After'),
       paymentResponse: response.headers.get('PAYMENT-RESPONSE'),
+      xPaymentResponse: response.headers.get('X-PAYMENT-RESPONSE'),
+      exposeHeaders: response.headers.get('Access-Control-Expose-Headers'),
       cacheControl: response.headers.get('Cache-Control'),
+      body: await response.text(),
     });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     const statuses: number[] = [];
-    for (const { name, payment, verify, settle } of cases) {
+    for (const { name, headers = {}, verify, settle, throws } of cases) {
       facilitator.verify = verify ?? VERIFIED;
       facilitator.settle = settle ?? SETTLED;
-      const headers: Record<string, string> = payment ? { 'X-PAYMENT': payment } : {};
+      const serve = () => { if (throws) throw new Error('handler failed'); };
 
       const app = new Hono();
       app.use('/data', createHonoMiddleware(options()) as never);
-      app.get('/data', (c) => c.json({ served: true }));
+      app.get('/data', (c) => { serve(); return c.json({ served: true }); });
       const viaHono = await app.request(URL_, { headers });
 
-      const route = createFetchPaywall(options())(async (_request: Request) => Response.json({ served: true }));
+      const route = createFetchPaywall(options())(async (_request: Request) => { serve(); return Response.json({ served: true }); });
       const viaFetch = await route(new Request(URL_, { headers }));
 
-      expect({ name, ...seen(viaFetch), body: await viaFetch.json() })
-        .toEqual({ name, ...seen(viaHono), body: await viaHono.json() });
+      expect({ name, ...await seen(viaFetch) }).toEqual({ name, ...await seen(viaHono) });
       statuses.push(viaFetch.status);
     }
-    // The table covers every answer the core gives.
-    expect(statuses).toEqual([402, 400, 402, 402, 409, 503, 503, 500, 409, 200]);
+    // The table covers every answer the core gives, and the handler's failure.
+    expect(statuses).toEqual([402, 400, 402, 402, 409, 503, 503, 500, 409, 200, 200, 500]);
   });
 
   it('takes a Request, or an object whose request is one, and refuses anything else before asking the facilitator', async () => {
@@ -436,6 +476,8 @@ describe('createFetchPaywall', () => {
       { request: { url: URL_, headers: new Headers() } },
       { request: { method: 'GET', headers: new Headers() } },
       { url: new URL(URL_), method: 'GET', headers: new Headers() },
+      // An Express `req`: a path for a url, and plain headers.
+      { url: '/data', method: 'GET', headers: { 'x-payment': xPayment() } },
     ];
     for (const input of notRequests) {
       await expect(route(input), JSON.stringify(input) ?? String(input)).rejects.toThrow(/createFetchPaywall: call the route with a Request/);
@@ -447,15 +489,26 @@ describe('createFetchPaywall', () => {
     expect((await route({ request: new Request(URL_) })).status).toBe(402);
   });
 
-  it('a verify receipt too large for any header stops the purchase before the settle, as in Hono', async () => {
-    const request = { ...VERIFY_RECEIPT.request, note: 'x'.repeat(40_000) };
-    const huge = { ...VERIFY_RECEIPT, request, requestHash: receiptCommitment('uvd-x402-request-v1', request), proof: null };
-    facilitator.verify = withReceipt(VERIFIED, huge);
+  it('a verify receipt too large for any header stops the purchase before the settle', async () => {
+    facilitator.verify = withReceipt(VERIFIED, oversized(VERIFY_RECEIPT));
     const handler = vi.fn(async () => new Response('served'));
     const route = createFetchPaywall(options())(handler);
     await expect(route(new Request(URL_, { headers: { 'X-PAYMENT': xPayment() } }))).rejects.toThrow(/payment response too large/);
     expect(paths()).toEqual(['verify']);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('a settle receipt too large for any header never costs the paid response: served with the verify receipt', async () => {
+    facilitator.verify = withReceipt(VERIFIED, VERIFY_RECEIPT);
+    facilitator.settle = withReceipt(SETTLED, oversized(settleReceipt()));
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const route = createFetchPaywall(options())(async (_request: Request) => Response.json({ served: true }));
+    const response = await route(new Request(URL_, { headers: { 'X-PAYMENT': xPayment() } }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ served: true });
+    expect(receiptFromResponse(response)?.operation).toBe('verify');
+    expect(paths()).toEqual(['verify', 'settle']);
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('settled, but the payment response headers could not be attached'), expect.any(Error));
   });
 
   it('refuses, as Hono does, to be created without an accept', () => {

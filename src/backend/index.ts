@@ -2729,6 +2729,9 @@ function withPaymentHeaders(response: Response, result: VerifyResponse | SettleR
  * go on the response the handler returns, merged with its own
  * `Access-Control-Expose-Headers` and `Cache-Control`; in `'manual'` mode a
  * `settle()` that ends after the handler returned changes nothing in it.
+ * Once a receipt exists, a handler that throws gets the answer Hono's default
+ * error handler gives, a 500 that keeps the receipt headers, and the error
+ * goes to `console.error`. Without a receipt the error reaches the framework.
  *
  * The advertised `resource` is `request.url` unless an accept sets one. Behind
  * a proxy that rewrites the host, pin it in the accept.
@@ -2781,7 +2784,19 @@ export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
       });
       return withPaymentHeaders(response, receipted);
     }
-    return withPaymentHeaders(await handler(input, outcome.payment, ...rest), receipted);
+    try {
+      return withPaymentHeaders(await handler(input, outcome.payment, ...rest), receipted);
+    } catch (error) {
+      // The payment may already be settled, and the framework's own 500 would
+      // drop its receipt, the buyer's proof of it. Answered as Hono's default
+      // error handler answers, which keeps the headers the paywall set.
+      if (!receipted) throw error;
+      console.error(error);
+      return withPaymentHeaders(new Response('Internal Server Error', {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
+      }), receipted);
+    }
   };
 }
 
