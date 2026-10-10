@@ -888,11 +888,72 @@ app.post('/api/premium', async (req, res) => {
 });
 ```
 
-`createPaymentMiddleware()` and `createHonoMiddleware()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
+`createPaymentMiddleware()`, `createHonoMiddleware()` and `createFetchPaywall()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
+
+### Astro, Next.js, Vercel and Cloudflare (`createFetchPaywall`)
+
+A route that takes a `Request` and returns a `Response` gets the same paywall as `createHonoMiddleware`: same options, same answers, same code underneath. `createFetchPaywall(options)` returns a wrapper; the route it wraps runs only for a verified payment (settled first, unless `settlementStrategy: 'manual'`) and receives it as its second argument. Without a payment the route answers `402` with the accepts, and it never runs for a refused, unverifiable or already used one.
+
+**Astro** (`src/pages/api/premium/[id].ts`, on-demand rendering with any adapter, e.g. `@astrojs/vercel`):
+
+```typescript
+import type { APIRoute } from 'astro';
+import { createFetchPaywall } from 'uvd-x402-sdk/backend';
+
+// Run on every request: a prerendered endpoint is called once, at build time, without a payment.
+export const prerender = false;
+
+const paywall = createFetchPaywall({
+  accepts: [{
+    network: 'base',
+    asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+    amount: '10000', // $0.01 (6 decimals)
+    payTo: process.env.RECEIVING_ADDRESS as string,
+  }],
+});
+
+export const GET: APIRoute = paywall(async (context, x402) => {
+  return Response.json({ id: context.params.id, payer: x402.verifyResult.payer });
+});
+```
+
+**Next.js** (App Router, `app/api/articles/[slug]/route.ts`):
+
+```typescript
+import { createFetchPaywall } from 'uvd-x402-sdk/backend';
+
+const paywall = createFetchPaywall({ accepts: [/* as above */] });
+
+export const GET = paywall(async (request: Request, x402, { params }: { params: Promise<{ slug: string }> }) => {
+  const { slug } = await params;
+  const settled = await x402.settle(); // the settle already made before the handler ran
+  return Response.json({ slug, transaction: settled.transactionHash });
+});
+```
+
+**Vercel Functions and Cloudflare Workers** take the `Request` itself; whatever else the platform passes (`env`, `ctx`) comes after the payment:
+
+```typescript
+import { createFetchPaywall } from 'uvd-x402-sdk/backend';
+
+const paywall = createFetchPaywall({
+  accepts: [{ network: 'base', asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', amount: '10000', payTo: '0xYourWallet' }],
+});
+
+export default {
+  fetch: paywall(async (request: Request, x402, env: Env, ctx: ExecutionContext) => new Response('paid content')),
+};
+```
+
+- The route's first argument is the `Request`, or an object that carries it as `request` (Astro, SvelteKit, React Router). The handler gets that same first argument back, then the payment, then the rest.
+- The advertised `resource` is `request.url`. Behind a proxy that rewrites the host, set `resource` in the accept.
+- A facilitator receipt goes out as `PAYMENT-RESPONSE` on the response the handler returns, added to its own `Access-Control-Expose-Headers` and `Cache-Control` rather than replacing them; a `Response.redirect()` works too. In `'manual'` mode, a `settle()` that ends after the handler returned changes nothing in the response.
+- Once a receipt exists, a handler that throws an `Error` gets a `500` that keeps the receipt headers, as Hono's default error handler answers one, and the error goes to `console.error`: the buyer may have paid, and the receipt is their proof. Such an error does not reach the framework's error reporting (Next.js `onRequestError`, a Sentry wrapper); catch it inside the handler if it must. The framework's own control flow passes through untouched: a thrown `Response` (React Router, Remix) is rethrown with the receipt headers, and SvelteKit's `redirect()` / `error()` and Next.js' `redirect()` / `notFound()` are rethrown as they are, so the receipt does not ride on them; to send it with a redirect, return `Response.redirect()` instead. Without a receipt every error reaches the framework as usual.
+- The paywall answers every request that reaches it, `OPTIONS` included. If browsers on another origin pay, answer the preflight before the paywall (an `OPTIONS` export in Astro or Next.js, a method check in a Worker) and add `Access-Control-Allow-Origin` to what the route returns (`getCorsHeaders(origin)`).
 
 ### Stack key (services run by Ultravioleta DAO)
 
-Services run by Ultravioleta DAO carry a per-service credential, the stack key, so that the facilitator's rate-limit policy does not answer them `429`. Everything in this SDK that calls the facilitator sends it as `X-UVD-Stack-Key`: the clients `FacilitatorClient` (and the two middlewares), `Erc8004Client`, `BazaarClient`, `EscrowClient` and `AdvancedEscrowClient`, and the functions `anchorEvidence`, `availableBackends`, `streamTrafficEvents` and `getFacilitatorReceipt`, which take the same `stackKey` / `stackKeyHosts` options. It changes nothing else about a payment, and a facilitator that does not know the header ignores it.
+Services run by Ultravioleta DAO carry a per-service credential, the stack key, so that the facilitator's rate-limit policy does not answer them `429`. Everything in this SDK that calls the facilitator sends it as `X-UVD-Stack-Key`: the clients `FacilitatorClient` (and the two middlewares and `createFetchPaywall`), `Erc8004Client`, `BazaarClient`, `EscrowClient` and `AdvancedEscrowClient`, and the functions `anchorEvidence`, `availableBackends`, `streamTrafficEvents` and `getFacilitatorReceipt`, which take the same `stackKey` / `stackKeyHosts` options. It changes nothing else about a payment, and a facilitator that does not know the header ignores it.
 
 - **Where it comes from:** the facilitator's operator issues one per service: `uvdsk_` followed by 43-128 base64url characters. The process receives it as `UVD_STACK_KEY` (read by default) or as the `stackKey` option, from a secret store, never from code.
 - **Not for third parties:** if you integrate this SDK in your own product you have no key and need none. Leave both unset and no header is sent.
@@ -1248,7 +1309,7 @@ anti-double-settle guard, adopted here.
 
 ### Middleware
 
-`createPaymentMiddleware` and `createHonoMiddleware` answer **503 with a
+`createPaymentMiddleware`, `createHonoMiddleware` and `createFetchPaywall` answer **503 with a
 `Retry-After` header** — not `402`, not `500` — whenever the facilitator reached
 no verdict, and keep answering `402` for genuine rejections.
 
@@ -1260,7 +1321,7 @@ the buyer's client can reconcile instead of paying again.
 An X-PAYMENT the facilitator already admitted for another request is answered
 **`409`** (`authorization_already_settled`, `receipt_request_conflict`: it was
 used, the handler does not run) or **`503` + `Retry-After`** while it is
-`authorization_in_flight` — never `402` and never `500`. Both middlewares add
+`authorization_in_flight` — never `402` and never `500`. All three add
 `PAYMENT-RESPONSE` to an existing `Access-Control-Expose-Headers` and `no-store`
 to an existing `Cache-Control` instead of replacing them, and in `'manual'` mode
 a `settle()` after the handler already answered no longer touches the sent
@@ -2103,8 +2164,8 @@ the authorization and reuse it after uncertainty. Payment confirmation does not
 prove merchant delivery. See [the receipt guide](docs/facilitator-receipts.md).
 
 Every `/verify` and `/settle` carries an `Idempotency-Key`, the same one for both
-calls of a payment and for their retries: `verifyAndSettle` and both middlewares
-create one per payment, and `verify`/`settle` accept `{ idempotencyKey }`
+calls of a payment and for their retries: `verifyAndSettle`, both middlewares and
+`createFetchPaywall` create one per payment, and `verify`/`settle` accept `{ idempotencyKey }`
 (`createIdempotencyKey()`). The facilitator returns an admitted payment's original
 answer (`SettleResponse.replayed`, from `Idempotent-Replayed: true`) only to that
 key or to the buyer's `X-UVD-Purchase`; a resend without them is

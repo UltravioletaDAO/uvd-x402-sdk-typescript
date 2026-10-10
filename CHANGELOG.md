@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- `createFetchPaywall(options)` (exported from the root and from `uvd-x402-sdk/backend`): the x402 paywall for routes that take a `Request` and return a `Response`, such as Astro endpoints, Next.js route handlers, and Vercel and Cloudflare functions. It takes the options of `createHonoMiddleware` and returns a wrapper: `paywall(handler)` is the route, called with the handler's own arguments minus the payment, which the handler gets second (`(context, x402)` in Astro, `(request, x402, { params })` in Next.js, `(request, x402, env, ctx)` in a Worker). The first argument is the `Request`, or an object that carries it as `request`; anything else throws a `TypeError` before the facilitator is asked. A facilitator receipt goes out as `PAYMENT-RESPONSE` / `X-PAYMENT-RESPONSE` on the response the handler returns, merged with its own `Access-Control-Expose-Headers` and `Cache-Control`; a response whose headers are immutable (`Response.redirect()`) is copied to carry them. Once a receipt exists, a handler that throws an `Error` gets a 500 that keeps the receipt headers, as Hono's default error handler answers one, and the error goes to `console.error`; a thrown `Response` (React Router, Remix) is rethrown with the receipt headers, and a thrown non-`Error` (SvelteKit's `redirect()` / `error()`) or an `Error` with a `digest` (Next.js' `redirect()` / `notFound()`) is rethrown as it is. Without a receipt every error reaches the framework. Until now only Express and Hono had a middleware, and a seller on Astro or Next.js had to rebuild verify, settle and the 402 / 409 / 503 / 500 answers by hand.
+- New types: `FetchPaywall`, `FetchPaywallOptions`, `FetchRouteInput`.
+
+### Changed
+
+- `createHonoMiddleware` now runs on the same internal core as `createFetchPaywall`, so the two answer every outcome alike. Its behaviour does not change: every existing Hono test passes unmodified, and a new test runs twelve outcomes through both and compares the status, the body byte for byte, and the `Content-Type`, `Retry-After`, `PAYMENT-RESPONSE`, `X-PAYMENT-RESPONSE`, `Access-Control-Expose-Headers` and `Cache-Control` headers.
+
+### Tests
+
+- `src/backend/fetch-paywall.test.ts` (21 tests): an Astro endpoint (an `APIRoute` called with its `APIContext`) and a Next.js route handler (called with a `NextRequest` and `{ params: Promise }`) behind the paywall, against a facilitator double on 127.0.0.1 with every other host refused: unpaid 402; paid and served with its params under one `Idempotency-Key` for verify and settle; a receipt merged into the route's own headers, and onto a redirect; a refused payment (402); no verdict (503 + `Retry-After`); `X-UVD-Purchase` binding the exact POST body, which the handler still reads; a body other than the bound one (400); an unconfirmed settle (500, the handler does not run); a handler that throws or returns `Response.error()` after a receipted settle (500 with the receipt), one that throws with no receipt (the error propagates), and the control flow that passes through: a thrown `Response` (rethrown with the receipt), Next.js' `redirect()` error and a SvelteKit-style thrown object (rethrown as they are, through Hono too); a `settle()` that ends after the handler returned. Also the same twelve outcomes through Hono and through the paywall; a verify receipt too large for a header (refused before the settle) and a settle receipt too large (served with the verify receipt); and the inputs it refuses, an Express `req` among them. Neither framework is installed: astro 7 needs Node >= 22.12 while CI runs Node 20, and next unpacks to 190 MB.
+
 ## [2.102.0] - unreleased (dated the day it is published)
 
 ### Fixed
