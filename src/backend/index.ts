@@ -75,7 +75,7 @@ import type {
   X402PayloadData,
   X402Version,
 } from '../types';
-import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
+import { decodeX402Header, chainToCAIP2, encodeBase64Json, parseNetworkIdentifier } from '../utils';
 import { toAtomicUnits } from '../utils/amount';
 import { assertTypedDataIntegersExact, toUint } from '../utils/uint';
 import {
@@ -1773,6 +1773,9 @@ export function create402Response(
     headers: {
       'Content-Type': 'application/json',
       ...X402_CORS_HEADERS,
+      ...(version === 2
+        ? paymentRequiredHeader(advertisedRequirements[0], advertisedRequirements, options.extensions)
+        : {}),
     },
     body,
   };
@@ -1918,6 +1921,44 @@ function create402ResponseBody(
     : [{ ...normalizedPrimary }];
 
   return body;
+}
+
+/**
+ * The longest `PAYMENT-REQUIRED` value sent. Node's HTTP client, `fetch`
+ * included, refuses a response whose headers pass 16 KiB in all, so a longer
+ * one (a large `extensions`) is left out and the body carries the terms alone.
+ */
+const MAX_PAYMENT_REQUIRED_HEADER = 8192;
+
+/**
+ * The `PAYMENT-REQUIRED` header of a v2 402: base64 of the x402 v2
+ * PaymentRequired, `{ x402Version: 2, resource: { url, description,
+ * mimeType }, accepts, extensions? }`, each accept in the v2 shape and
+ * nothing else. x402 v2 carries the terms in this header, and its reference
+ * client (`@x402/core`) reads the body only for v1: without it, a v2 402 from
+ * this SDK could not be read by that client.
+ *
+ * `requirements` must already be in their v2 form. One whose network has no
+ * CAIP-2 form (XRPL) cannot be written in v2 and stays in the body only. No
+ * header when none is left, or when it would pass
+ * {@link MAX_PAYMENT_REQUIRED_HEADER}.
+ */
+function paymentRequiredHeader(
+  primary: PaymentRequirements,
+  requirements: PaymentRequirements[],
+  extensions?: Record<string, unknown>,
+): Record<string, string> {
+  const accepts = requirements
+    .filter((requirement) => isCaip2Network(requirement.network))
+    .map((requirement) => toPaymentRequirementsV2(requirement));
+  if (accepts.length === 0) return {};
+  const value = encodeBase64Json({
+    x402Version: 2,
+    resource: toResourceInfoV2(primary),
+    accepts,
+    ...(extensions !== undefined ? { extensions } : {}),
+  });
+  return value.length > MAX_PAYMENT_REQUIRED_HEADER ? {} : { 'PAYMENT-REQUIRED': value };
 }
 
 function getComparableNetwork(network: string): string {
@@ -2602,12 +2643,20 @@ function createAcceptsPaymentGate(options: HonoMiddlewareOptions) {
     );
 
     if (!paymentHeader) {
-      return reply(402, create402ResponseBody(
-        advertisedRequirements[0],
-        advertisedRequirements,
-        advertisedVersion,
-        options.facilitatorUrl
-      ));
+      return {
+        reply: {
+          status: 402,
+          headers: advertisedVersion === 2
+            ? paymentRequiredHeader(advertisedRequirements[0], advertisedRequirements)
+            : {},
+          body: create402ResponseBody(
+            advertisedRequirements[0],
+            advertisedRequirements,
+            advertisedVersion,
+            options.facilitatorUrl
+          ),
+        },
+      };
     }
 
     const parsed = parsePaymentHeader(paymentHeader);

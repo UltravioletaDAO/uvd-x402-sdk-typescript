@@ -1,7 +1,15 @@
+import { x402Client, x402HTTPClient } from '@x402/core/client';
+import { validatePaymentRequired } from '@x402/core/schemas';
 import { Wallet } from 'ethers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { create402Response, createHonoMiddleware, createPaymentMiddleware } from './index';
+import {
+  bazaarExtension,
+  create402Response,
+  createFetchPaywall,
+  createHonoMiddleware,
+  createPaymentMiddleware,
+} from './index';
 import { X402Client } from '../client/X402Client';
 import { CHAIN_ALIASES, SUPPORTED_CHAINS, getChainByName } from '../chains';
 import { CAIP2_IDENTIFIERS } from '../types';
@@ -29,16 +37,24 @@ const RESOURCE = 'https://api.example.com/premium';
 /** The networks with no CAIP-2 form: a v2 body cannot name them. */
 const NO_CAIP2 = ['xrpl', 'xrpl-testnet', 'xrpl-mainnet'];
 
-type Reply = { body: Record<string, unknown>; status: number };
+type Reply = { body: Record<string, unknown>; status: number; headers: Record<string, string> };
 type HonoOptions = Parameters<typeof createHonoMiddleware>[0];
 
-/** The 402 the middleware answers a request that carries no payment. */
+/** The 402 the middleware answers a request that carries no payment, with the headers it set. */
 async function challengeOf(options: HonoOptions): Promise<Reply> {
   const middleware = createHonoMiddleware(options);
-  return (await middleware(
-    { req: { header: () => undefined, url: RESOURCE }, json: (body, status) => ({ body, status }) },
+  const headers: Record<string, string> = {};
+  const reply = (await middleware(
+    {
+      req: { header: () => undefined, url: RESOURCE },
+      json: (body, status) => ({ body, status }),
+      header: (name, value) => {
+        headers[name] = value;
+      },
+    },
     async () => {}
-  )) as Reply;
+  )) as Omit<Reply, 'headers'>;
+  return { ...reply, headers };
 }
 
 function acceptsOf(body: Record<string, unknown>): Array<Record<string, unknown>> | undefined {
@@ -212,6 +228,154 @@ describe('create402Response and createPaymentMiddleware', () => {
   });
 });
 
+describe('the x402 reference client (@x402/core 2.28.0) reads every 402, offline', () => {
+  const reference = new x402HTTPClient(new x402Client());
+
+  /** What the reference client takes from a 402, checked against its own schema. */
+  function readByReference(headers: Record<string, string> | Headers, body: unknown) {
+    const getHeader = (name: string) =>
+      headers instanceof Headers
+        ? headers.get(name)
+        : (Object.entries(headers).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] ?? null);
+    return validatePaymentRequired(reference.getPaymentRequiredResponse(getHeader, body));
+  }
+
+  /** The header, decoded, for checks the schema does not make. */
+  function decodedHeader(headers: Record<string, string>): Record<string, unknown> {
+    return JSON.parse(Buffer.from(headers['PAYMENT-REQUIRED'], 'base64').toString('utf8'));
+  }
+
+  it('Hono, one accept (the README setup): v2 through PAYMENT-REQUIRED', async () => {
+    const extra = { name: 'Bridged USDC (SKALE Bridge)', version: '2' };
+    const { headers, body } = await challengeOf({ accepts: [{ ...oneAccept('skale-base', SKALE_USDC), extra }] });
+    const read = readByReference(headers, body);
+
+    expect(read.x402Version).toBe(2);
+    expect(read).toEqual({
+      x402Version: 2,
+      resource: { url: RESOURCE, description: 'Payment required', mimeType: 'application/json' },
+      accepts: [
+        {
+          scheme: 'exact',
+          network: 'eip155:1187947933',
+          asset: SKALE_USDC,
+          amount: '1000000',
+          payTo: PAY_TO,
+          maxTimeoutSeconds: 300,
+          extra,
+        },
+      ],
+    });
+    // Only the v2 fields: none of the body's extras (`facilitator`, a flat `resource`).
+    expect(decodedHeader(headers)).toEqual(read);
+  });
+
+  it('Hono, two accepts: both, in v2', async () => {
+    const { headers, body } = await challengeOf({
+      accepts: [oneAccept('base'), { ...oneAccept('ethereum'), amount: '2000000' }],
+      facilitatorUrl: 'https://facilitator.example.test',
+    });
+    const read = readByReference(headers, body);
+
+    expect(read.x402Version).toBe(2);
+    expect(read.accepts.map((accept) => [accept.network, 'amount' in accept ? accept.amount : undefined])).toEqual([
+      ['eip155:8453', '1000000'],
+      ['eip155:1', '2000000'],
+    ]);
+    expect(decodedHeader(headers).accepts).not.toContainEqual(expect.objectContaining({ facilitator: expect.anything() }));
+  });
+
+  it('Hono, two accepts with an XRPL one: the header carries the one v2 can name, the body both', async () => {
+    const { headers, body } = await challengeOf({ accepts: [oneAccept('xrpl', 'XRP'), oneAccept('base')] });
+    const read = readByReference(headers, body);
+
+    expect(read.accepts.map((accept) => accept.network)).toEqual(['eip155:8453']);
+    expect(acceptsOf(body)).toHaveLength(2);
+  });
+
+  it('Hono, pinned v1 and a lone XRPL accept: no header, and the v1 body with its accepts', async () => {
+    for (const options of [
+      { accepts: [oneAccept('base')], x402Version: 1 as const },
+      // A CAIP-2 id with no plain name keeps its colon in v1: still no header.
+      { accepts: [oneAccept('eip155:999999')], x402Version: 1 as const },
+      { accepts: [oneAccept('xrpl', 'XRP')] },
+    ]) {
+      const { headers, body } = await challengeOf(options);
+      const read = readByReference(headers, body);
+
+      expect(headers['PAYMENT-REQUIRED'], options.accepts[0].network).toBeUndefined();
+      expect(read.x402Version, options.accepts[0].network).toBe(1);
+      expect(read.accepts, options.accepts[0].network).toHaveLength(1);
+    }
+  });
+
+  it('Hono, x402Version: 2 pinned on a lone XRPL accept: no header, since v2 cannot name the network', async () => {
+    const { headers } = await challengeOf({ accepts: [oneAccept('xrpl', 'XRP')], x402Version: 2 });
+
+    expect(headers['PAYMENT-REQUIRED']).toBeUndefined();
+  });
+
+  it('createFetchPaywall, one accept: the Response carries PAYMENT-REQUIRED', async () => {
+    const paywall = createFetchPaywall({ accepts: [oneAccept('base')] });
+    const response = await paywall(async () => new Response('paid'))(new Request(RESOURCE));
+    const read = readByReference(response.headers, await response.json());
+
+    expect(response.status).toBe(402);
+    expect(read.x402Version).toBe(2);
+    expect(read.accepts).toHaveLength(1);
+  });
+
+  it('create402Response: v1 through the body, v2 through the header, extensions included', () => {
+    const requirement = { amount: '1.00', recipient: PAY_TO, resource: RESOURCE, chainName: 'base' };
+    const v1 = create402Response(requirement);
+    expect(v1.headers['PAYMENT-REQUIRED']).toBeUndefined();
+    expect(readByReference(v1.headers, v1.body)).toMatchObject({ x402Version: 1, accepts: [{ network: 'base' }] });
+
+    const extensions = bazaarExtension({ method: 'POST', body: { city: 'Bogota' } });
+    const v2 = create402Response({ ...requirement, x402Version: 2 }, { extensions });
+    const read = readByReference(v2.headers, v2.body);
+    expect(read).toMatchObject({ x402Version: 2, accepts: [{ network: 'eip155:8453', amount: '1000000' }] });
+    expect(read.x402Version === 2 && read.extensions).toEqual(extensions);
+  });
+
+  it('createPaymentMiddleware (Express), pinned v2: PAYMENT-REQUIRED goes out with the 402', async () => {
+    const middleware = createPaymentMiddleware(() => ({
+      amount: '1.00',
+      recipient: PAY_TO,
+      resource: RESOURCE,
+      x402Version: 2,
+    }));
+    const sent: { headers: Record<string, string>; body?: unknown } = { headers: {} };
+    const json = (body: unknown) => {
+      sent.body = body;
+    };
+    const res = {
+      status: () => ({
+        json,
+        set: (headers: Record<string, string>) => {
+          Object.assign(sent.headers, headers);
+          return { json };
+        },
+      }),
+    };
+
+    await middleware({ headers: {} }, res, () => {});
+
+    expect(readByReference(sent.headers, sent.body)).toMatchObject({ x402Version: 2, accepts: [{ network: 'eip155:8453' }] });
+  });
+
+  it('a header that would pass 8 KiB (a large extensions) is left out; the body still has the terms', () => {
+    const extensions = { large: { blob: 'x'.repeat(8000) } };
+    const { headers, body } = create402Response(
+      { amount: '1.00', recipient: PAY_TO, resource: RESOURCE, x402Version: 2 },
+      { extensions }
+    );
+
+    expect(headers['PAYMENT-REQUIRED']).toBeUndefined();
+    expect(acceptsOf(body)).toHaveLength(1);
+  });
+});
+
 describe('detectX402Version reads the declared version of a v1 402 with accepts', () => {
   const v1Spec = {
     x402Version: 1,
@@ -286,7 +450,11 @@ describe('a buyer pays the one-accept 402', () => {
     const fetchImpl = serve(middleware);
     const res = await client.fetch(RESOURCE, {
       fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
-        seen.push(Object.fromEntries(new Headers(init?.headers).entries()));
+        const sentHeaders: Record<string, string> = {};
+        new Headers(init?.headers).forEach((value, name) => {
+          sentHeaders[name] = value;
+        });
+        seen.push(sentHeaders);
         return fetchImpl(url, init);
       }) as typeof globalThis.fetch,
     });
@@ -326,7 +494,11 @@ describe('a buyer pays the one-accept 402', () => {
     const fetchImpl = serve(middleware);
     const res = await client.fetch(RESOURCE, {
       fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
-        seen.push(Object.fromEntries(new Headers(init?.headers).entries()));
+        const sentHeaders: Record<string, string> = {};
+        new Headers(init?.headers).forEach((value, name) => {
+          sentHeaders[name] = value;
+        });
+        seen.push(sentHeaders);
         return fetchImpl(url, init);
       }) as typeof globalThis.fetch,
     });
