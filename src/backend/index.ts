@@ -1722,8 +1722,11 @@ export class FacilitatorClient {
  *
  * `options.extensions` becomes the body's `extensions` (x402 v2 only), e.g.
  * `{ extensions: bazaarExtension({ method: 'POST', body: {} }) }`, which
- * declares the endpoint as a POST. Without it the body is exactly what it was
- * before the option existed.
+ * declares the endpoint as a POST. Without it the body has no `extensions`.
+ *
+ * The body carries `accepts` in either version, beside the first requirement's
+ * flat fields: in v2 one entry per requirement (`amount`, CAIP-2), in v1 the
+ * flat requirement itself (`maxAmountRequired`, the v1 network).
  */
 export function create402Response(
   requirements: PaymentRequirementsOptions,
@@ -1783,6 +1786,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * The version {@link createHonoMiddleware} advertises when none is pinned.
+ *
+ * v2 whenever an accept can be written in it. This used to answer v1 for a
+ * lone accept named without CAIP-2 (`skale-base`, `base`), which is how the
+ * middleware is usually set up.
+ *
+ * v1 stays for a lone accept whose network has no CAIP-2 form: XRPL
+ * (`xrpl`, `xrpl-testnet`, the alias `xrpl-mainnet`) and names the registry
+ * does not know. In v2 its network would be a plain name, which v2 does not
+ * allow. Two or more accepts were already v2, whatever their networks, and
+ * still are. Either way the 402 carries `accepts` (see
+ * {@link create402ResponseBody}).
+ */
 function resolveAdvertisedVersion(
   accepts: PaymentAcceptance[],
   requestedVersion?: X402Version | 'auto'
@@ -1791,7 +1808,7 @@ function resolveAdvertisedVersion(
     return requestedVersion;
   }
 
-  if (accepts.length > 1 || accepts.some((accept) => accept.network.includes(':'))) {
+  if (accepts.length > 1 || accepts.some((accept) => isCaip2Network(chainToCAIP2(accept.network)))) {
     return 2;
   }
 
@@ -1886,11 +1903,19 @@ function create402ResponseBody(
     ...normalizedPrimary,
   };
 
-  if (version === 2 && normalizedAdvertised.length > 1) {
-    body.accepts = normalizedAdvertised.map((requirements) =>
-      toPaymentAcceptance(requirements, facilitator)
-    );
-  }
+  // x402 puts the terms in `accepts` in both versions. It was written only in
+  // v2 and only for two or more, so a 402 with one way to pay, and every v1
+  // 402, had none. The flat fields stay beside it, in the version the body
+  // declares.
+  //
+  // v2 lists every requirement (`amount`, CAIP-2). v1 lists the one the body
+  // already carries flat (`maxAmountRequired`, the v1 network), and only that
+  // one: a v1 402 never showed a pinned seller's other accepts, and a buyer
+  // that picks the cheapest listed offer (`X402Client` does, whatever chain its
+  // wallet is on) would switch to one of them, or fail on it.
+  body.accepts = version === 2
+    ? normalizedAdvertised.map((requirements) => toPaymentAcceptance(requirements, facilitator))
+    : [{ ...normalizedPrimary }];
 
   return body;
 }
@@ -2416,7 +2441,11 @@ export function createPaymentMiddleware(
 export interface HonoMiddlewareOptions extends PaymentMiddlewareOptions {
   /** Payment requirements to advertise */
   accepts: PaymentAcceptance[];
-  /** Response version to advertise (defaults to auto) */
+  /**
+   * Response version to advertise (defaults to auto). Auto is v2, except for a
+   * lone accept on a network with no CAIP-2 form (XRPL), which stays v1. The
+   * 402 carries `accepts` in either version.
+   */
   x402Version?: X402Version | 'auto';
   /** Custom requirement resolver for ambiguous multi-accept flows */
   resolveRequirement?: PaymentRequirementResolver;
