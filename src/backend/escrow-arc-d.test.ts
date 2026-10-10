@@ -354,6 +354,18 @@ describe("v3 operator calls, ethers.Signer mode", () => {
     expect(sent).toEqual([]);
   });
 
+  it('refundInEscrow with an amount that crossed JSON as a number past 2**53 - 1 is refused before any read', async () => {
+    // 2**60 + 1 written as a JSON number arrives as 2**60. Against a capturable
+    // of exactly 2**60 it used to match, and void() refunded all of it.
+    const amount = JSON.parse(String(2n ** 60n + 1n)) as number as unknown as string;
+    const { client, sent, reads } = signerClient(chainId, { capturable: 2n ** 60n });
+    const result = await client.refundInEscrow(paymentInfo(chainId), amount);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^refundInEscrow amount is the JSON number .*MAX_SAFE_INTEGER/);
+    expect(sent).toEqual([]);
+    expect(reads.log).toEqual([]);
+  });
+
   it('refundInEscrow with nothing capturable is its own refusal, not the partial one', async () => {
     const { client, sent } = signerClient(chainId, { capturable: 0n });
     const result = await client.refundInEscrow(paymentInfo(chainId), '5000000');

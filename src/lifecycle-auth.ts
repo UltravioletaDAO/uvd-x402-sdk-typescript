@@ -60,6 +60,7 @@
 
 import { ethers } from 'ethers';
 import { X402Error } from './types';
+import { assertTypedDataIntegersExact, parseTypedDataJson, toUint } from './utils/uint';
 
 // ============================================================================
 // CONSTANTS — mirrored from lifecycle_auth.rs, do not "clean up"
@@ -160,7 +161,10 @@ export interface LifecyclePaymentInfo {
   minFeeBps: number | string;
   maxFeeBps: number | string;
   feeReceiver: string;
-  /** 32-byte hex on the wire; uint256 in the signature. */
+  /**
+   * 32-byte hex on the wire; uint256 in the signature. A number is accepted
+   * only up to 2**53 - 1: a real salt as a JSON number was already rounded.
+   */
   salt: string | number | bigint;
 }
 
@@ -253,21 +257,31 @@ export interface BuildLifecycleAuthParams extends LifecycleTypedDataParams {
  * the wire hex enters the signed struct as an INTEGER. Signing it as a
  * string yields a different digest and a mute `bad_signature` whose only
  * symptom is that no order ever verifies.
+ *
+ * A salt is 32 random bytes, so as a JSON NUMBER it has already been rounded
+ * by `JSON.parse` (`0xab…ab` arrives as 7.76e+76). `BigInt()` of that double
+ * used to be signed without a word; it is refused here ({@link toUint}).
  */
 function saltToBigInt(salt: unknown): bigint {
-  if (typeof salt === 'bigint') return salt;
-  if (typeof salt === 'number') {
-    if (!Number.isInteger(salt) || salt < 0) {
-      throw new X402Error(`paymentInfo.salt invalid: ${String(salt)}`, 'INVALID_CONFIG');
-    }
-    return BigInt(salt);
+  if (typeof salt === 'bigint' || typeof salt === 'number') {
+    return toUint(salt, 'paymentInfo.salt');
   }
   if (typeof salt === 'string') {
     const trimmed = salt.trim();
     // A bare hex string with no 0x is still hex here: that is how the wire
     // carries it in some payloads, and reading it as decimal would sign a
-    // different struct than the one that is sent.
+    // different struct than the one that is sent. The Python twin reads it
+    // the same way (`int(salt, 16)`).
     const hex = trimmed.startsWith('0x') || trimmed.startsWith('0X') ? trimmed : `0x${trimmed}`;
+    // More than 64 hex digits is not a bytes32. It is what a uint256 written
+    // in DECIMAL looks like (up to 78 digits for a 32-byte salt), read as hex.
+    if (hex.length - 2 > 64) {
+      throw new X402Error(
+        `paymentInfo.salt has ${hex.length - 2} hex digits and a bytes32 has 64: a salt string ` +
+          'is read as hex, as the wire carries it. Pass a decimal salt as a bigint',
+        'INVALID_CONFIG'
+      );
+    }
     try {
       return BigInt(hex);
     } catch {
@@ -328,17 +342,9 @@ function resolveOrderTiming(params: { deadline?: number; nonce?: string; now?: n
   };
 }
 
+/** A uint of the message, as a decimal STRING, so the document survives JSON. */
 function toUintString(value: unknown, field: string): string {
-  let n: bigint;
-  try {
-    n = typeof value === 'bigint' ? value : BigInt(value as string | number);
-  } catch {
-    throw new X402Error(`${field} must be a non-negative integer, got ${String(value)}`, 'INVALID_CONFIG');
-  }
-  if (n < 0n) {
-    throw new X402Error(`${field} must be a non-negative integer, got ${String(value)}`, 'INVALID_CONFIG');
-  }
-  return n.toString();
+  return toUint(value, field).toString();
 }
 
 // ============================================================================
@@ -373,8 +379,10 @@ function toUintString(value: unknown, field: string): string {
  * const lifecycleAuth = lifecycleAuthFromSignature(typedData, signature, payer);
  * ```
  *
- * @throws {X402Error} `INVALID_CONFIG` on an unknown action or a paymentInfo
- *   missing a field; `INVALID_AMOUNT` on a negative amount. Nothing IN THE
+ * @throws {X402Error} `INVALID_CONFIG` on an unknown action, a paymentInfo
+ *   missing a field, or a uint of the order given as a number above 2**53 - 1
+ *   (`JSON.parse` already rounded it); `INVALID_AMOUNT` on an amount that is
+ *   negative, not an integer, or such a number. Nothing IN THE
  *   SIGNED STRUCT is defaulted: an invented field is a signature over a
  *   different struct than the one that is sent, i.e. a rejection the caller
  *   cannot diagnose. `deadline` and `nonce` are the exception because they
@@ -391,15 +399,7 @@ export function buildLifecycleTypedData(params: LifecycleTypedDataParams): Lifec
     );
   }
 
-  let amountBig: bigint;
-  try {
-    amountBig = typeof amount === 'bigint' ? amount : BigInt(amount);
-  } catch {
-    throw new X402Error(`amount must be an integer >= 0, got ${String(amount)}`, 'INVALID_AMOUNT');
-  }
-  if (amountBig < 0n) {
-    throw new X402Error(`amount must be an integer >= 0, got ${String(amount)}`, 'INVALID_AMOUNT');
-  }
+  const amountBig = toUint(amount, 'amount', 'INVALID_AMOUNT');
 
   const pi = (paymentInfo ?? {}) as unknown as Record<string, unknown>;
   const missing = LIFECYCLE_PI_KEYS.filter((k) => pi[k] === undefined);
@@ -412,7 +412,7 @@ export function buildLifecycleTypedData(params: LifecycleTypedDataParams): Lifec
     );
   }
 
-  return {
+  const document: LifecycleTypedData = {
     domain: {
       name: LIFECYCLE_DOMAIN_NAME,
       version: LIFECYCLE_DOMAIN_VERSION,
@@ -445,6 +445,9 @@ export function buildLifecycleTypedData(params: LifecycleTypedDataParams): Lifec
       },
     },
   };
+  // Every uint above is a string; this is for `chainId`, the one number left.
+  assertTypedDataIntegersExact(document, 'lifecycle order');
+  return document;
 }
 
 // ============================================================================
@@ -576,6 +579,9 @@ export function lifecycleAuthFromSignature(
       'INVALID_CONFIG'
     );
   }
+  // A document that crossed JSON with a uint written as a number was signed
+  // over the rounded value, not over the order this backend will send.
+  assertTypedDataIntegersExact(td, 'typedData');
 
   // uint256 in the signature, a JSON number on the wire. The facilitator's
   // block is typed `u64`, so a deadline that lost precision here is an
@@ -672,7 +678,7 @@ export function wagmiLifecycleSigner(
   return {
     getAddress: () => checksummed,
     async signTypedData(typedData: string) {
-      const parsed = JSON.parse(typedData) as {
+      const parsed = parseTypedDataJson(typedData) as {
         domain: Record<string, unknown>;
         types: Record<string, Array<{ name: string; type: string }>>;
         primaryType: string;

@@ -111,8 +111,9 @@ async function resolvePython() {
   );
 }
 
+/** `payload` is an object, or the request text itself when its bytes matter. */
 async function ask(runtime, payload) {
-  const request = JSON.stringify(payload);
+  const request = typeof payload === 'string' ? payload : JSON.stringify(payload);
   const result =
     runtime.kind === 'node'
       ? await run(process.execPath, [NODE_AGENT], { input: request })
@@ -1138,6 +1139,40 @@ for (const c of LIFECYCLE_CASES) {
   }
 }
 
+// THE SALT AS A JSON NUMBER (2026-10-10). `release/real-salt` proves both SDKs
+// sign the same bytes when the salt travels as hex. This is the same order with
+// the salt written as a JSON NUMBER, as Python emitted it before 0.80.0. Python's
+// `json` reads the 77 digits exactly and signs the release/real-salt bytes.
+// JavaScript's `JSON.parse` has rounded them before the SDK sees the value, so
+// TypeScript must REFUSE: it used to sign `BigInt(7.76e+76)`, a different
+// struct, without a word. The request is written by hand because
+// `JSON.stringify` cannot emit an integer that wide.
+const REAL_SALT_CASE = LIFECYCLE_CASES.find((c) => c.id === 'release/real-salt');
+const numberSaltRequest = JSON.stringify({
+  op: 'sign_lifecycle',
+  cases: [
+    {
+      ...REAL_SALT_CASE,
+      id: 'release/real-salt-as-json-number',
+      paymentInfo: { ...REAL_SALT_CASE.paymentInfo, salt: '__SALT__' },
+    },
+  ],
+}).replace('"__SALT__"', BigInt(REAL_SALT_CASE.paymentInfo.salt).toString());
+const tsNumberSalt = (await ask(NODE, numberSaltRequest)).results[0];
+const pyNumberSalt = (await ask(PY, numberSaltRequest)).results[0];
+check(
+  typeof tsNumberSalt?.error === 'string' &&
+    tsNumberSalt.error.includes('paymentInfo.salt') &&
+    tsNumberSalt.error.includes('MAX_SAFE_INTEGER'),
+  'typescript refuses a 32-byte salt that arrived as a JSON number, naming the salt',
+  tsNumberSalt?.error ?? `signed ${tsNumberSalt?.signature}`
+);
+check(
+  !pyNumberSalt?.error && pyNumberSalt?.signature === pyLcById['release/real-salt']?.signature,
+  'python reads the same digits exactly and signs the release/real-salt bytes',
+  pyNumberSalt?.error ?? pyNumberSalt?.signature
+);
+
 // Every case is a distinct order, so no two may collide. A collision means one
 // of the signed fields is not actually reaching the digest.
 const lifecycleSignatures = LIFECYCLE_CASES.map((c) => tsLcById[c.id]?.signature).filter(Boolean);
@@ -1164,6 +1199,7 @@ console.log(
     `  ${PRICE_CASES.length} prices each SDK either billed or refused, compared integer to integer.\n` +
     `  ${LIFECYCLE_CASES.length} escrow lifecycle orders both SDKs signed, compared signature byte to byte
   AND document to document -- primaryType included, which no signature can prove.
+  1 order with a 32-byte salt written as a JSON number: TypeScript refused it, Python signed it exactly.
 ` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );

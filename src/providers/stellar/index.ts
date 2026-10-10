@@ -30,6 +30,7 @@ import type {
 import { X402Error } from '../../types';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
 import { toAtomicUnits } from '../../utils/amount';
+import { assertNoInexactNumber } from '../../utils/uint';
 
 /**
  * Browser-compatible text to Uint8Array encoding
@@ -353,6 +354,10 @@ export class StellarProvider implements WalletAdapter {
    */
   encodePaymentHeader(paymentPayload: string, version: X402Version = 1): string {
     const payload = JSON.parse(paymentPayload) as StellarPaymentPayload;
+    // An integer above 2**53 - 1 was rounded by the parse above, and the header
+    // would carry a value other than the one in the signed authorization entry.
+    const { amount, nonce, signatureExpirationLedger } = payload;
+    assertNoInexactNumber({ amount, nonce, signatureExpirationLedger }, 'paymentPayload');
 
     // Build the payload data
     const payloadData = {

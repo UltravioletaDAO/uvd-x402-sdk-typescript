@@ -597,6 +597,16 @@ describe.skipIf(!real)(
       // given as 1 (below).
       const LAXER_IN_ETHERS = ['uint256 with spaces', 'primaryType that is not the root'];
 
+      it('an integer past 2**53 - 1 is refused as a value JSON already rounded', async () => {
+        const { a, spy } = spied('signTypedData');
+        const salt = BigInt(`0x${'ab'.repeat(32)}`).toString();
+        const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${salt}`);
+        const error = await rejection(a.signTypedData(json));
+        expect(error.code).toBe('INVALID_CONFIG');
+        expect(error.message).toMatch(/^message\.amount is the JSON number 7\.76\d*e\+76.*MAX_SAFE_INTEGER/);
+        expect(spy).not.toHaveBeenCalled();
+      });
+
       it('ethers (EnvKeyAdapter) refuses the same, except where it is laxer', async () => {
         for (const [label, json] of cases) {
           const envSigns = await env.signTypedData(json).then(() => true, () => false);

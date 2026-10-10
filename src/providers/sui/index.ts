@@ -48,6 +48,7 @@ import { X402Error } from '../../types';
 import { getChainByName } from '../../chains';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
 import { toAtomicUnits } from '../../utils/amount';
+import { assertNoInexactNumber } from '../../utils/uint';
 
 // Lazy import Sui dependencies to avoid bundling when not used
 let SuiClient: typeof import('@mysten/sui/client').SuiClient;
@@ -358,6 +359,9 @@ export class SuiProvider implements WalletAdapter {
     version: X402Version = 1
   ): string {
     const payload = JSON.parse(paymentPayload) as SuiPaymentPayload;
+    // The payload goes out as it came. An `amount` above 2**53 - 1 written as a
+    // number was rounded by the parse above, and would not be the signed one.
+    assertNoInexactNumber({ amount: payload.amount }, 'paymentPayload');
 
     // Use chain name from config, or default to 'sui' for backward compatibility
     const networkName = chainConfig?.name || 'sui';
