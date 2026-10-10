@@ -890,6 +890,8 @@ app.post('/api/premium', async (req, res) => {
 
 `createPaymentMiddleware()`, `createHonoMiddleware()` and `createFetchPaywall()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
 
+A buyer in a browser on another origin reads the terms of a v2 402, in the `PAYMENT-REQUIRED` header, only if the app's CORS exposes that header: list it in `Access-Control-Expose-Headers` (with `hono/cors`, `exposeHeaders: ['PAYMENT-REQUIRED']`) and send `Access-Control-Allow-Origin`. The 402 of `createHonoMiddleware` and `createFetchPaywall` sets no CORS header of its own; `create402Response` lists the header in its `headers` but sets no `Access-Control-Allow-Origin` (spread `getCorsHeaders(origin)` too).
+
 ### Astro, Next.js, Vercel and Cloudflare (`createFetchPaywall`)
 
 A route that takes a `Request` and returns a `Response` gets the same paywall as `createHonoMiddleware`: same options, same answers, same code underneath. `createFetchPaywall(options)` returns a wrapper; the route it wraps runs only for a verified payment (settled first, unless `settlementStrategy: 'manual'`) and receives it as its second argument. Without a payment the route answers `402` with the accepts, and it never runs for a refused, unverifiable or already used one.
