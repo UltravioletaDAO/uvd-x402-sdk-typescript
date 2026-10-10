@@ -75,7 +75,7 @@ import type {
   X402PayloadData,
   X402Version,
 } from '../types';
-import { decodeX402Header, chainToCAIP2, parseNetworkIdentifier } from '../utils';
+import { decodeX402Header, chainToCAIP2, encodeBase64Json, parseNetworkIdentifier } from '../utils';
 import { toAtomicUnits } from '../utils/amount';
 import { assertTypedDataIntegersExact, toUint } from '../utils/uint';
 import {
@@ -1722,8 +1722,11 @@ export class FacilitatorClient {
  *
  * `options.extensions` becomes the body's `extensions` (x402 v2 only), e.g.
  * `{ extensions: bazaarExtension({ method: 'POST', body: {} }) }`, which
- * declares the endpoint as a POST. Without it the body is exactly what it was
- * before the option existed.
+ * declares the endpoint as a POST. Without it the body has no `extensions`.
+ *
+ * The body carries `accepts` in either version, beside the first requirement's
+ * flat fields: in v2 one entry per requirement (`amount`, CAIP-2), in v1 the
+ * flat requirement itself (`maxAmountRequired`, the v1 network).
  */
 export function create402Response(
   requirements: PaymentRequirementsOptions,
@@ -1770,6 +1773,9 @@ export function create402Response(
     headers: {
       'Content-Type': 'application/json',
       ...X402_CORS_HEADERS,
+      ...(version === 2
+        ? paymentRequiredHeader(advertisedRequirements[0], advertisedRequirements, options.extensions)
+        : {}),
     },
     body,
   };
@@ -1783,6 +1789,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * The version {@link createHonoMiddleware} advertises when none is pinned.
+ *
+ * v2 whenever an accept can be written in it. This used to answer v1 for a
+ * lone accept named without CAIP-2 (`skale-base`, `base`), which is how the
+ * middleware is usually set up.
+ *
+ * v1 stays for a lone accept whose network has no CAIP-2 form: XRPL
+ * (`xrpl`, `xrpl-testnet`, the alias `xrpl-mainnet`) and names the registry
+ * does not know. In v2 its network would be a plain name, which v2 does not
+ * allow. Two or more accepts were already v2, whatever their networks, and
+ * still are. Either way the 402 carries `accepts` (see
+ * {@link create402ResponseBody}).
+ */
 function resolveAdvertisedVersion(
   accepts: PaymentAcceptance[],
   requestedVersion?: X402Version | 'auto'
@@ -1791,7 +1811,7 @@ function resolveAdvertisedVersion(
     return requestedVersion;
   }
 
-  if (accepts.length > 1 || accepts.some((accept) => accept.network.includes(':'))) {
+  if (accepts.length > 1 || accepts.some((accept) => isCaip2Network(chainToCAIP2(accept.network)))) {
     return 2;
   }
 
@@ -1886,13 +1906,59 @@ function create402ResponseBody(
     ...normalizedPrimary,
   };
 
-  if (version === 2 && normalizedAdvertised.length > 1) {
-    body.accepts = normalizedAdvertised.map((requirements) =>
-      toPaymentAcceptance(requirements, facilitator)
-    );
-  }
+  // x402 puts the terms in `accepts` in both versions. It was written only in
+  // v2 and only for two or more, so a 402 with one way to pay, and every v1
+  // 402, had none. The flat fields stay beside it, in the version the body
+  // declares.
+  //
+  // v2 lists every requirement (`amount`, CAIP-2). v1 lists the one the body
+  // already carries flat (`maxAmountRequired`, the v1 network), and only that
+  // one: a v1 402 never showed a pinned seller's other accepts, and a buyer
+  // that picks the cheapest listed offer (`X402Client` does, whatever chain its
+  // wallet is on) would switch to one of them, or fail on it.
+  body.accepts = version === 2
+    ? normalizedAdvertised.map((requirements) => toPaymentAcceptance(requirements, facilitator))
+    : [{ ...normalizedPrimary }];
 
   return body;
+}
+
+/**
+ * The longest `PAYMENT-REQUIRED` value sent. Node's HTTP client, `fetch`
+ * included, refuses a response whose headers pass 16 KiB in all, so a longer
+ * one (a large `extensions`) is left out and the body carries the terms alone.
+ */
+const MAX_PAYMENT_REQUIRED_HEADER = 8192;
+
+/**
+ * The `PAYMENT-REQUIRED` header of a v2 402: base64 of the x402 v2
+ * PaymentRequired, `{ x402Version: 2, resource: { url, description,
+ * mimeType }, accepts, extensions? }`, each accept in the v2 shape and
+ * nothing else. x402 v2 carries the terms in this header, and its reference
+ * client (`@x402/core`) reads the body only for v1: without it, a v2 402 from
+ * this SDK could not be read by that client.
+ *
+ * `requirements` must already be in their v2 form. One whose network has no
+ * CAIP-2 form (XRPL) cannot be written in v2 and stays in the body only. No
+ * header when none is left, or when it would pass
+ * {@link MAX_PAYMENT_REQUIRED_HEADER}.
+ */
+function paymentRequiredHeader(
+  primary: PaymentRequirements,
+  requirements: PaymentRequirements[],
+  extensions?: Record<string, unknown>,
+): Record<string, string> {
+  const accepts = requirements
+    .filter((requirement) => isCaip2Network(requirement.network))
+    .map((requirement) => toPaymentRequirementsV2(requirement));
+  if (accepts.length === 0) return {};
+  const value = encodeBase64Json({
+    x402Version: 2,
+    resource: toResourceInfoV2(primary),
+    accepts,
+    ...(extensions !== undefined ? { extensions } : {}),
+  });
+  return value.length > MAX_PAYMENT_REQUIRED_HEADER ? {} : { 'PAYMENT-REQUIRED': value };
 }
 
 function getComparableNetwork(network: string): string {
@@ -2416,7 +2482,11 @@ export function createPaymentMiddleware(
 export interface HonoMiddlewareOptions extends PaymentMiddlewareOptions {
   /** Payment requirements to advertise */
   accepts: PaymentAcceptance[];
-  /** Response version to advertise (defaults to auto) */
+  /**
+   * Response version to advertise (defaults to auto). Auto is v2, except for a
+   * lone accept on a network with no CAIP-2 form (XRPL), which stays v1. The
+   * 402 carries `accepts` in either version.
+   */
   x402Version?: X402Version | 'auto';
   /** Custom requirement resolver for ambiguous multi-accept flows */
   resolveRequirement?: PaymentRequirementResolver;
@@ -2573,12 +2643,20 @@ function createAcceptsPaymentGate(options: HonoMiddlewareOptions) {
     );
 
     if (!paymentHeader) {
-      return reply(402, create402ResponseBody(
-        advertisedRequirements[0],
-        advertisedRequirements,
-        advertisedVersion,
-        options.facilitatorUrl
-      ));
+      return {
+        reply: {
+          status: 402,
+          headers: advertisedVersion === 2
+            ? paymentRequiredHeader(advertisedRequirements[0], advertisedRequirements)
+            : {},
+          body: create402ResponseBody(
+            advertisedRequirements[0],
+            advertisedRequirements,
+            advertisedVersion,
+            options.facilitatorUrl
+          ),
+        },
+      };
     }
 
     const parsed = parsePaymentHeader(paymentHeader);

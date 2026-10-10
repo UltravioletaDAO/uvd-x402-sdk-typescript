@@ -1832,7 +1832,7 @@ bazaarExtension({
 });
 ```
 
-The result is `{ bazaar: { info, schema } }`: `info.input` (`type: "http"`, `method`, then `bodyType` and `body` for a body method, or `queryParams` for a query method, plus optional `headers`), `info.output` (`type`, default `json`, and `example`), and `schema`, the JSON Schema (draft 2020-12) that `info` validates against. `bodyType` is `json` (default), `form-data` or `text` (then `body` is a string). A body method without `body`, a query method with one, or a method the spec does not name (`CONNECT`, `OPTIONS`, ...) throws. `extensions` is a v2 field: `create402Response` throws if the response would be v1 rather than dropping it, and without `extensions` it returns exactly what it returned before.
+The result is `{ bazaar: { info, schema } }`: `info.input` (`type: "http"`, `method`, then `bodyType` and `body` for a body method, or `queryParams` for a query method, plus optional `headers`), `info.output` (`type`, default `json`, and `example`), and `schema`, the JSON Schema (draft 2020-12) that `info` validates against. `bodyType` is `json` (default), `form-data` or `text` (then `body` is a string). A body method without `body`, a query method with one, or a method the spec does not name (`CONNECT`, `OPTIONS`, ...) throws. `extensions` is a v2 field: `create402Response` throws if the response would be v1 rather than dropping it, and without `extensions` the body has no `extensions` key.
 
 ## x402 v2 requests (`buildVerifyRequestV2` / `buildSettleRequestV2`)
 

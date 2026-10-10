@@ -66,8 +66,11 @@ export function detectX402Version(data: unknown): X402Version {
     return 2;
   }
 
-  // Check for v2 indicators
-  if (obj.accepts && Array.isArray(obj.accepts)) {
+  // Check for v2 indicators. A v1 402 carries `accepts` too (the spec's v1
+  // shape, and the v1 402 this SDK builds), so `accepts` does not outvote a
+  // declared 1. `X402Client` already takes the version from the field, not
+  // from `accepts`.
+  if (obj.accepts && Array.isArray(obj.accepts) && obj.x402Version !== 1) {
     return 2;
   }
 

@@ -191,10 +191,14 @@ describe('an Astro endpoint behind createFetchPaywall', () => {
     const response = await astroServes(module.GET);
     expect(response.status).toBe(402);
     expect(response.headers.get('Content-Type')).toBe('application/json');
+    // One accept on a network with a CAIP-2 form is advertised in v2, with
+    // `accepts`, and with the terms in PAYMENT-REQUIRED as x402 v2 carries them.
     expect(await response.json()).toMatchObject({
-      x402Version: 1, scheme: 'exact', network: 'base', maxAmountRequired: '10000',
+      x402Version: 2, scheme: 'exact', network: 'eip155:8453', maxAmountRequired: '10000',
       payTo: PAY_TO, asset: USDC_BASE, resource: ASTRO_URL,
+      accepts: [{ scheme: 'exact', network: 'eip155:8453', amount: '10000', payTo: PAY_TO, asset: USDC_BASE }],
     });
+    expect(response.headers.get('PAYMENT-REQUIRED')).toBeTruthy();
     expect(served).toEqual([]);
     expect(paths()).toEqual([]);
   });
@@ -320,7 +324,7 @@ describe('a Next.js route handler behind createFetchPaywall', () => {
     const { module, served } = nextRoute();
     const response = await nextServes(module.POST);
     expect(response.status).toBe(402);
-    expect(await response.json()).toMatchObject({ x402Version: 1, payTo: PAY_TO, resource: NEXT_URL });
+    expect(await response.json()).toMatchObject({ x402Version: 2, payTo: PAY_TO, resource: NEXT_URL });
     expect(served).toEqual([]);
     expect(paths()).toEqual([]);
   });
