@@ -32,6 +32,7 @@ import type {
   X402EVMPayload,
 } from '../../types';
 import { X402Error } from '../../types';
+import { assertNoInexactNumber } from '../../utils/uint';
 import { getChainByName, getChainById, getTokenConfig } from '../../chains';
 import {
   validateRecipient,
@@ -398,6 +399,11 @@ export class EVMProvider implements WalletAdapter {
     options: { includeTokenMetadata?: boolean } = {}
   ): string {
     const payload = JSON.parse(paymentPayload) as EVMPaymentPayload;
+    // The three uints of the authorization. A number above 2**53 - 1 was
+    // rounded by the parse above, and the header would carry a value other
+    // than the one that was signed.
+    const { value, validAfter, validBefore } = payload;
+    assertNoInexactNumber({ value, validAfter, validBefore }, 'paymentPayload');
 
     // Reconstruct full signature
     const fullSignature = payload.r + payload.s.slice(2) + payload.v.toString(16).padStart(2, '0');
@@ -408,7 +414,9 @@ export class EVMProvider implements WalletAdapter {
       authorization: {
         from: payload.from,
         to: payload.to,
-        value: payload.value,
+        // A safe number is written as the string the wire carries; anything
+        // else goes through as it came.
+        value: typeof (value as unknown) === 'number' ? String(value) : value,
         validAfter: payload.validAfter.toString(),
         validBefore: payload.validBefore.toString(),
         nonce: payload.nonce,

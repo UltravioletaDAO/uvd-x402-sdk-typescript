@@ -54,6 +54,7 @@
 import { ethers } from 'ethers';
 import { getChainByName } from '../chains';
 import { X402Error } from '../types';
+import { inexactNumberMessage } from '../utils/uint';
 import type {
   SigningWalletAdapter,
   EIP3009Params,
@@ -258,6 +259,8 @@ function refuse(message: string): X402Error {
 function toInteger(value: unknown, where: string): bigint {
   if (typeof value === 'bigint') return value;
   if (typeof value === 'number' && Number.isSafeInteger(value)) return BigInt(value);
+  // An integer past 2**53 - 1 is a value JSON.parse already rounded.
+  if (typeof value === 'number' && Number.isInteger(value)) throw refuse(inexactNumberMessage(where, value));
   if (typeof value === 'string' && /^-?(0[xX][0-9a-fA-F]+|[0-9]+)$/.test(value)) {
     return value.startsWith('-') ? -BigInt(value.slice(1)) : BigInt(value);
   }
