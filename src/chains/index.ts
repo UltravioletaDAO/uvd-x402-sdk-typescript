@@ -121,10 +121,12 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
         name: 'USD Coin',
         version: '2',
       },
+      // name() on-chain is "Euro Coin" here and "EURC" on Base: pinned to each
+      // contract's DOMAIN_SEPARATOR() by src/eurc-domains.test.ts.
       eurc: {
         address: '0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD',
         decimals: 6,
-        name: 'EURC',
+        name: 'Euro Coin',
         version: '2',
         usdPegged: false,
       },

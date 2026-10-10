@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- EURC on Avalanche (`0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD`) signs with the EIP-712 name `Euro Coin`, the one the contract has. The registry said `EURC` from the day EURC was added (2025-12-20) through 2.101.0, so every EURC authorization signed on Avalanche, by `EVMProvider.signPayment` and by `X402Client.createPayment`, was under a domain the contract does not have, and the contract rejects it. The Python SDK and the facilitator already said `Euro Coin`. Read on 2026-10-10 with `eth_call`: `name()` is `Euro Coin`, `version()` is `2`, and `DOMAIN_SEPARATOR()` (`0x094e957a…f4b1`, block 97214492) is the hash of that domain and not of the one with `EURC`. Base's EURC (`0x60a3…db42`) does say `EURC` on-chain and is unchanged.
+
+### Tests
+
+- `src/eurc-domains.test.ts` pins EURC on Avalanche, Base and Ethereum to what each contract returned for `name()`, `version()` and `DOMAIN_SEPARATOR()` (RPC and block in the file): the registry's domain must hash to the measured separator, both EVM signers (`EVMProvider.signPayment` and `X402Client.createPayment`) must sign under it and not under the other name, and every enabled EVM chain with EURC must have a row here or in `src/arc-eurc.test.ts`. Offline; the Python SDK pins the same rows.
+
 ## [2.101.0] - unreleased (dated the day it is published)
 
 ### Added (Bazaar)
