@@ -1,4 +1,4 @@
-import { parseFacilitatorReceipt, receiptFromErrorBody, mergePaymentResponseHeaders, validatePurchaseContext, type FacilitatorReceipt } from "../receipts";
+import { parseFacilitatorReceipt, receiptFromErrorBody, mergePaymentResponseHeaders, paymentResponseHeaders, validatePurchaseContext, type FacilitatorReceipt } from "../receipts";
 import { bytesToHex, randomBytes } from '@noble/hashes/utils';
 export * from "../receipts";
 import { parseUnits } from 'ethers';
@@ -2478,15 +2478,6 @@ function settlementFailureBody(
   };
 }
 
-/** {@link respondUnavailable} for a Hono context. */
-function honoUnavailable(
-  c: HonoLikeContext,
-  message: string,
-  failure: FacilitatorFailureFields & { error?: string; invalidReason?: string },
-): unknown {
-  return respondHono(c, buildUnavailableResponse(message, failure));
-}
-
 /** Send a framework-agnostic `{ status, headers, body }` through Hono. */
 function respondHono(
   c: HonoLikeContext,
@@ -2526,7 +2517,34 @@ function setHonoPaymentHeaders(c: HonoLikeContext, result: VerifyResponse | Sett
   }
 }
 
-export function createHonoMiddleware(options: HonoMiddlewareOptions) {
+/** The request as the accepts paywall reads it: Hono's `c.req`, or a `Request` behind {@link createFetchPaywall}. */
+type PaymentGateRequest = HonoLikeContext['req'];
+
+/** A framework-agnostic answer, sent instead of running the handler. */
+type PaymentGateReply = { status: number; headers: Record<string, string>; body: unknown };
+
+/** The paywall's decision for one request: answer it now, or serve it with this payment. */
+type PaymentGateOutcome = { reply: PaymentGateReply } | { payment: VerifiedPaymentState };
+
+/** Where the paywall hands what a framework must attach to its response. */
+interface PaymentGateHooks {
+  /** Each verify and settle result, for its `PAYMENT-RESPONSE` headers. A throw here propagates. */
+  onResult: (result: VerifyResponse | SettleResponse) => void;
+  /** The payment, once verified and before any settle. */
+  onVerified?: (payment: VerifiedPaymentState) => void;
+}
+
+/**
+ * The accepts paywall, without a framework: one decision per request, the same
+ * for {@link createHonoMiddleware} and {@link createFetchPaywall}.
+ *
+ * 402 with the accepts when nothing is paid; 400 for an unreadable X-PAYMENT
+ * or a mismatched `X-UVD-Purchase`; 402 for a refused payment; 409 or 503 for
+ * an authorization already admitted; 503 + `Retry-After` when the facilitator
+ * reached no verdict; 500 for a settle that failed for good. Otherwise the
+ * payment, settled first in `'before-handler'` mode.
+ */
+function createAcceptsPaymentGate(options: HonoMiddlewareOptions) {
   const client = new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
@@ -2540,31 +2558,27 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
     throw new Error('At least one accept entry is required');
   }
 
-  return async (
-    c: HonoLikeContext,
-    next: () => Promise<void>
-  ) => {
-    const paymentHeader = c.req.header('PAYMENT-SIGNATURE') || c.req.header('X-PAYMENT') || c.req.header('x-payment');
+  const reply = (status: number, body: unknown): PaymentGateOutcome => ({ reply: { status, headers: {}, body } });
+
+  return async (req: PaymentGateRequest, hooks: PaymentGateHooks): Promise<PaymentGateOutcome> => {
+    const paymentHeader = req.header('PAYMENT-SIGNATURE') || req.header('X-PAYMENT') || req.header('x-payment');
     const advertisedVersion = resolveAdvertisedVersion(options.accepts, options.x402Version);
     const advertisedRequirements = options.accepts.map((accept) =>
-      buildRequirementFromAcceptance(accept, c.req.url, advertisedVersion)
+      buildRequirementFromAcceptance(accept, req.url, advertisedVersion)
     );
 
     if (!paymentHeader) {
-      return c.json(
-        create402ResponseBody(
-          advertisedRequirements[0],
-          advertisedRequirements,
-          advertisedVersion,
-          options.facilitatorUrl
-        ),
-        402
-      );
+      return reply(402, create402ResponseBody(
+        advertisedRequirements[0],
+        advertisedRequirements,
+        advertisedVersion,
+        options.facilitatorUrl
+      ));
     }
 
     const parsed = parsePaymentHeader(paymentHeader);
     if (!parsed) {
-      return c.json({ error: 'Invalid X-PAYMENT header' }, 400);
+      return reply(400, { error: 'Invalid X-PAYMENT header' });
     }
 
     const { requirement, reason } = await resolvePaymentRequirement(
@@ -2574,60 +2588,200 @@ export function createHonoMiddleware(options: HonoMiddlewareOptions) {
     );
 
     if (!requirement) {
-      return c.json({
+      return reply(402, {
         error: 'Payment verification failed',
         reason,
-      }, 402);
+      });
     }
 
     let receiptContext: string | undefined;
     try {
-      const header = c.req.header('X-UVD-Purchase');
+      const header = req.header('X-UVD-Purchase');
       if (header) {
-        const method = c.req.method || c.req.raw?.method;
-        if (!method || (!['GET', 'HEAD'].includes(method) && !c.req.raw)) throw new Error('raw request required');
-        const bytes = c.req.raw ? new Uint8Array(await c.req.raw.clone().arrayBuffer()) : new Uint8Array();
-        receiptContext = validatePurchaseContext(header, method, c.req.url, bytes);
+        const method = req.method || req.raw?.method;
+        if (!method || (!['GET', 'HEAD'].includes(method) && !req.raw)) throw new Error('raw request required');
+        const bytes = req.raw ? new Uint8Array(await req.raw.clone().arrayBuffer()) : new Uint8Array();
+        receiptContext = validatePurchaseContext(header, method, req.url, bytes);
       }
-    } catch { return c.json({ error: 'receipt_context_mismatch' }, 400); }
+    } catch { return reply(400, { error: 'receipt_context_mismatch' }); }
     // One key for this payment's verify, settle and their retries.
     const binding = { idempotencyKey: createIdempotencyKey(), receiptContext };
     const verifyResult = await client.verify(parsed, requirement, binding);
-    setHonoPaymentHeaders(c, verifyResult);
+    hooks.onResult(verifyResult);
     if (!verifyResult.isValid) {
       // See the Express branch: an admitted authorization is 409 or 503.
       const conflict = buildPaymentConflictResponse(verifyResult);
-      if (conflict) return respondHono(c, conflict);
+      if (conflict) return { reply: conflict };
       // See respondUnavailable: 402 here would tell the buyer to sign again for
       // an authorization the facilitator never rejected.
       if (verifyResult.retryable) {
-        return honoUnavailable(c, 'Payment verification unavailable', verifyResult);
+        return { reply: buildUnavailableResponse('Payment verification unavailable', verifyResult) };
       }
-      return c.json({
+      return reply(402, {
         error: 'Payment verification failed',
         reason: verifyResult.invalidReason,
-      }, 402);
+      });
     }
 
     const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult, binding,
-      result => setHonoPaymentHeaders(c, result));
-    c.set?.('x402', verifiedPayment);
+      hooks.onResult);
+    hooks.onVerified?.(verifiedPayment);
 
     if (settlementStrategy === 'before-handler') {
       const settleResult = await verifiedPayment.settle();
       if (!settleResult.success) {
         const conflict = buildPaymentConflictResponse(settleResult);
-        if (conflict) return respondHono(c, conflict);
+        if (conflict) return { reply: conflict };
         if (settleResult.retryable) {
-          return honoUnavailable(c, 'Payment settlement unavailable', settleResult);
+          return { reply: buildUnavailableResponse('Payment settlement unavailable', settleResult) };
         }
         // See the Express branch: `settlement_unconfirmed` belongs here, with
         // its hash, and not behind a Retry-After.
-        return c.json(settlementFailureBody(settleResult, 'Unknown error'), 500);
+        return reply(500, settlementFailureBody(settleResult, 'Unknown error'));
       }
     }
 
+    return { payment: verifiedPayment };
+  };
+}
+
+export function createHonoMiddleware(options: HonoMiddlewareOptions) {
+  const gate = createAcceptsPaymentGate(options);
+
+  return async (
+    c: HonoLikeContext,
+    next: () => Promise<void>
+  ) => {
+    const outcome = await gate(c.req, {
+      onResult: (result) => setHonoPaymentHeaders(c, result),
+      onVerified: (payment) => c.set?.('x402', payment),
+    });
+    if ('reply' in outcome) return respondHono(c, outcome.reply);
     await next();
+  };
+}
+
+// ============================================================================
+// FETCH (Request -> Response) PAYWALL
+// ============================================================================
+
+/** Options of {@link createFetchPaywall}: the same as {@link createHonoMiddleware}'s. */
+export type FetchPaywallOptions = HonoMiddlewareOptions;
+
+/**
+ * What a route receives first: the `Request` itself (Next.js route handlers,
+ * Vercel and Cloudflare functions, `Deno.serve`, `Bun.serve`), or a context
+ * that carries it as `request` (Astro endpoints, SvelteKit, React Router).
+ */
+export type FetchRouteInput = Request | { request: Request };
+
+/**
+ * Wraps one route: the wrapped route takes the same arguments as `handler`
+ * minus the payment, and returns a `Response`.
+ */
+export type FetchPaywall = <I extends FetchRouteInput, A extends unknown[]>(
+  handler: (input: I, x402: VerifiedPaymentState, ...rest: A) => Response | Promise<Response>,
+) => (input: I, ...rest: A) => Promise<Response>;
+
+function isRequestLike(value: unknown): value is Request {
+  return isObject(value) && typeof value.url === 'string' && typeof value.method === 'string'
+    && isObject(value.headers) && typeof value.headers.get === 'function';
+}
+
+/** The `Request` in a route's first argument, in either shape of {@link FetchRouteInput}. */
+function requestOf(input: FetchRouteInput): Request {
+  if (isRequestLike(input)) return input;
+  if (isObject(input) && isRequestLike(input.request)) return input.request;
+  throw new TypeError('createFetchPaywall: call the route with a Request, or with an object whose `request` is one');
+}
+
+/**
+ * `response` with the `PAYMENT-RESPONSE` headers of `result`, merged into the
+ * CORS expose list and the cache directives it already carries. A response
+ * whose headers are immutable (`Response.redirect()`, a proxied `fetch()`) is
+ * copied first.
+ */
+function withPaymentHeaders(response: Response, result: VerifyResponse | SettleResponse | undefined): Response {
+  if (!result) return response;
+  const headers = mergePaymentResponseHeaders(propagatedResult(result), (name) => response.headers.get(name) ?? undefined);
+  try {
+    for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+    return response;
+  } catch {
+    const copy = new Response(response.body, response);
+    for (const [name, value] of Object.entries(headers)) copy.headers.set(name, value);
+    return copy;
+  }
+}
+
+/**
+ * Create an x402 paywall for routes that take a `Request` and return a
+ * `Response`: Astro endpoints, Next.js route handlers, Vercel and Cloudflare
+ * functions, and anything else built on the Fetch API.
+ *
+ * Same options and same decisions as {@link createHonoMiddleware}, from the
+ * same code: 402 with the accepts when nothing is paid, 400 for an unreadable
+ * X-PAYMENT, 402 for a refused payment, 409 / 503 for an authorization already
+ * admitted, 503 + `Retry-After` when the facilitator reached no verdict, 500
+ * for a settle that failed for good. The handler runs only for a verified
+ * payment, settled first unless `settlementStrategy: 'manual'`, and gets it as
+ * its second argument. The `PAYMENT-RESPONSE` headers of a facilitator receipt
+ * go on the response the handler returns, merged with its own
+ * `Access-Control-Expose-Headers` and `Cache-Control`; in `'manual'` mode a
+ * `settle()` that ends after the handler returned changes nothing in it.
+ *
+ * The advertised `resource` is `request.url` unless an accept sets one. Behind
+ * a proxy that rewrites the host, pin it in the accept.
+ *
+ * @example Astro (`src/pages/api/premium.ts`)
+ * ```ts
+ * import type { APIRoute } from 'astro';
+ * import { createFetchPaywall } from 'uvd-x402-sdk/backend';
+ *
+ * export const prerender = false;
+ * const paywall = createFetchPaywall({ accepts: [{ network: 'base', asset: USDC, amount: '10000', payTo }] });
+ *
+ * export const GET: APIRoute = paywall(async (context, x402) =>
+ *   Response.json({ premium: true, payer: x402.verifyResult.payer, id: context.params.id }));
+ * ```
+ *
+ * @example Next.js (`app/api/premium/route.ts`)
+ * ```ts
+ * export const GET = paywall(async (request: Request, x402) => Response.json({ premium: true }));
+ * ```
+ *
+ * @example Cloudflare Workers
+ * ```ts
+ * export default { fetch: paywall(async (request: Request, x402, env: Env) => new Response('paid')) };
+ * ```
+ */
+export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
+  const gate = createAcceptsPaymentGate(options);
+
+  return (handler) => async (input, ...rest) => {
+    const request = requestOf(input);
+    // The latest result with a receipt. Encoded here, where Hono sets the
+    // header, so a receipt no header can carry fails before the settle.
+    let receipted: VerifyResponse | SettleResponse | undefined;
+    const outcome = await gate(
+      { header: (name) => request.headers.get(name) ?? undefined, url: request.url, method: request.method, raw: request },
+      {
+        onResult: (result) => {
+          if (!result.receipt) return;
+          paymentResponseHeaders(propagatedResult(result));
+          receipted = result;
+        },
+      },
+    );
+    if ('reply' in outcome) {
+      const { status, headers, body } = outcome.reply;
+      const response = new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json', ...headers },
+      });
+      return withPaymentHeaders(response, receipted);
+    }
+    return withPaymentHeaders(await handler(input, outcome.payment, ...rest), receipted);
   };
 }
 

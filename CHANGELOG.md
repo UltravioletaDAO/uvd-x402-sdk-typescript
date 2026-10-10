@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- `createFetchPaywall(options)` (exported from the root and from `uvd-x402-sdk/backend`): the x402 paywall for routes that take a `Request` and return a `Response`, such as Astro endpoints, Next.js route handlers, and Vercel and Cloudflare functions. It takes the options of `createHonoMiddleware` and returns a wrapper: `paywall(handler)` is the route, called with the handler's own arguments minus the payment, which the handler gets second (`(context, x402)` in Astro, `(request, x402, { params })` in Next.js, `(request, x402, env, ctx)` in a Worker). The first argument is the `Request`, or an object that carries it as `request`; anything else throws a `TypeError` before the facilitator is asked. A facilitator receipt goes out as `PAYMENT-RESPONSE` / `X-PAYMENT-RESPONSE` on the response the handler returns, merged with its own `Access-Control-Expose-Headers` and `Cache-Control`; a response whose headers are immutable (`Response.redirect()`) is copied to carry them. Until now only Express and Hono had a middleware, and a seller on Astro or Next.js had to rebuild verify, settle and the 402 / 409 / 503 / 500 answers by hand.
+- New types: `FetchPaywall`, `FetchPaywallOptions`, `FetchRouteInput`.
+
+### Changed
+
+- `createHonoMiddleware` now runs on the same internal core as `createFetchPaywall`, so the two answer every outcome alike. Its behaviour does not change: every existing Hono test passes unmodified, and a new test runs ten outcomes through both and compares status, body and headers.
+
+### Tests
+
+- `src/backend/fetch-paywall.test.ts` (16 tests): an Astro endpoint (an `APIRoute` called with its `APIContext`) and a Next.js route handler (called with a `NextRequest` and `{ params: Promise }`) behind the paywall, against a facilitator double on 127.0.0.1 with every other host refused: unpaid 402; paid and served with its params under one `Idempotency-Key` for verify and settle; a receipt merged into the route's own headers, and onto a redirect; a refused payment (402); no verdict (503 + `Retry-After`); `X-UVD-Purchase` binding the exact POST body, which the handler still reads; a body other than the bound one (400); an unconfirmed settle (500, the handler does not run); a `settle()` that ends after the handler returned. Also the same ten outcomes through Hono and through the paywall, and the inputs it refuses. Neither framework is installed: astro 7 needs Node >= 22.12 while CI runs Node 20, and next unpacks to 190 MB.
+
 ## [2.101.0] - unreleased (dated the day it is published)
 
 ### Added (Bazaar)

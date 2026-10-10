@@ -438,6 +438,9 @@ export {
   FacilitatorClient,
   createPaymentMiddleware,
   createHonoMiddleware,
+  // The same paywall for routes that take a Request and return a Response:
+  // Astro endpoints, Next.js route handlers, Vercel and Cloudflare functions.
+  createFetchPaywall,
   create402Response,
   // The `bazaar` entry of a v2 challenge's `extensions` (x402 bazaar spec):
   // how the endpoint is called (POST with a body, GET with a query), and what
@@ -504,6 +507,9 @@ export type {
   FacilitatorClientOptions,
   StackKeyOptions,
   HonoMiddlewareOptions,
+  FetchPaywall,
+  FetchPaywallOptions,
+  FetchRouteInput,
   PaymentAcceptance,
   PaymentMiddlewareOptions,
   VerifiedPaymentState,
