@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.103.0] - 2026-10-10
+
 ### Added
 
 - `createFetchPaywall(options)` (exported from the root and from `uvd-x402-sdk/backend`): the x402 paywall for routes that take a `Request` and return a `Response`, such as Astro endpoints, Next.js route handlers, and Vercel and Cloudflare functions. It takes the options of `createHonoMiddleware` and returns a wrapper: `paywall(handler)` is the route, called with the handler's own arguments minus the payment, which the handler gets second (`(context, x402)` in Astro, `(request, x402, { params })` in Next.js, `(request, x402, env, ctx)` in a Worker). The first argument is the `Request`, or an object that carries it as `request`; anything else throws a `TypeError` before the facilitator is asked. A facilitator receipt goes out as `PAYMENT-RESPONSE` / `X-PAYMENT-RESPONSE` on the response the handler returns, merged with its own `Access-Control-Expose-Headers` and `Cache-Control`; a response whose headers are immutable (`Response.redirect()`) is copied to carry them. Once a receipt exists, a handler that throws an `Error` gets a 500 that keeps the receipt headers, as Hono's default error handler answers one, and the error goes to `console.error`; a thrown `Response` (React Router, Remix) is rethrown with the receipt headers, and a thrown non-`Error` (SvelteKit's `redirect()` / `error()`) or an `Error` with a `digest` (Next.js' `redirect()` / `notFound()`) is rethrown as it is. Without a receipt every error reaches the framework. Until now only Express and Hono had a middleware, and a seller on Astro or Next.js had to rebuild verify, settle and the 402 / 409 / 503 / 500 answers by hand.
@@ -39,6 +41,10 @@
   - On the previous code 19 of the 24 fail. The other five pass on both: two accepts, `accepts` without a version, the two v1 payments, and no header for pinned v2 on XRPL.
 - `src/backend/fetch-paywall.test.ts`: the two unpaid 402s (Astro and Next.js, one `base` accept) are now v2, as the rule above says; the Astro one also checks `accepts` and `PAYMENT-REQUIRED`.
 - `src/eurc-domains.test.ts` pins EURC on Avalanche, Base and Ethereum to what each contract returned for `name()`, `version()` and `DOMAIN_SEPARATOR()` (RPC and block in the file): the registry's domain must hash to the measured separator, both EVM signers (`EVMProvider.signPayment` and `X402Client.createPayment`) must sign under it and not under the other name, and every enabled EVM chain with EURC must have a row here or in `src/arc-eurc.test.ts`. Offline; the Python SDK pins the same rows.
+
+### Docs
+
+- README: a buyer in a browser on another origin reads the v2 402's terms, in `PAYMENT-REQUIRED`, only if the app's CORS exposes that header. The 402 of `createHonoMiddleware` and `createFetchPaywall` sets no CORS header of its own, and `create402Response` lists the header in `Access-Control-Expose-Headers` but sets no `Access-Control-Allow-Origin`.
 
 ## [2.102.0] - 2026-10-10
 
