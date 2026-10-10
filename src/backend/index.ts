@@ -2528,7 +2528,11 @@ type PaymentGateOutcome = { reply: PaymentGateReply } | { payment: VerifiedPayme
 
 /** Where the paywall hands what a framework must attach to its response. */
 interface PaymentGateHooks {
-  /** Each verify and settle result, for its `PAYMENT-RESPONSE` headers. A throw here propagates. */
+  /**
+   * Each verify and settle result, for its `PAYMENT-RESPONSE` headers. A throw
+   * on the verify result propagates; on a settle result it is logged, because
+   * the payment is settled by then (see {@link createVerifiedPaymentState}).
+   */
   onResult: (result: VerifyResponse | SettleResponse) => void;
   /** The payment, once verified and before any settle. */
   onVerified?: (payment: VerifiedPaymentState) => void;
@@ -2729,9 +2733,13 @@ function withPaymentHeaders(response: Response, result: VerifyResponse | SettleR
  * go on the response the handler returns, merged with its own
  * `Access-Control-Expose-Headers` and `Cache-Control`; in `'manual'` mode a
  * `settle()` that ends after the handler returned changes nothing in it.
- * Once a receipt exists, a handler that throws gets the answer Hono's default
- * error handler gives, a 500 that keeps the receipt headers, and the error
- * goes to `console.error`. Without a receipt the error reaches the framework.
+ * Once a receipt exists, a handler that throws an `Error` gets the answer
+ * Hono's default error handler gives one, a 500 that keeps the receipt
+ * headers, and the error goes to `console.error`. A thrown `Response` is
+ * rethrown with the receipt headers; a thrown non-`Error` (SvelteKit's
+ * `redirect()`) or an `Error` with a `digest` (Next.js' `redirect()`,
+ * `notFound()`) is rethrown as it is. Without a receipt every error reaches
+ * the framework.
  *
  * The advertised `resource` is `request.url` unless an accept sets one. Behind
  * a proxy that rewrites the host, pin it in the accept.
@@ -2787,10 +2795,17 @@ export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
     try {
       return withPaymentHeaders(await handler(input, outcome.payment, ...rest), receipted);
     } catch (error) {
-      // The payment may already be settled, and the framework's own 500 would
-      // drop its receipt, the buyer's proof of it. Answered as Hono's default
-      // error handler answers, which keeps the headers the paywall set.
       if (!receipted) throw error;
+      // A thrown Response is the route's answer (React Router, Remix): it
+      // goes out as thrown, with the receipt.
+      if (error instanceof Response) throw withPaymentHeaders(error, receipted);
+      // The framework's control flow, not a failure: SvelteKit's redirect()
+      // and error() throw plain objects, Next.js' redirect() and notFound()
+      // an Error with a `digest`. Hono, too, hands only an Error to onError.
+      if (!(error instanceof Error) || typeof (error as { digest?: unknown }).digest === 'string') throw error;
+      // A failure once the payment may be settled: the framework's own 500
+      // would drop the receipt, the buyer's proof of it. Answered as Hono's
+      // default error handler answers an Error, which keeps those headers.
       console.error(error);
       return withPaymentHeaders(new Response('Internal Server Error', {
         status: 500,

@@ -387,6 +387,34 @@ describe('a Next.js route handler behind createFetchPaywall', () => {
     expect(logged).not.toHaveBeenCalled();
   });
 
+  it("the framework's control flow passes through a receipted route: Next.js redirect(), a SvelteKit redirect, a thrown Response", async () => {
+    facilitator.settle = withReceipt(SETTLED, settleReceipt());
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const throwing = (thrown: unknown) => createFetchPaywall(options())(async (_request: NextRequest) => { throw thrown; });
+    const paid = { 'X-PAYMENT': xPayment() };
+
+    // next/navigation's redirect(): an Error whose digest Next.js answers as a 307.
+    const nextRedirect = Object.assign(new Error('NEXT_REDIRECT'), { digest: 'NEXT_REDIRECT;replace;/thanks;307;' });
+    await expect(nextServes(throwing(nextRedirect), paid)).rejects.toBe(nextRedirect);
+
+    // SvelteKit's redirect(): not an Error at all.
+    const svelteRedirect = { status: 303, location: '/thanks' };
+    await expect(nextServes(throwing(svelteRedirect), paid)).rejects.toBe(svelteRedirect);
+
+    // React Router's `throw redirect()`: the thrown Response is the answer, and it carries the receipt.
+    const thrownResponse = new Response(null, { status: 302, headers: { Location: '/thanks' } });
+    const rejection = await nextServes(throwing(thrownResponse), paid).then(
+      () => { throw new Error('the route resolved'); },
+      (reason: unknown) => reason,
+    );
+    expect(rejection).toBe(thrownResponse);
+    expect(thrownResponse.headers.get('Location')).toBe('/thanks');
+    expect(receiptFromResponse(thrownResponse)?.settlement?.id).toBe(TX);
+
+    expect(logged).not.toHaveBeenCalled();
+    expect(paths()).toEqual(['verify', 'settle', 'verify', 'settle', 'verify', 'settle']);
+  });
+
   it('a settle() still running when the handler returns leaves the returned response alone', async () => {
     facilitator.settle = withReceipt(SETTLED, settleReceipt());
     let settling: Promise<unknown> | undefined;
@@ -460,6 +488,18 @@ describe('createFetchPaywall', () => {
     }
     // The table covers every answer the core gives, and the handler's failure.
     expect(statuses).toEqual([402, 400, 402, 402, 409, 503, 503, 500, 409, 200, 200, 500]);
+  });
+
+  it('a thrown non-Error passes through Hono and through the paywall alike, receipts or not', async () => {
+    facilitator.verify = withReceipt(VERIFIED, VERIFY_RECEIPT);
+    facilitator.settle = withReceipt(SETTLED, settleReceipt());
+    const redirect = { status: 303, location: '/thanks' };
+    const app = new Hono();
+    app.use('/data', createHonoMiddleware(options()) as never);
+    app.get('/data', () => { throw redirect; });
+    await expect(app.request(URL_, { headers: { 'X-PAYMENT': xPayment() } })).rejects.toBe(redirect);
+    const route = createFetchPaywall(options())(async (_request: Request) => { throw redirect; });
+    await expect(route(new Request(URL_, { headers: { 'X-PAYMENT': xPayment() } }))).rejects.toBe(redirect);
   });
 
   it('takes a Request, or an object whose request is one, and refuses anything else before asking the facilitator', async () => {
