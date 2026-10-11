@@ -11,12 +11,16 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { secp256k1 } from '@noble/curves/secp256k1';
+import { TypedDataEncoder, Wallet, getBytes, hexlify } from 'ethers';
 import { Hono } from 'hono';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createFetchPaywall, createHonoMiddleware, createPaymentMiddleware, DURABLE_DEFAULT_TIMEOUT_MS } from './index';
-import type { DurableEvidenceOptions, FetchPaywallOptions, VerifiedPaymentState } from './index';
+import type { DurableEvidenceContext, DurableEvidenceOptions, FetchPaywallOptions, VerifiedPaymentState } from './index';
 import { settledForEvidence } from './durable';
+import { getChainByName } from '../chains';
+import { caip2ToChain } from '../utils';
+import vectors from '../fixtures/facilitator-receipts-v1.json';
 import {
   ANCHOR_MAX_REQUEST_BYTES,
   EVIDENCE_HEADER,
@@ -25,6 +29,7 @@ import {
   evidenceFromHeaders,
   evidenceHeader,
   parseSealed,
+  payerKeyFromEvmSignature,
   paymentId,
   unseal,
 } from '../dx402';
@@ -42,12 +47,12 @@ const PROOF = { transactionHash: TX, blockNumber: 1, network: 'base', payer: PAY
 const PAYER_PRIVATE = secp256k1.utils.randomPrivateKey();
 const PAYER_PUBLIC = secp256k1.getPublicKey(PAYER_PRIVATE, true);
 
-function xPayment(): string {
+function xPayment(payload?: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify({
     x402Version: 1,
     scheme: 'exact',
     network: 'base',
-    payload: {
+    payload: payload ?? {
       signature: '0x' + 'ab'.repeat(65),
       authorization: { from: PAYER, to: PAY_TO, value: '10000', validAfter: '0', validBefore: '9999999999', nonce: '0x' + '11'.repeat(32) },
     },
@@ -55,8 +60,8 @@ function xPayment(): string {
 }
 
 /** Open an anchored envelope with the payer's synthetic private key. */
-function open(sealed: Uint8Array): string {
-  return new TextDecoder().decode(unseal(parseSealed(sealed), PAYER_PRIVATE, new TextEncoder().encode(PAYMENT_ID)));
+function open(sealed: Uint8Array, id: string = PAYMENT_ID): string {
+  return new TextDecoder().decode(unseal(parseSealed(sealed), PAYER_PRIVATE, new TextEncoder().encode(id)));
 }
 
 // ---------------------------------------------------------------------------
@@ -65,12 +70,13 @@ function open(sealed: Uint8Array): string {
 
 type Answer = { status?: number; body: Record<string, unknown> };
 type Call = { path: string; body: any };
+const sealedOf = (call: Call) => Uint8Array.from(Buffer.from(call.body.sealed, 'base64'));
 
 const SETTLED: Answer = { body: { success: true, transaction: TX, network: 'base', payer: PAYER, proofOfPayment: PROOF } };
 const facilitator = {
   url: '',
   calls: [] as Call[],
-  settle: SETTLED,
+  settle: SETTLED as Answer | ((body: any) => Answer),
   anchor: undefined as Answer | undefined,
 };
 const anchors = () => facilitator.calls.filter((call) => call.path === 'dx402/anchor');
@@ -86,7 +92,7 @@ beforeAll(async () => {
       const body = JSON.parse(Buffer.concat(chunks).toString() || 'null');
       facilitator.calls.push({ path, body });
       const answer: Answer = path === 'verify' ? { body: { isValid: true, payer: PAYER } }
-        : path === 'settle' ? facilitator.settle
+        : path === 'settle' ? (typeof facilitator.settle === 'function' ? facilitator.settle(body) : facilitator.settle)
           : path === 'dx402/anchor' ? facilitator.anchor ?? {
             body: {
               v: 1, paymentId: body.paymentId, pointer: body.pointer ?? 's3+https://store.example/hosted',
@@ -161,6 +167,64 @@ function counted(parts: string[]) {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Resolves for every caller once `n` have arrived: the handlers of concurrent requests overlap. */
+function barrier(n: number): () => Promise<void> {
+  let arrived = 0;
+  let open_: () => void = () => {};
+  const all = new Promise<void>((resolve) => { open_ = resolve; });
+  return () => {
+    arrived += 1;
+    if (arrived === n) open_();
+    return all;
+  };
+}
+
+const TX_A = '0x' + 'aa'.repeat(32);
+const TX_B = '0x' + 'bb'.repeat(32);
+
+/** Each settle answers the next transaction hash. */
+function settlesInTurn(txs: string[]): (body: any) => Answer {
+  let n = 0;
+  return () => ({ body: { success: true, transaction: txs[n++], network: 'base', payer: PAYER } });
+}
+
+/** Each response carries the evidence of its own payment, and its anchor opens to its own bytes. */
+async function expectOwnAnchors(responses: Response[], txs: string[]): Promise<void> {
+  expect(anchors()).toHaveLength(responses.length);
+  const served = await Promise.all(responses.map((response) => response.text()));
+  const ids = responses.map((response) => evidenceFromHeaders(response.headers).paymentId as string);
+  expect([...ids].sort()).toEqual(txs.map((tx) => paymentId('eip155:8453', tx)).sort());
+  ids.forEach((id, i) => {
+    const anchor = anchors().find((call) => call.body.paymentId === id);
+    expect(anchor, id).toBeDefined();
+    expect(open(sealedOf(anchor!), id)).toBe(served[i]);
+  });
+  expect(new Set(served).size).toBe(responses.length);
+}
+
+const TRANSFER_WITH_AUTHORIZATION = {
+  TransferWithAuthorization: [
+    { name: 'from', type: 'address' }, { name: 'to', type: 'address' },
+    { name: 'value', type: 'uint256' }, { name: 'validAfter', type: 'uint256' },
+    { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },
+  ],
+};
+
+/** The README's EVM `payerKey`, as written there. */
+const evmPayerKey = ({ payment }: DurableEvidenceContext) => {
+  const payload = payment.payment.payload;
+  if (!('authorization' in payload)) return undefined;
+  const network = payment.requirements.network;
+  const chain = getChainByName(caip2ToChain(network) ?? network);
+  if (!chain) return undefined;
+  const digest = TypedDataEncoder.hash(
+    { name: chain.usdc.name, version: chain.usdc.version, chainId: chain.chainId, verifyingContract: payment.requirements.asset },
+    TRANSFER_WITH_AUTHORIZATION,
+    payload.authorization,
+  );
+  return payerKeyFromEvmSignature(payload.signature, getBytes(digest));
+};
 
 /** The skip reason in the response's evidence header. */
 function skipped(headers: Headers): string {
@@ -311,7 +375,7 @@ describe('createFetchPaywall with durable', () => {
     expect(anchors()).toHaveLength(0);
   });
 
-  it('a stream that errors keeps its bytes and its error, with not_capturable and zero anchors', async () => {
+  it('a stream that errors delivers the bytes read before its error, then the error, with not_capturable and zero anchors', async () => {
     let step = 0;
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -323,7 +387,10 @@ describe('createFetchPaywall with durable', () => {
     const route = createFetchPaywall(options({ durable: durable() }))(async () => new Response(stream));
     const response = await route(paid());
     expect(skipped(response.headers)).toBe('not_capturable');
-    await expect(response.text()).rejects.toThrow();
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe('partial');
+    await expect(reader.read()).rejects.toThrow('upstream broke');
     expect(anchors()).toHaveLength(0);
   });
 
@@ -376,15 +443,102 @@ describe('createFetchPaywall with durable', () => {
     expect(anchors()).toHaveLength(0);
   });
 
-  it('payerKey undefined or throwing: the sale goes on with a skip notice and zero anchors', async () => {
+  it('payerKey undefined, empty or throwing: the sale goes on with a skip notice and zero anchors', async () => {
     const none = await createFetchPaywall(options({ durable: durable({ payerKey: () => undefined }) }))(async () => new Response(BODY))(paid());
+    const empty = await createFetchPaywall(options({ durable: durable({ payerKey: () => new Uint8Array() }) }))(async () => new Response(BODY))(paid());
+    expect(skipped(empty.headers)).toBe('no_payer_key');
+    expect(await empty.text()).toBe(BODY);
     const thrown = await createFetchPaywall(options({ durable: durable({ payerKey: () => { throw new Error('no key'); } }) }))(async () => new Response(BODY))(paid());
-    expect(skipped(none.headers)).toBe('payer_key_unavailable');
+    expect(skipped(none.headers)).toBe('no_payer_key');
     expect(skipped(thrown.headers)).toBe('anchor_failed');
     expect(await none.text()).toBe(BODY);
     expect(await thrown.text()).toBe(BODY);
-    expect(settles()).toHaveLength(2);
+    expect(settles()).toHaveLength(3);
     expect(anchors()).toHaveLength(0);
+  });
+
+  it('a payerKey slower than the deadline: timeout, and nothing is uploaded or anchored after it', async () => {
+    const upload = vi.fn(async () => 's3+https://late.example/x');
+    const route = createFetchPaywall(options({
+      durable: durable({ timeoutMs: 40, upload, payerKey: async () => { await sleep(120); return PAYER_PUBLIC; } }),
+    }))(async () => new Response(BODY));
+    const response = await route(paid());
+    expect(skipped(response.headers)).toBe('timeout');
+    expect(await response.text()).toBe(BODY);
+    await sleep(200);
+    expect(upload).not.toHaveBeenCalled();
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it('the anchor request still in flight at the deadline is aborted', async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const hanging: typeof fetch = (_input, init) => {
+      signals.push(init?.signal);
+      return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+    };
+    const route = createFetchPaywall(options({ durable: durable({ timeoutMs: 40, fetch: hanging }) }))(async () => new Response(BODY));
+    const response = await route(paid());
+    expect(skipped(response.headers)).toBe('timeout');
+    expect(await response.text()).toBe(BODY);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it("one paywall, request after request: a 'manual' request that did not settle, or whose settle failed, anchors nothing after one that did", async () => {
+    const route = createFetchPaywall(options({ settlementStrategy: 'manual', durable: durable() }))(async (request: Request, x402: VerifiedPaymentState) => {
+      if (request.headers.get('X-Settle')) await x402.settle().catch(() => undefined);
+      return new Response(BODY);
+    });
+    const first = await route(paid({ headers: { 'X-Settle': '1' } }));
+    expect(evidenceFromHeaders(first.headers).paymentId).toBe(PAYMENT_ID);
+    const unsettled = await route(paid());
+    facilitator.settle = { body: { success: false, errorReason: 'reverted' } };
+    const failed = await route(paid({ headers: { 'X-Settle': '1' } }));
+    for (const response of [unsettled, failed]) {
+      expect(await response.text()).toBe(BODY);
+      expect(response.headers.has(EVIDENCE_HEADER)).toBe(false);
+    }
+    expect(anchors()).toHaveLength(1);
+  });
+
+  it('one paywall, two concurrent requests: each anchored with its own paymentId and its own bytes', async () => {
+    facilitator.settle = settlesInTurn([TX_A, TX_B]);
+    const meet = barrier(2);
+    const route = createFetchPaywall(options({ durable: durable() }))(async (request: Request) => {
+      await meet();
+      return new Response(`answer ${request.headers.get('X-Req')}`);
+    });
+    const responses = await Promise.all(['a', 'b'].map((id) => route(paid({ headers: { 'X-Req': id } }))));
+    await expectOwnAnchors(responses, [TX_A, TX_B]);
+  });
+
+  it('a settle whose receipt is still pending anchors nothing, though it answered success', async () => {
+    facilitator.settle = {
+      body: { ...SETTLED.body, receipt: { ...vectors.cases[0].receipt, operation: 'settle', status: 'pending', proof: null, settlement: null } },
+    };
+    const route = createFetchPaywall(options({ durable: durable() }))(async () => new Response(BODY));
+    const response = await route(paid());
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(BODY);
+    expect(response.headers.has(EVIDENCE_HEADER)).toBe(false);
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it("the README's EVM payerKey: the buyer's own signature seals the evidence to the buyer's key", async () => {
+    const wallet = new Wallet(hexlify(PAYER_PRIVATE));
+    const chain = getChainByName('base')!;
+    const authorization = { from: wallet.address, to: PAY_TO, value: '10000', validAfter: '0', validBefore: '9999999999', nonce: '0x' + '44'.repeat(32) };
+    const signature = await wallet.signTypedData(
+      { name: chain.usdc.name, version: chain.usdc.version, chainId: chain.chainId, verifyingContract: USDC_BASE },
+      TRANSFER_WITH_AUTHORIZATION,
+      authorization,
+    );
+    const route = createFetchPaywall(options({ durable: durable({ payerKey: evmPayerKey }) }))(async () => new Response(BODY));
+    const response = await route(paid({ headers: { 'X-PAYMENT': xPayment({ signature, authorization }) } }));
+    expect(evidenceFromHeaders(response.headers).paymentId).toBe(PAYMENT_ID);
+    expect(anchors()).toHaveLength(1);
+    expect(open(sealedOf(anchors()[0]))).toBe(BODY);
   });
 
   it('a misconfigured durable is refused when the paywall is built', () => {
@@ -439,6 +593,37 @@ describe('createHonoMiddleware with durable', () => {
     expect(anchors()).toHaveLength(0);
   });
 
+  const honoWith = (extra: Partial<FetchPaywallOptions>, handler: (c: any) => Response | Promise<Response>) => {
+    const hono = new Hono();
+    hono.get('/api/premium', createHonoMiddleware(options(extra)) as never, handler as never);
+    return hono;
+  };
+
+  it("one app, request after request: a 'manual' request that did not settle anchors nothing after one that did", async () => {
+    const hono = honoWith({ settlementStrategy: 'manual', durable: durable() }, async (c) => {
+      if (c.req.header('X-Settle')) await c.get('x402').settle();
+      return c.text(BODY);
+    });
+    const first = await hono.request(URL_PAID, { headers: { 'X-PAYMENT': xPayment(), 'X-Settle': '1' } });
+    expect(evidenceFromHeaders(first.headers).paymentId).toBe(PAYMENT_ID);
+    const second = await hono.request(URL_PAID, request());
+    expect(await second.text()).toBe(BODY);
+    expect(second.headers.has(EVIDENCE_HEADER)).toBe(false);
+    expect(anchors()).toHaveLength(1);
+  });
+
+  it('one app, two concurrent requests: each anchored with its own paymentId and its own bytes', async () => {
+    facilitator.settle = settlesInTurn([TX_A, TX_B]);
+    const meet = barrier(2);
+    const hono = honoWith({ durable: durable() }, async (c) => {
+      await meet();
+      return c.text(`answer ${c.req.header('X-Req')}`);
+    });
+    const responses = await Promise.all(['a', 'b'].map((id) =>
+      hono.request(URL_PAID, { headers: { 'X-PAYMENT': xPayment(), 'X-Req': id } })));
+    await expectOwnAnchors(responses, [TX_A, TX_B]);
+  });
+
   it('a handler that throws: the error answer, no anchor', async () => {
     const response = await app({ durable: durable() }, () => { throw new Error('boom'); }).request(URL_PAID, request());
     expect(response.status).toBe(500);
@@ -458,11 +643,27 @@ type ExpressRes = http.ServerResponse & {
   send: (body: string | Buffer) => void;
 };
 
+type ExpressReq = { headers: Record<string, string | string[] | undefined>; method?: string; url?: string; x402?: VerifiedPaymentState };
+type ExpressInit = { method?: string; headers?: Record<string, string> };
+
 async function express(
   extra: Partial<FetchPaywallOptions>,
-  handler: (res: ExpressRes) => void | Promise<void>,
-  init: { method?: string } = {},
+  handler: (res: ExpressRes, req: ExpressReq) => void | Promise<void>,
+  init: ExpressInit = {},
 ): Promise<Response> {
+  const server = await expressServer(extra, handler);
+  try {
+    return await server.request(init);
+  } finally {
+    await server.close();
+  }
+}
+
+/** One Express middleware instance behind a loopback server, for several requests. */
+async function expressServer(
+  extra: Partial<FetchPaywallOptions>,
+  handler: (res: ExpressRes, req: ExpressReq) => void | Promise<void>,
+): Promise<{ request: (init?: ExpressInit) => Promise<Response>; close: () => Promise<void> }> {
   const middleware = createPaymentMiddleware(
     () => ({ amount: '0.01', recipient: PAY_TO, resource: URL_PAID, chainName: 'base' }),
     { facilitatorUrl: facilitator.url, retries: 0, ...extra },
@@ -478,21 +679,22 @@ async function express(
       res.end(bytes);
     };
     res.json = (body) => { res.setHeader('Content-Type', 'application/json'); res.send(JSON.stringify(body)); };
-    const xreq = { headers: req.headers as Record<string, string | string[] | undefined>, method: req.method, url: req.url };
-    void middleware(xreq, res as never, () => { void handler(res); });
+    const xreq: ExpressReq = { headers: req.headers as Record<string, string | string[] | undefined>, method: req.method, url: req.url };
+    void middleware(xreq as never, res as never, () => { void handler(res, xreq); });
   });
   await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve));
-  try {
-    const port = (app.address() as AddressInfo).port;
-    const response = await loopbackFetch(`http://127.0.0.1:${port}/api/premium`, {
-      method: init.method ?? 'GET',
-      headers: { 'X-PAYMENT': xPayment() },
-    });
-    const text = init.method === 'HEAD' ? '' : await response.text();
-    return new Response(init.method === 'HEAD' ? null : text, { status: response.status, headers: response.headers });
-  } finally {
-    await new Promise<void>((resolve) => app.close(() => resolve()));
-  }
+  const port = (app.address() as AddressInfo).port;
+  return {
+    request: async (init: ExpressInit = {}) => {
+      const response = await loopbackFetch(`http://127.0.0.1:${port}/api/premium`, {
+        method: init.method ?? 'GET',
+        headers: { 'X-PAYMENT': xPayment(), ...init.headers },
+      });
+      const text = init.method === 'HEAD' ? '' : await response.text();
+      return new Response(init.method === 'HEAD' ? null : text, { status: response.status, headers: response.headers });
+    },
+    close: () => new Promise<void>((resolve) => app.close(() => resolve())),
+  };
 }
 
 describe('createPaymentMiddleware (Express) with durable', () => {
@@ -569,6 +771,95 @@ describe('createPaymentMiddleware (Express) with durable', () => {
     expect(skipped(response.headers)).toBe('anchor_failed');
   });
 
+  it('send then a second end() and a late write: the paid body whole, once, and the anchor is of those bytes', async () => {
+    let lateEnd = false;
+    const response = await express({ durable: durable() }, (res) => {
+      res.send(BODY);
+      res.end(() => { lateEnd = true; });
+      res.write('late');
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(BODY);
+    expect(settles()).toHaveLength(1);
+    expect(anchors()).toHaveLength(1);
+    expect(evidenceFromHeaders(response.headers).contentHash).toBe(contentHash(new TextEncoder().encode(BODY)));
+    expect(open(sealedOf(anchors()[0]))).toBe(BODY);
+    await vi.waitFor(() => expect(lateEnd).toBe(true));
+  });
+
+  it('a fallback that checks headersSent after send leaves the paid answer alone, and late headers are refused', async () => {
+    const seen: { headersSent?: boolean; writableEnded?: boolean; lateHeader?: string } = {};
+    const response = await express({ durable: durable() }, (res) => {
+      res.send(BODY);
+      seen.headersSent = res.headersSent;
+      seen.writableEnded = res.writableEnded;
+      if (!res.headersSent) res.status(404).send('Cannot GET /api/premium');
+      try {
+        res.setHeader('X-Late', '1');
+      } catch (error) {
+        seen.lateHeader = (error as { code?: string }).code;
+      }
+    });
+    expect(seen).toEqual({ headersSent: true, writableEnded: true, lateHeader: 'ERR_HTTP_HEADERS_SENT' });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(BODY);
+    expect(response.headers.has('x-late')).toBe(false);
+    expect(settles()).toHaveLength(1);
+    expect(anchors()).toHaveLength(1);
+    expect(open(sealedOf(anchors()[0]))).toBe(BODY);
+  });
+
+  it('a single send over the cap: the whole body, too_large, zero anchors', async () => {
+    const big = 'y'.repeat(500);
+    const response = await express({ durable: durable({ maxBodyBytes: 100 }) }, (res) => res.send(big));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(big);
+    expect(skipped(response.headers)).toBe('too_large');
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it('a single end(chunk) of an event stream: the whole body, not_capturable, zero anchors', async () => {
+    const response = await express({ durable: durable() }, (res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.end('data: only\n\n');
+    });
+    expect(await response.text()).toBe('data: only\n\n');
+    expect(skipped(response.headers)).toBe('not_capturable');
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it("one middleware, request after request: a 'manual' request that did not settle anchors nothing after one that did", async () => {
+    const server = await expressServer({ settlementStrategy: 'manual', durable: durable() }, async (res, req) => {
+      if (req.headers['x-settle']) await req.x402!.settle();
+      res.send(BODY);
+    });
+    try {
+      const first = await server.request({ headers: { 'X-Settle': '1' } });
+      expect(evidenceFromHeaders(first.headers).paymentId).toBe(PAYMENT_ID);
+      const second = await server.request();
+      expect(await second.text()).toBe(BODY);
+      expect(second.headers.has(EVIDENCE_HEADER.toLowerCase())).toBe(false);
+    } finally {
+      await server.close();
+    }
+    expect(anchors()).toHaveLength(1);
+  });
+
+  it('one middleware, two concurrent requests: each anchored with its own paymentId and its own bytes', async () => {
+    facilitator.settle = settlesInTurn([TX_A, TX_B]);
+    const meet = barrier(2);
+    const server = await expressServer({ durable: durable() }, async (res, req) => {
+      await meet();
+      res.send(`answer ${req.headers['x-req']}`);
+    });
+    try {
+      const responses = await Promise.all(['a', 'b'].map((id) => server.request({ headers: { 'X-Req': id } })));
+      await expectOwnAnchors(responses, [TX_A, TX_B]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("a non-2xx answer and 'manual' without a settle anchor nothing", async () => {
     const error = await express({ durable: durable() }, (res) => res.status(404).json({ error: 'missing' }));
     expect(error.status).toBe(404);
@@ -633,9 +924,11 @@ describe('durable: the edges the surfaces share', () => {
 });
 
 describe('settledForEvidence', () => {
-  it('only a successful, first-time settle with a transaction hash', () => {
+  it('only a successful, first-time settle with a transaction hash and no unconfirmed receipt', () => {
     expect(settledForEvidence({ success: true, transactionHash: TX })).toBe(true);
     expect(settledForEvidence({ success: true, transactionHash: TX, replayed: false })).toBe(true);
+    expect(settledForEvidence({ success: true, transactionHash: TX, receipt: null })).toBe(true);
+    expect(settledForEvidence({ success: true, transactionHash: TX, receipt: { status: 'confirmed' } as never })).toBe(true);
     for (const settle of [
       undefined,
       { success: false, transactionHash: TX },
@@ -644,6 +937,9 @@ describe('settledForEvidence', () => {
       { success: true, transactionHash: TX, replayed: true },
       { success: 'true', transactionHash: TX },
       { success: true, transactionHash: 42 },
+      { success: true, transactionHash: TX, receipt: { status: 'pending' } },
+      { success: true, transactionHash: TX, receipt: { status: 'unknown' } },
+      { success: true, transactionHash: TX, receipt: { status: 'rejected' } },
     ]) {
       expect(settledForEvidence(settle as never), JSON.stringify(settle)).toBe(false);
     }

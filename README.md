@@ -2058,22 +2058,52 @@ handler did not anchor itself is captured once, sealed and anchored through
 `anchorEvidence`, and goes out with `X-Durable-Evidence`:
 
 ```ts
-import { createFetchPaywall } from 'uvd-x402-sdk/backend';
-import { payerKeyFromEvmSignature } from 'uvd-x402-sdk';
+import { TypedDataEncoder, getBytes } from 'ethers';
+import { createFetchPaywall, type DurableEvidenceContext } from 'uvd-x402-sdk/backend';
+import { caip2ToChain, getChainByName, payerKeyFromEvmSignature } from 'uvd-x402-sdk';
+
+const TRANSFER_WITH_AUTHORIZATION = {
+  TransferWithAuthorization: [
+    { name: 'from', type: 'address' }, { name: 'to', type: 'address' },
+    { name: 'value', type: 'uint256' }, { name: 'validAfter', type: 'uint256' },
+    { name: 'validBefore', type: 'uint256' }, { name: 'nonce', type: 'bytes32' },
+  ],
+};
+
+// The key behind an EIP-3009 USDC payment: recovered from the signature over the
+// digest the buyer signed, with the token domain of the chain registry.
+const evmPayerKey = ({ payment }: DurableEvidenceContext) => {
+  const payload = payment.payment.payload;
+  if (!('authorization' in payload)) return undefined; // not an EVM payment: skipped
+  const network = payment.requirements.network;
+  const chain = getChainByName(caip2ToChain(network) ?? network);
+  if (!chain) return undefined;
+  const digest = TypedDataEncoder.hash(
+    { name: chain.usdc.name, version: chain.usdc.version, chainId: chain.chainId, verifyingContract: payment.requirements.asset },
+    TRANSFER_WITH_AUTHORIZATION,
+    payload.authorization,
+  );
+  return payerKeyFromEvmSignature(payload.signature, getBytes(digest));
+};
 
 const paywall = createFetchPaywall({
   accepts,
   durable: {
-    payerKey: ({ payment }) => payerKeyFromEvmSignature(signatureOf(payment.payment), digestOf(payment.payment)),
+    payerKey: evmPayerKey,   // Solana: ({ payment }) => payerKeyFromSolanaAddress(payment.verifyResult.payer!)
     maxBodyBytes: 64 * 1024, // default ANCHOR_MAX_REQUEST_BYTES
     timeoutMs: 5000,         // default DURABLE_DEFAULT_TIMEOUT_MS
   },
 });
 ```
 
+A wrong digest does not throw: it recovers another valid key, and the evidence
+would be sealed to it. `src/backend/durable-evidence.test.ts` checks this
+derivation against a signature made with a synthetic key.
+
 Without `durable` nothing changes and nothing is anchored. It anchors only a
 payment this request settled with a transaction hash (`'manual'`: once
-`x402.settle()` resolved successfully before the answer). The body is read once
+`x402.settle()` resolved successfully before the answer); a replayed settle, or
+one whose receipt is `pending`, `unknown` or `rejected`, is not anchored. The body is read once
 and held at most `maxBodyBytes`; past that, past `timeoutMs`, for an event
 stream, for a body already locked or read, or when the handler's own stream
 fails, the response goes out whole and unchanged except for a skip notice in
@@ -2082,6 +2112,22 @@ response and the payment stand. A `HEAD`, a non-`2xx` answer and a response that
 already has `X-Durable-Evidence` are left alone. Every field of `durable` but
 `payerKey`, `maxBodyBytes` and `timeoutMs` is the `anchorEvidence` option of the
 same name; `facilitator` defaults to the paywall's facilitator.
+
+The skip notices the paywall adds, besides those of `anchorEvidence`:
+
+| `skipped` | When |
+|---|---|
+| `no_payer_key` | `payerKey` returned `undefined` or an empty key |
+| `too_large` | the body is over `maxBodyBytes` (declared or read) |
+| `not_capturable` | an event stream, a body already sent, a chunk that is not bytes, or a handler stream that failed |
+| `timeout` | capture, `payerKey`, upload or anchor did not finish within `timeoutMs` |
+| `anchor_failed` | `payerKey` threw, or the anchor failed |
+
+In Express, the answer is held from the handler's `end()` until the anchor
+returns (at most `timeoutMs`). In that window `res.headersSent` and
+`res.writableEnded` are `true`, a further `write()` is refused as a write after
+end, a further `end()` only queues its callback, and headers can no longer be
+set: the paid answer goes out as the handler ended it.
 
 **It never throws.** Every failure resolves to `result.skipped`, because
 evidence is an addition to the payment path and must never be a gate in front of

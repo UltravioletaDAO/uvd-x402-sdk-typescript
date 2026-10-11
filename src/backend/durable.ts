@@ -102,7 +102,7 @@ export function createDurableAnchorer(
         const txHash = settle.transactionHash as string;
         const network = chainToCAIP2(settle.network || payment.requirements.network);
         const payerKey = await durable.payerKey({ payment, settle });
-        if (!(payerKey instanceof Uint8Array) || payerKey.length === 0) return skip('payer_key_unavailable');
+        if (!(payerKey instanceof Uint8Array) || payerKey.length === 0) return skip('no_payer_key');
         if (signal.aborted) return skip('timeout');
         const baseFetch = durable.fetch ?? fetch;
         // The anchor request carries the deadline: once it passes, a slow
@@ -138,14 +138,20 @@ export function createDurableAnchorer(
   };
 }
 
+/** Receipt states that do not confirm a settlement, even under `success: true`. */
+const UNCONFIRMED_RECEIPT = new Set(['pending', 'unknown', 'rejected']);
+
 /**
  * Whether this request's payment settled, with a transaction, and evidence can
  * name it. A replayed settle names a payment an earlier request already
- * anchored: a second anchor would be a second claim on it.
+ * anchored: a second anchor would be a second claim on it. A receipt that is
+ * still pending, unknown or rejected does not confirm the transfer the anchor
+ * would name.
  */
 export function settledForEvidence(settle: SettleResponse | undefined): settle is SettleResponse {
   return settle?.success === true && settle.replayed !== true
-    && typeof settle.transactionHash === 'string' && settle.transactionHash !== '';
+    && typeof settle.transactionHash === 'string' && settle.transactionHash !== ''
+    && !UNCONFIRMED_RECEIPT.has(String(settle.receipt?.status ?? ''));
 }
 
 /** A deadline: `signal` aborts after `ms`; `expired` resolves then. `clear()` releases the timer. */
@@ -290,10 +296,12 @@ export async function withDurableEvidence(response: Response, run: DurableRun): 
   } catch (error) {
     // The handler's own stream failed: what was read goes out, then the same
     // error, as it would have without the hook.
+    // Pulled one by one: an error raised with chunks still queued drops them.
     const failed = new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const chunk of chunks) controller.enqueue(chunk);
-        controller.error(error);
+      pull(controller) {
+        const head = chunks.shift();
+        if (head) controller.enqueue(head);
+        else controller.error(error);
       },
     });
     clock.clear();
@@ -325,6 +333,43 @@ export function isDurableNodeResponse(res: unknown): res is DurableNodeResponse 
     && typeof r.setHeader === 'function' && typeof r.getHeader === 'function';
 }
 
+const headersSentError = () =>
+  Object.assign(new Error('Cannot set headers after they are sent to the client'), { code: 'ERR_HTTP_HEADERS_SENT' });
+
+/**
+ * While the anchor of an ended response runs, `res` reads as sent and its
+ * headers as frozen, as they would be without the hook: a fallback that checks
+ * `headersSent` leaves it alone and a late header cannot change the paid
+ * answer. Returns what puts `res` back.
+ */
+function sealEnded(res: DurableNodeResponse): () => void {
+  const target = res as unknown as Record<string, unknown>;
+  const refuse = { value: () => { throw headersSentError(); } };
+  const overrides: Record<string, PropertyDescriptor> = {
+    headersSent: { get: () => true },
+    writableEnded: { get: () => true },
+    setHeader: refuse,
+    removeHeader: refuse,
+    writeHead: refuse,
+  };
+  const saved: [string, PropertyDescriptor | undefined][] = [];
+  for (const [key, descriptor] of Object.entries(overrides)) {
+    const own = Object.getOwnPropertyDescriptor(target, key);
+    try {
+      Object.defineProperty(target, key, { ...descriptor, configurable: true });
+      saved.push([key, own]);
+    } catch {
+      /* not overridable: left as it is */
+    }
+  }
+  return () => {
+    for (const [key, own] of saved) {
+      if (own) Object.defineProperty(target, key, own);
+      else delete target[key];
+    }
+  };
+}
+
 function toBytes(chunk: unknown, encoding: unknown): Uint8Array | undefined {
   if (chunk === undefined || chunk === null) return new Uint8Array();
   if (typeof chunk === 'string') {
@@ -350,7 +395,9 @@ export function captureNodeResponse(
 ): void {
   const write = res.write.bind(res);
   const end = res.end.bind(res);
-  let state: 'capturing' | 'passing' | 'ending' = 'capturing';
+  let state: 'capturing' | 'passing' | 'ending' | 'done' = 'capturing';
+  /** `end()` callbacks of calls made while the anchor ran. */
+  const lateEnds: ((error?: Error | null) => void)[] = [];
   const chunks: Uint8Array[] = [];
   let size = 0;
   let clock: ReturnType<typeof deadline> | undefined;
@@ -408,6 +455,13 @@ export function captureNodeResponse(
   };
 
   res.write = (...args: unknown[]) => {
+    if (state === 'ending') {
+      // The handler already ended the response: Node refuses a write after end.
+      const cb = callbackOf(args.slice(1));
+      const error = Object.assign(new Error('write after end'), { code: 'ERR_STREAM_WRITE_AFTER_END' });
+      if (cb) queueMicrotask(() => cb(error));
+      return false;
+    }
     if (state === 'capturing' && hold(args[0], typeof args[1] === 'function' ? undefined : args[1])) {
       const cb = callbackOf(args.slice(1));
       if (cb) queueMicrotask(() => cb());
@@ -417,24 +471,41 @@ export function captureNodeResponse(
   };
 
   res.end = (...args: unknown[]) => {
+    if (state === 'ending') {
+      // Already ended: a second end() adds nothing; its callback runs once the first is done.
+      const cb = callbackOf(args);
+      if (cb) lateEnds.push(cb);
+      return res;
+    }
     if (state !== 'capturing') return end(...args);
     const chunk = typeof args[0] === 'function' ? undefined : args[0];
     const encoding = typeof args[1] === 'function' ? undefined : args[1];
     const cb = callbackOf(args);
     if (!hold(chunk, encoding)) return end(...args);
-    state = 'ending';
     const bytes = concat(chunks, size);
     chunks.length = 0;
-    const finish = (evidence: Evidence | undefined) => {
+    if (!eligible()) {
+      state = 'done';
       clock?.clear();
+      return cb ? end(bytes, cb) : end(bytes);
+    }
+    state = 'ending';
+    const statusCode = res.statusCode;
+    const unseal = sealEnded(res);
+    const finish = (evidence: Evidence) => {
+      clock?.clear();
+      unseal();
+      if (statusCode !== undefined) res.statusCode = statusCode;
       try {
-        if (evidence && !res.headersSent) res.setHeader(EVIDENCE_HEADER, evidenceHeader(evidence));
+        if (!res.headersSent) res.setHeader(EVIDENCE_HEADER, evidenceHeader(evidence));
       } catch {
         /* the response goes out without the header */
       }
-      return cb ? end(bytes, cb) : end(bytes);
+      state = 'done';
+      const ended = cb ? end(bytes, cb) : end(bytes);
+      for (const late of lateEnds.splice(0)) end(late);
+      return ended;
     };
-    if (!eligible()) return finish(undefined);
     const current = run();
     const timer = clock ?? deadline(anchorer.timeoutMs);
     clock = timer;
