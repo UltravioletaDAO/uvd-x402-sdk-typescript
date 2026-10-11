@@ -38,6 +38,14 @@ const polygonAccept = (): PaymentAcceptance => ({
   network: 'polygon', asset: POLYGON_USDC, amount: '20000', payTo: PAY_TO,
   extra: { ...POLYGON_EXTRA, note: { kept: [1, 2] } },
 });
+const solanaAccept = (): PaymentAcceptance => ({
+  network: 'solana', asset: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', amount: '10000',
+  payTo: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM', extra: { feePayer: 'F742C4VfFLQ9zRQyithoj5229ZgtX2WqKCSFKgH2EThq' },
+});
+const stellarAccept = (): PaymentAcceptance => ({
+  network: 'stellar', asset: 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75', amount: '10000',
+  payTo: 'GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ',
+});
 /** An accept with no extra at all: the flag must create one. */
 const bareBaseAccept = (): PaymentAcceptance => ({ network: 'base', asset: BASE_USDC, amount: '10000', payTo: PAY_TO });
 
@@ -209,14 +217,19 @@ describe.each(FRAMEWORKS)('%s paywall: discoverable', (_name, serve) => {
     });
   });
 
-  it.each([true, false])('discoverable %s leaves every native Hedera accept as given and flags the others', async (flag) => {
-    const accepts = deepFreeze([...HEDERA_ACCEPTS.map(([, accept]) => accept), baseAccept()]);
+  it.each([true, false])('discoverable %s leaves every native Hedera accept as given and flags the others (EVM, Solana, Stellar)', async (flag) => {
+    const accepts = deepFreeze([...HEDERA_ACCEPTS.map(([, accept]) => accept), baseAccept(), solanaAccept(), stellarAccept()]);
     const request = serve({ accepts, facilitatorUrl: facilitator.url, retries: 0, x402Version: 2, discoverable: flag });
     const challenge = await request();
     expect(challenge.status).toBe(402);
-    const expected = [...HEDERA_ACCEPTS.map(() => ({ feePayer: '0.0.5678' })), { ...BASE_EXTRA, discoverable: flag }];
-    expect(challenge.paymentRequired.accepts.map((a: any) => a.extra)).toStrictEqual(expected);
-    expect(accepts.map((a) => a.extra)).toStrictEqual(expected.map((extra, i) => (i < HEDERA_ACCEPTS.length ? extra : BASE_EXTRA)));
+    const hederaExtras = HEDERA_ACCEPTS.map(() => ({ feePayer: '0.0.5678' }));
+    expect(challenge.paymentRequired.accepts.map((a: any) => a.extra)).toStrictEqual([
+      ...hederaExtras,
+      { ...BASE_EXTRA, discoverable: flag },
+      { ...solanaAccept().extra as object, discoverable: flag },
+      { discoverable: flag },
+    ]);
+    expect(accepts.map((a) => a.extra)).toStrictEqual([...hederaExtras, BASE_EXTRA, solanaAccept().extra, undefined]);
     expect(fetchCalls).toBe(0);
     expect(facilitator.calls).toEqual([]);
   });

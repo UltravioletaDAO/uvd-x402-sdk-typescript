@@ -12,6 +12,10 @@
   caso `accepts: []` con flag invalido, que la mata).
 - Ronda 1 (REF-SDKTS-52): Hedera nativo queda como viene con la opcion; tests de
   lista mixta y de `HEDERA:MAINNET` / `Hedera:Testnet` en `withDiscoverable`.
+- Ronda 2 (VER-SDKTS-52): corregida la nota sobre `false` (Python #70 ahora tambien
+  escribe `discoverable: false`; omitir no escribe nada) en README y handoff; la lista
+  mixta suma una accept Solana y una Stellar que salen marcadas (mata H7: Hedera leido
+  como "todo lo que no es EVM").
 - Falta: CI del PR y la revision de c0der. Sin merge, deploy ni publish.
 - Proximo paso: mirar el CI del PR.
 
@@ -45,7 +49,8 @@
   opcion del paywall deja esas accepts como vienen y marca las demas; `withDiscoverable`
   sobre una accept Hedera sigue lanzando. El facilitador solo admite `feePayer` en su
   `extra`, asi que un settle de Hedera no se lista.
-- `false` escribe `discoverable: false` (en Python `False` no escribe nada); para el
-  facilitador ambos significan no listar. Documentado en el README.
+- `false` escribe `discoverable: false`, igual que `False` en Python desde
+  uvd-x402-sdk-python#70 `94abfee`; omitir la opcion (`None` en Python) no escribe nada.
+  Para el facilitador, `false` y la ausencia significan no listar.
 - `extra` que no es objeto plano (array, string, null, instancia de clase) se rechaza
   al crear el paywall, antes de cualquier I/O.
