@@ -14,9 +14,10 @@
  *   pre-auth signs on that chain.
  *
  * `buildEscrowPreAuth` reads all three: on a chain with a row, a network
- * config that contradicts it is refused before anything is signed; a chain
- * without a row is signed as before. Mirrors the Python SDK's
+ * config that contradicts it is refused before anything is signed, and so is a
+ * chain without a row in any of the three. Mirrors the Python SDK's
  * `uvd_x402_sdk.escrow_contracts` (0.96.0).
+ * All three are frozen, rows included.
  */
 
 import { getChainByName } from './chains';
@@ -33,6 +34,12 @@ export function arcUsdc(network: 'arc' | 'arc-testnet'): { address: string; name
   const chain = getChainByName(network);
   if (!chain) throw new Error(`The chain registry has no '${network}'.`);
   return chain.usdc;
+}
+
+/** The registry and each of its rows, frozen: the pre-auth signs against them. */
+function freezeRows<T extends object>(rows: Record<number, T>): Readonly<Record<number, Readonly<T>>> {
+  for (const row of Object.values(rows)) Object.freeze(row);
+  return Object.freeze(rows);
 }
 
 /**
@@ -64,7 +71,7 @@ export function arcUsdc(network: 'arc' | 'arc-testnet'): { address: string; name
  * `src/fixtures/arc-escrow-d.rpc.json`. Their operator generation is `'v3'`
  * ({@link OPERATOR_ABI_V3}).
  */
-export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
+export const ESCROW_CONTRACTS: Readonly<Record<number, Readonly<AdvancedEscrowContracts>>> = freezeRows({
   // Base Sepolia (testnet, chain 84532)
   84532: {
     operator: '0x97d53e63A9CB97556c00BeFd325AF810c9b267B2',
@@ -182,7 +189,7 @@ export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
     refundRequest: '0xe971C674fD5c3462023f3F891dF6289DFbC9CEFC',
     usdc: arcUsdc('arc-testnet').address,
   },
-};
+});
 
 /**
  * The PaymentOperator of each chain: the operator the escrow pre-auth signs
@@ -201,8 +208,8 @@ export const ESCROW_CONTRACTS: Record<number, AdvancedEscrowContracts> = {
  * serves it, but the row is still the operator of the escrows in flight there;
  * and Execution Market's registry has no Arc Testnet entry: that row is the
  * factory's `computeAddress` for the same operator, recorded on both Arc chains
- * in `src/fixtures/arc-escrow-d.rpc.json`. A chain without a row is signed with
- * the config's operator.
+ * in `src/fixtures/arc-escrow-d.rpc.json`. The pre-auth refuses a chain without
+ * a row here (the testnet rows of ESCROW_CONTRACTS have none).
  */
 export const ESCROW_OPERATORS: Readonly<Record<number, string>> = Object.freeze({
   8453: '0x271f9fa7f8907aCf178CCFB470076D9129D8F0Eb', // Base
@@ -229,8 +236,8 @@ export const ESCROW_OPERATORS: Readonly<Record<number, string>> = Object.freeze(
  * `mcp_server/api/h2a.py`, and `FASE5_MAX_FEE_BPS`,
  * `mcp_server/integrations/x402/fees.py`, both read at execution-market@bf1007d8),
  * the operator's 1300 bps plus room for a protocol fee of up to 500. Same rows
- * as `uvd_x402_sdk.escrow_contracts.ESCROW_MAX_FEE_BPS`. A chain without a row
- * is signed with the config's bound.
+ * as `uvd_x402_sdk.escrow_contracts.ESCROW_MAX_FEE_BPS`. The pre-auth refuses a
+ * chain without a row here.
  */
 export const ESCROW_MAX_FEE_BPS: Readonly<Record<number, number>> = Object.freeze({
   8453: 1800, // Base

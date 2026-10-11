@@ -7186,7 +7186,7 @@ export { ESCROW_CONTRACTS };
  * Base Mainnet contract addresses for the Advanced Escrow system.
  * @deprecated Use ESCROW_CONTRACTS[8453] or getEscrowContractsByChainId(8453) instead.
  */
-export const BASE_MAINNET_CONTRACTS: AdvancedEscrowContracts = ESCROW_CONTRACTS[8453];
+export const BASE_MAINNET_CONTRACTS: Readonly<AdvancedEscrowContracts> = ESCROW_CONTRACTS[8453];
 
 /**
  * Get escrow contract addresses for a given chain ID.
@@ -7194,7 +7194,7 @@ export const BASE_MAINNET_CONTRACTS: AdvancedEscrowContracts = ESCROW_CONTRACTS[
  * @param chainId - EVM chain ID (e.g., 8453 for Base, 1 for Ethereum)
  * @returns Contract addresses or undefined if chain is not supported
  */
-export function getEscrowContractsByChainId(chainId: number): AdvancedEscrowContracts | undefined {
+export function getEscrowContractsByChainId(chainId: number): Readonly<AdvancedEscrowContracts> | undefined {
   return ESCROW_CONTRACTS[chainId];
 }
 
