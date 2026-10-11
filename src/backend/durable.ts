@@ -336,13 +336,21 @@ export function isDurableNodeResponse(res: unknown): res is DurableNodeResponse 
 const headersSentError = () =>
   Object.assign(new Error('Cannot set headers after they are sent to the client'), { code: 'ERR_HTTP_HEADERS_SENT' });
 
+interface SealedResponse {
+  restore: () => void;
+  /** A close asked for during the window, to run once the body is written. */
+  close: () => (() => void) | undefined;
+}
+
 /**
  * While the anchor of an ended response runs, `res` reads as sent and its
  * headers as frozen, as they would be without the hook: a fallback that checks
  * `headersSent` leaves it alone and a late header cannot change the paid
- * answer. Returns what puts `res` back.
+ * answer. A close the server asks for in that window (`res.destroy()` or
+ * `socket.destroy()` without an error, as Express's final handler does after
+ * an error once headers are sent) waits for the body; one with an error does not.
  */
-function sealEnded(res: DurableNodeResponse): () => void {
+function sealEnded(res: DurableNodeResponse): SealedResponse {
   const target = res as unknown as Record<string, unknown>;
   const refuse = { value: () => { throw headersSentError(); } };
   const overrides: Record<string, PropertyDescriptor> = {
@@ -362,11 +370,40 @@ function sealEnded(res: DurableNodeResponse): () => void {
       /* not overridable: left as it is */
     }
   }
-  return () => {
-    for (const [key, own] of saved) {
-      if (own) Object.defineProperty(target, key, own);
-      else delete target[key];
+  let close: (() => void) | undefined;
+  const socket = (res as { socket?: unknown }).socket as Record<string, unknown> | null | undefined;
+  const closers: [Record<string, unknown>, PropertyDescriptor | undefined][] = [];
+  for (const holder of [target, socket]) {
+    if (!holder || typeof holder.destroy !== 'function') continue;
+    const original = holder.destroy as (...args: unknown[]) => unknown;
+    const own = Object.getOwnPropertyDescriptor(holder, 'destroy');
+    try {
+      Object.defineProperty(holder, 'destroy', {
+        configurable: true,
+        writable: true,
+        value: (...args: unknown[]) => {
+          if (args[0] !== undefined && args[0] !== null) return original.apply(holder, args);
+          close ??= () => { original.call(holder); };
+          return holder;
+        },
+      });
+      closers.push([holder, own]);
+    } catch {
+      /* not overridable: left as it is */
     }
+  }
+  return {
+    restore: () => {
+      for (const [key, own] of saved) {
+        if (own) Object.defineProperty(target, key, own);
+        else delete target[key];
+      }
+      for (const [holder, own] of closers) {
+        if (own) Object.defineProperty(holder, 'destroy', own);
+        else delete holder.destroy;
+      }
+    },
+    close: () => close,
   };
 }
 
@@ -491,10 +528,10 @@ export function captureNodeResponse(
     }
     state = 'ending';
     const statusCode = res.statusCode;
-    const unseal = sealEnded(res);
+    const sealed = sealEnded(res);
     const finish = (evidence: Evidence) => {
       clock?.clear();
-      unseal();
+      sealed.restore();
       if (statusCode !== undefined) res.statusCode = statusCode;
       try {
         if (!res.headersSent) res.setHeader(EVIDENCE_HEADER, evidenceHeader(evidence));
@@ -502,7 +539,11 @@ export function captureNodeResponse(
         /* the response goes out without the header */
       }
       state = 'done';
-      const ended = cb ? end(bytes, cb) : end(bytes);
+      const close = sealed.close();
+      const done = close
+        ? (error?: Error | null) => { if (cb) cb(error); close(); }
+        : cb;
+      const ended = done ? end(bytes, done) : end(bytes);
       for (const late of lateEnds.splice(0)) end(late);
       return ended;
     };

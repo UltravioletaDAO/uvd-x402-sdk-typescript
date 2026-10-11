@@ -643,7 +643,7 @@ type ExpressRes = http.ServerResponse & {
   send: (body: string | Buffer) => void;
 };
 
-type ExpressReq = { headers: Record<string, string | string[] | undefined>; method?: string; url?: string; x402?: VerifiedPaymentState };
+type ExpressReq = { headers: Record<string, string | string[] | undefined>; method?: string; url?: string; socket: http.IncomingMessage['socket']; x402?: VerifiedPaymentState };
 type ExpressInit = { method?: string; headers?: Record<string, string> };
 
 async function express(
@@ -679,7 +679,7 @@ async function expressServer(
       res.end(bytes);
     };
     res.json = (body) => { res.setHeader('Content-Type', 'application/json'); res.send(JSON.stringify(body)); };
-    const xreq: ExpressReq = { headers: req.headers as Record<string, string | string[] | undefined>, method: req.method, url: req.url };
+    const xreq: ExpressReq = { headers: req.headers as Record<string, string | string[] | undefined>, method: req.method, url: req.url, socket: req.socket };
     void middleware(xreq as never, res as never, () => { void handler(res, xreq); });
   });
   await new Promise<void>((resolve) => app.listen(0, '127.0.0.1', resolve));
@@ -790,7 +790,7 @@ describe('createPaymentMiddleware (Express) with durable', () => {
   });
 
   it('a fallback that checks headersSent after send leaves the paid answer alone, and late headers are refused', async () => {
-    const seen: { headersSent?: boolean; writableEnded?: boolean; lateHeader?: string } = {};
+    const seen: { headersSent?: boolean; writableEnded?: boolean; lateHeader?: string; lateRemove?: string; lateWriteHead?: string } = {};
     const response = await express({ durable: durable() }, (res) => {
       res.send(BODY);
       seen.headersSent = res.headersSent;
@@ -803,8 +803,24 @@ describe('createPaymentMiddleware (Express) with durable', () => {
       } catch (error) {
         seen.lateHeader = (error as { code?: string }).code;
       }
+      try {
+        res.removeHeader('Content-Length');
+      } catch (error) {
+        seen.lateRemove = (error as { code?: string }).code;
+      }
+      try {
+        res.writeHead(500, { 'X-Late': '1' });
+      } catch (error) {
+        seen.lateWriteHead = (error as { code?: string }).code;
+      }
     });
-    expect(seen).toEqual({ headersSent: true, writableEnded: true, lateHeader: 'ERR_HTTP_HEADERS_SENT' });
+    expect(seen).toEqual({
+      headersSent: true,
+      writableEnded: true,
+      lateHeader: 'ERR_HTTP_HEADERS_SENT',
+      lateRemove: 'ERR_HTTP_HEADERS_SENT',
+      lateWriteHead: 'ERR_HTTP_HEADERS_SENT',
+    });
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(BODY);
     expect(response.headers.has('x-late')).toBe(false);
@@ -812,6 +828,28 @@ describe('createPaymentMiddleware (Express) with durable', () => {
     expect(anchors()).toHaveLength(1);
     expect(open(sealedOf(anchors()[0]))).toBe(BODY);
   });
+
+  it.each(['socket', 'res'] as const)(
+    'an error after send, closed through %s.destroy() as Express\'s final handler does once headersSent: the paid body arrives whole first',
+    async (via) => {
+      let closed = false;
+      const response = await express({ durable: durable() }, (res, req) => {
+        res.send(BODY);
+        // finalhandler, on next(err) with res.headersSent: req.socket.destroy()
+        if (res.headersSent) {
+          if (via === 'socket') req.socket.destroy();
+          else res.destroy();
+          closed = true;
+        }
+      });
+      expect(closed).toBe(true);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(BODY);
+      expect(settles()).toHaveLength(1);
+      expect(anchors()).toHaveLength(1);
+      expect(open(sealedOf(anchors()[0]))).toBe(BODY);
+    },
+  );
 
   it('a single send over the cap: the whole body, too_large, zero anchors', async () => {
     const big = 'y'.repeat(500);
