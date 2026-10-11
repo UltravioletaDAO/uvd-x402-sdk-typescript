@@ -36,7 +36,7 @@ import {
   type EscrowNetworkConfig,
   type EscrowPaymentInfo,
 } from './escrow-preauth';
-import { Erc8004Client } from './backend/index.js';
+import { Erc8004Client, PAYMENT_INFO_TYPEHASH } from './backend/index.js';
 import { X402Client } from './client/X402Client';
 import { EVMProvider } from './providers/evm';
 import { StellarProvider } from './providers/stellar';
@@ -529,7 +529,7 @@ describe('escrow pre-auth', () => {
     usdc: vectors.paymentInfo.token,
     usdc_domain_name: 'USD Coin',
     usdc_domain_version: '2',
-    payment_info_typehash: `0x${'5a'.repeat(32)}`,
+    payment_info_typehash: PAYMENT_INFO_TYPEHASH,
   };
   const PRE_PI: EscrowPaymentInfo = {
     operator: PI.operator,

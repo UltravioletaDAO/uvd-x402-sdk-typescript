@@ -173,11 +173,11 @@ export interface EscrowTierWindows {
   refund: number;
 }
 
-/** Canonical fallback — mirrors uvd_x402_sdk TIER_TIMINGS. */
-export const ESCROW_TIER_WINDOWS: Record<string, EscrowTierWindows> = {
-  micro: { pre: 3600, auth: 7200, refund: 86400 },
-  standard: { pre: 7200, auth: 86400, refund: 604800 },
-};
+/** Canonical fallback — mirrors uvd_x402_sdk TIER_TIMINGS. Frozen, each tier included. */
+export const ESCROW_TIER_WINDOWS: Readonly<Record<string, Readonly<EscrowTierWindows>>> = Object.freeze({
+  micro: Object.freeze({ pre: 3600, auth: 7200, refund: 86400 }),
+  standard: Object.freeze({ pre: 7200, auth: 86400, refund: 604800 }),
+});
 
 /**
  * Human review windows. Agents approve in seconds, so the short SDK tier
@@ -266,15 +266,33 @@ export interface EscrowPaymentInfo {
  * (`src/fixtures/arc-escrow-d.rpc.json`, pinned by
  * `src/backend/escrow-arc-d.test.ts`). The values come from the chain
  * registry (`src/chains`), not typed again here. Mirrors the refusal policy of
- * the Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`.
+ * the Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`. Frozen, each row
+ * included.
  */
-export const VERIFIED_USDC_DOMAINS: Record<number, { name: string; version: string }> = Object.fromEntries(
-  (['arc', 'arc-testnet'] as const).map((network) => {
-    const chain = getChainByName(network);
-    if (!chain) throw new Error(`The chain registry has no '${network}'.`);
-    return [chain.chainId, { name: chain.usdc.name, version: chain.usdc.version }];
-  })
-);
+export const VERIFIED_USDC_DOMAINS: Readonly<Record<number, Readonly<{ name: string; version: string }>>> =
+  Object.freeze(
+    Object.fromEntries(
+      (['arc', 'arc-testnet'] as const).map((network) => {
+        const chain = getChainByName(network);
+        if (!chain) throw new Error(`The chain registry has no '${network}'.`);
+        return [chain.chainId, Object.freeze({ name: chain.usdc.name, version: chain.usdc.version })];
+      })
+    )
+  );
+
+/**
+ * AuthCaptureEscrow's PaymentInfo typehash: keccak256 of
+ * `PaymentInfo(address operator,address payer,address receiver,address token,
+ * uint120 maxAmount,uint48 preApprovalExpiry,uint48 authorizationExpiry,
+ * uint48 refundExpiry,uint16 minFeeBps,uint16 maxFeeBps,address feeReceiver,
+ * uint256 salt)`, 0x-prefixed. A constant of the contract, not a setting: the
+ * nonce hashes it, so {@link buildEscrowPreAuth} refuses a config whose
+ * `payment_info_typehash` is any other value. Equal to `PAYMENT_INFO_TYPEHASH`
+ * (`uvd-x402-sdk/backend`); mirrors the Python SDK's
+ * `escrow_signing.ESCROW_PAYMENT_INFO_TYPEHASH`.
+ */
+export const ESCROW_PAYMENT_INFO_TYPEHASH =
+  '0xae68ac7ce30c86ece8196b61a7c486d8f0061f575037fbd34e7fe4e2820c6591';
 
 const REQUIRED_NETWORK_KEYS: Array<keyof EscrowNetworkConfig> = [
   'chain_id',
@@ -357,17 +375,6 @@ function escrowChainId(value: unknown): number {
 }
 
 /**
- * Names the Python SDK's network registry resolves and `CHAIN_ALIASES`
- * (`src/chains`) does not: `skale` is Execution Market's and Karmakadabra's
- * key for SKALE Base. Read only by the check below, so no other lookup of the
- * chain registry changes.
- */
-const ESCROW_NETWORK_ALIASES: Readonly<Record<string, string>> = Object.freeze({
-  skale: 'skale-base',
-  'skale-testnet': 'skale-base-sepolia',
-});
-
-/**
  * A fee bound of the config as the integer the paymentInfo signs (uint16), or
  * `fallback` when the key is absent: a number, or one written in ASCII decimal
  * digits (the Python twin reads it with `int()`), from 0 to 65535. Anything
@@ -413,17 +420,14 @@ function tierWindows(windows: EscrowTierWindows, tier: string): EscrowTierWindow
  *
  * `eip155:<id>` names its own chain id (ASCII decimal digits; anything else
  * throws); any other name goes through the chain registry
- * ({@link getChainByName}, aliases included, and {@link ESCROW_NETWORK_ALIASES}),
+ * ({@link getChainByName}, `CHAIN_ALIASES` included),
  * case and surrounding spaces aside. A non-EVM network is registered with
  * chain id 0, which no config can match (0 is a missing `chain_id`), so it is
  * refused like any other mismatch. Mirrors the Python SDK's
  * `escrow_signing._registered_chain_id`.
  */
 function registeredChainId(network: string): bigint | undefined {
-  const lowered = network.trim().toLowerCase();
-  const name = Object.prototype.hasOwnProperty.call(ESCROW_NETWORK_ALIASES, lowered)
-    ? ESCROW_NETWORK_ALIASES[lowered]
-    : lowered;
+  const name = network.trim().toLowerCase();
   if (name.startsWith('eip155:')) {
     const reference = name.slice('eip155:'.length);
     if (!/^[0-9]+$/.test(reference)) {
@@ -489,12 +493,33 @@ function configAddress(
 }
 
 /**
- * A table address in the form it is signed in. Lowercased first: a row is
- * compared as an address, not as a spelling (Monad's USDC row in
- * ESCROW_CONTRACTS is written with a checksum ethers does not accept).
+ * A table address in the form it is signed in. Not lowercased first: a row
+ * whose mixed case is not its EIP-55 checksum throws here instead of being
+ * repaired (a test pins every row's spelling).
  */
 function tableAddress(address: string): string {
-  return ethers.getAddress(address.toLowerCase());
+  return ethers.getAddress(address);
+}
+
+/**
+ * The config's `payment_info_typehash` as `computeEscrowNonce` reads it
+ * (0x-prefixed, lowercase), when it is {@link ESCROW_PAYMENT_INFO_TYPEHASH}
+ * (case, an `0x` / `0X` prefix and surrounding spaces aside); any other value
+ * is refused: the nonce would not be the escrow's getHash and the lock would
+ * revert. Mirrors the Python SDK's check in `build_escrow_pre_auth`.
+ */
+function checkPaymentInfoTypehash(typehash: unknown): string {
+  const given = typeof typehash === 'string' ? typehash.trim().toLowerCase() : '';
+  const digits = given.startsWith('0x') ? given.slice(2) : given;
+  if (digits !== ESCROW_PAYMENT_INFO_TYPEHASH.slice(2)) {
+    throw new X402Error(
+      `The escrow config's payment_info_typehash is ${shown(typehash)}, not AuthCaptureEscrow's ` +
+        `PaymentInfo typehash ${ESCROW_PAYMENT_INFO_TYPEHASH} — refusing to sign: the nonce would ` +
+        "not be the escrow's getHash and the lock would revert.",
+      'INVALID_CONFIG'
+    );
+  }
+  return ESCROW_PAYMENT_INFO_TYPEHASH;
 }
 
 /** The chain's row in each of the three escrow tables; a chain missing any is refused. */
@@ -712,7 +737,8 @@ export interface EscrowPreAuthParams {
  *
  * @throws {X402Error} `INVALID_CONFIG` on an incomplete network config,
  *   unknown tier, a `min_fee_bps` / `max_fee_bps` that is not an integer from
- *   0 to 65535, a `maxFeeBps` that cannot cover the operator's static fee, or
+ *   0 to 65535, a `minFeeBps` above the operator's static fee, a `maxFeeBps`
+ *   that cannot cover it, or
  *   a USDC domain that differs from {@link VERIFIED_USDC_DOMAINS};
  *   also on a config the SDK's tables contradict: a `chain_id` that is not a
  *   positive integer or not the chain this SDK registers for `network`, a
@@ -770,6 +796,7 @@ export async function buildEscrowPreAuth(
 
   // Escrow, token collector, USDC and operator, against ./escrow-contracts.
   checkRegisteredAddresses(cfg, chainId, rows);
+  const typehash = checkPaymentInfoTypehash(cfg.payment_info_typehash);
 
   const maxAmount = toUint(params.bountyAtomic, 'bountyAtomic', 'INVALID_AMOUNT');
   if (maxAmount <= 0n) {
@@ -790,6 +817,15 @@ export async function buildEscrowPreAuth(
 
   const minFeeBps = feeBps(cfg.min_fee_bps, DEFAULT_MIN_FEE_BPS, 'min_fee_bps');
   const maxFeeBps = feeBps(cfg.max_fee_bps, DEFAULT_MAX_FEE_BPS, 'max_fee_bps');
+  // The capture takes the operator's static fee, and the escrow requires
+  // minFeeBps <= fee <= maxFeeBps. Mirrors the Python SDK (0.97.0).
+  if (minFeeBps > OPERATOR_FEE_BPS) {
+    throw new X402Error(
+      `minFeeBps=${minFeeBps} must be between 0 and the operator's ${OPERATOR_FEE_BPS} ` +
+        'bps static fee — refusing to sign.',
+      'INVALID_CONFIG'
+    );
+  }
   if (maxFeeBps < OPERATOR_FEE_BPS) {
     throw new X402Error(
       `maxFeeBps=${maxFeeBps} cannot cover the operator's ${OPERATOR_FEE_BPS} ` +
@@ -862,7 +898,7 @@ export async function buildEscrowPreAuth(
   const nonce = computeEscrowNonce(
     chainId,
     cfg.escrow,
-    cfg.payment_info_typehash,
+    typehash,
     paymentInfo
   );
 
