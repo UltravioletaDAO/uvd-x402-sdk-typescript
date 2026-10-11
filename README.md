@@ -2119,11 +2119,11 @@ The skip notices the paywall adds, besides those of `anchorEvidence`:
 
 | `skipped` | When |
 |---|---|
-| `no_payer_key` | `payerKey` returned `undefined` or an empty key |
+| `no_payer_key` | `payerKey` returned `undefined` or an empty key, or threw |
 | `too_large` | the body is over `maxBodyBytes` (declared or read) |
 | `not_capturable` | an event stream, a body already sent, a chunk that is not bytes, or a handler stream that failed |
 | `timeout` | capture, `payerKey`, upload or anchor did not finish within `timeoutMs` |
-| `anchor_failed` | `payerKey` threw, or the anchor failed |
+| `anchor_failed` | the anchor failed |
 
 In Express, the answer is held from the handler's `end()` until the anchor
 returns (at most `timeoutMs`). In that window `res.headersSent` and
@@ -2132,7 +2132,10 @@ end, a further `end()` only queues its callback, and headers can no longer be
 set: the paid answer goes out as the handler ended it. A close the server asks
 for in that window without an error (`res.destroy()` or `req.socket.destroy()`,
 which is what Express's final handler does on an error once headers are sent)
-runs after the body is written.
+waits until the body is written and then closes the connection. A close with an
+error, or one once the connection can no longer write, is not held. A client
+that hangs up its side during the window does not get the body: the window
+lengthens (up to `timeoutMs`) the time in which that happens.
 
 **It never throws.** Every failure resolves to `result.skipped`, because
 evidence is an addition to the payment path and must never be a gate in front of

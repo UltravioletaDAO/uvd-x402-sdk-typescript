@@ -14,6 +14,10 @@
   (`res.destroy()` / `socket.destroy()` sin error, el finalhandler de Express tras un error con
   `headersSent`) se difiere hasta escribir el cuerpo; un cierre con error no se difiere. P3: tests de
   `removeHeader()` / `writeHead()` tardios. 49/49; los 2 tests de cierre caen en `d3aeb98`.
+- Hecho: ronda VER2-SDKTS-53 (head `f922c89`): merge de main `04d9527` (#52, `[Unreleased]` unido a mano);
+  P2-1, un cierre no se retiene si el socket ya no puede escribir, y si quedo retenido corre igual al
+  final; el cierre diferido destruye el socket (tras `finish`, `res.socket` ya es null); `destroy(err)`
+  no se retiene (test); `payerKey` que lanza da `no_payer_key` como Python #71. Limitations: half-close.
 - Falta: nueva refutacion de c0der. No mergear, no publicar.
 - Proximo paso: atender lo que devuelva el refutador en la misma rama.
 

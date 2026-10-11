@@ -9,6 +9,7 @@
  * served. Nothing is signed, settled or stored anywhere.
  */
 import http from 'node:http';
+import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { TypedDataEncoder, Wallet, getBytes, hexlify } from 'ethers';
@@ -450,7 +451,7 @@ describe('createFetchPaywall with durable', () => {
     expect(await empty.text()).toBe(BODY);
     const thrown = await createFetchPaywall(options({ durable: durable({ payerKey: () => { throw new Error('no key'); } }) }))(async () => new Response(BODY))(paid());
     expect(skipped(none.headers)).toBe('no_payer_key');
-    expect(skipped(thrown.headers)).toBe('anchor_failed');
+    expect(skipped(thrown.headers)).toBe('no_payer_key');
     expect(await none.text()).toBe(BODY);
     expect(await thrown.text()).toBe(BODY);
     expect(settles()).toHaveLength(3);
@@ -663,7 +664,12 @@ async function express(
 async function expressServer(
   extra: Partial<FetchPaywallOptions>,
   handler: (res: ExpressRes, req: ExpressReq) => void | Promise<void>,
-): Promise<{ request: (init?: ExpressInit) => Promise<Response>; close: () => Promise<void> }> {
+): Promise<{
+  request: (init?: ExpressInit) => Promise<Response>;
+  port: number;
+  connections: () => Promise<number>;
+  close: () => Promise<void>;
+}> {
   const middleware = createPaymentMiddleware(
     () => ({ amount: '0.01', recipient: PAY_TO, resource: URL_PAID, chainName: 'base' }),
     { facilitatorUrl: facilitator.url, retries: 0, ...extra },
@@ -693,9 +699,31 @@ async function expressServer(
       const text = init.method === 'HEAD' ? '' : await response.text();
       return new Response(init.method === 'HEAD' ? null : text, { status: response.status, headers: response.headers });
     },
-    close: () => new Promise<void>((resolve) => app.close(() => resolve())),
+    port,
+    connections: () => new Promise<number>((resolve, reject) => app.getConnections((error, n) => (error ? reject(error) : resolve(n)))),
+    close: () => new Promise<void>((resolve) => { app.close(() => resolve()); app.closeAllConnections(); }),
   };
 }
+
+/** A raw keep-alive request on its own connection: what arrives, and when the server closes it. */
+async function rawRequest(port: number): Promise<{ socket: net.Socket; data: () => string; closed: Promise<void> }> {
+  const socket = net.connect(port, '127.0.0.1');
+  await new Promise<void>((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+  let data = '';
+  socket.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+  socket.on('error', () => {});
+  const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
+  socket.write(`GET /api/premium HTTP/1.1\r\nHost: 127.0.0.1\r\nX-PAYMENT: ${xPayment()}\r\n\r\n`);
+  return { socket, data: () => data, closed };
+}
+
+const within = (promise: Promise<void>, ms: number) =>
+  Promise.race([promise.then(() => true), sleep(ms).then(() => false)]);
+
+const slowPayerKey = (ms: number) => async () => {
+  await sleep(ms);
+  return PAYER_PUBLIC;
+};
 
 describe('createPaymentMiddleware (Express) with durable', () => {
   it('settled res.json: one anchor, a valid header, the envelope opens to the served bytes', async () => {
@@ -850,6 +878,59 @@ describe('createPaymentMiddleware (Express) with durable', () => {
       expect(open(sealedOf(anchors()[0]))).toBe(BODY);
     },
   );
+
+  it('a res.destroy() held in the window closes the connection once the body is written', async () => {
+    const server = await expressServer({ durable: durable() }, (res) => {
+      res.send(BODY);
+      res.destroy();
+    });
+    try {
+      const client = await rawRequest(server.port);
+      expect(await within(client.closed, 1000)).toBe(true);
+      const [head, body] = client.data().split('\r\n\r\n');
+      expect(head.startsWith('HTTP/1.1 200')).toBe(true);
+      expect(body).toBe(BODY);
+      expect(anchors()).toHaveLength(1);
+      expect(open(sealedOf(anchors()[0]))).toBe(BODY);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a close in the window once the socket can no longer write is not held: the socket is released', async () => {
+    let sent = () => {};
+    const handled = new Promise<void>((resolve) => { sent = resolve; });
+    const server = await expressServer({ durable: durable({ payerKey: slowPayerKey(200) }) }, (res) => {
+      res.send(BODY);
+      sent();
+    });
+    try {
+      const client = await rawRequest(server.port);
+      await handled;
+      // The client hangs up its side during the window; Node's server ends the socket.
+      client.socket.end();
+      expect(await within(client.closed, 1000)).toBe(true);
+      await sleep(400);
+      expect(await server.connections()).toBe(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a destroy with an error in the window is not held: the connection is cut at once', async () => {
+    const server = await expressServer({ durable: durable({ payerKey: slowPayerKey(300) }) }, (res, req) => {
+      res.send(BODY);
+      req.socket.destroy(new Error('handler failed'));
+    });
+    try {
+      const client = await rawRequest(server.port);
+      expect(await within(client.closed, 150)).toBe(true);
+      expect(client.data()).toBe('');
+      await sleep(400);
+    } finally {
+      await server.close();
+    }
+  });
 
   it('a single send over the cap: the whole body, too_large, zero anchors', async () => {
     const big = 'y'.repeat(500);

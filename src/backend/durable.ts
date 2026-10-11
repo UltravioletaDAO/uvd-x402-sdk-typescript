@@ -37,8 +37,8 @@ export interface DurableEvidenceOptions
   extends Pick<AnchorOptions, 'sellerEncryptionKey' | 'sign' | 'upload' | 'backend' | 'retention' | 'storage' | 'fetch'> {
   /**
    * The buyer's encryption key for this payment (`payerKeyFromEvmSignature`,
-   * `payerKeyFromSolanaAddress`). `undefined`, or a throw, skips the evidence
-   * of that response: the sale goes on.
+   * `payerKeyFromSolanaAddress`). `undefined`, an empty key or a throw skips
+   * the evidence of that response with `no_payer_key`: the sale goes on.
    */
   payerKey: (context: DurableEvidenceContext) => Uint8Array | undefined | Promise<Uint8Array | undefined>;
   /** Where the anchor goes. Defaults to the paywall's facilitator. */
@@ -101,7 +101,12 @@ export function createDurableAnchorer(
       try {
         const txHash = settle.transactionHash as string;
         const network = chainToCAIP2(settle.network || payment.requirements.network);
-        const payerKey = await durable.payerKey({ payment, settle });
+        let payerKey: Uint8Array | undefined;
+        try {
+          payerKey = await durable.payerKey({ payment, settle });
+        } catch {
+          return skip('no_payer_key');
+        }
         if (!(payerKey instanceof Uint8Array) || payerKey.length === 0) return skip('no_payer_key');
         if (signal.aborted) return skip('timeout');
         const baseFetch = durable.fetch ?? fetch;
@@ -340,6 +345,8 @@ interface SealedResponse {
   restore: () => void;
   /** A close asked for during the window, to run once the body is written. */
   close: () => (() => void) | undefined;
+  /** Whether the connection can still take the body. */
+  writable: () => boolean;
 }
 
 /**
@@ -348,7 +355,9 @@ interface SealedResponse {
  * `headersSent` leaves it alone and a late header cannot change the paid
  * answer. A close the server asks for in that window (`res.destroy()` or
  * `socket.destroy()` without an error, as Express's final handler does after
- * an error once headers are sent) waits for the body; one with an error does not.
+ * an error once headers are sent) waits for the body, and then closes the
+connection; one with an error, or one once the connection can no longer
+write, does not wait.
  */
 function sealEnded(res: DurableNodeResponse): SealedResponse {
   const target = res as unknown as Record<string, unknown>;
@@ -372,6 +381,10 @@ function sealEnded(res: DurableNodeResponse): SealedResponse {
   }
   let close: (() => void) | undefined;
   const socket = (res as { socket?: unknown }).socket as Record<string, unknown> | null | undefined;
+  const writable = () => !socket || (socket.destroyed !== true && socket.writable !== false);
+  const destroySocket = socket && typeof socket.destroy === 'function'
+    ? (socket.destroy as (...args: unknown[]) => unknown)
+    : undefined;
   const closers: [Record<string, unknown>, PropertyDescriptor | undefined][] = [];
   for (const holder of [target, socket]) {
     if (!holder || typeof holder.destroy !== 'function') continue;
@@ -382,8 +395,17 @@ function sealEnded(res: DurableNodeResponse): SealedResponse {
         configurable: true,
         writable: true,
         value: (...args: unknown[]) => {
-          if (args[0] !== undefined && args[0] !== null) return original.apply(holder, args);
-          close ??= () => { original.call(holder); };
+          if ((args[0] !== undefined && args[0] !== null) || !writable()) return original.apply(holder, args);
+          if (!close) {
+            let ran = false;
+            // After `finish` Node has let go of `res.socket`: the socket is closed itself.
+            close = () => {
+              if (ran) return;
+              ran = true;
+              if (destroySocket) destroySocket.call(socket);
+              else original.call(holder);
+            };
+          }
           return holder;
         },
       });
@@ -404,6 +426,7 @@ function sealEnded(res: DurableNodeResponse): SealedResponse {
       }
     },
     close: () => close,
+    writable,
   };
 }
 
@@ -545,6 +568,8 @@ export function captureNodeResponse(
         : cb;
       const ended = done ? end(bytes, done) : end(bytes);
       for (const late of lateEnds.splice(0)) end(late);
+      // A connection that can no longer write never finishes: nothing to wait for.
+      if (close && !sealed.writable()) close();
       return ended;
     };
     const current = run();
