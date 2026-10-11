@@ -889,6 +889,8 @@ app.post('/api/premium', async (req, res) => {
 });
 ```
 
+To be listed in the facilitator's Bazaar after a paid call, flag the accepts as discoverable: `discoverable: true` in the options of `createHonoMiddleware()` or `createFetchPaywall()` writes `extra.discoverable: true` on every accept, in the 402 and in the requirements sent to `/verify` and `/settle`; the other `extra` fields (`name`, `version`) stay. `false` writes `discoverable: false`, overriding a hand-written one; without the option the accepts go out as given. For one accept, or for `create402Response`, use `withDiscoverable(accept)` (`withDiscoverable(accept, false)` to opt out). Neither modifies the object it is given. A `discoverable` that is not a boolean, an `extra` that is not a plain object, and a native Hedera accept (its `extra` carries `feePayer` only) throw when the paywall is built, before any request.
+
 `createPaymentMiddleware()`, `createHonoMiddleware()` and `createFetchPaywall()` verify and settle automatically by default (`before-handler`). Use `settlementStrategy: 'manual'` if you need to control when settlement happens (e.g., settle only after confirming you can fulfill the request).
 
 A buyer in a browser on another origin reads the terms of a v2 402, in the `PAYMENT-REQUIRED` header, only if the app's CORS exposes that header: list it in `Access-Control-Expose-Headers` (with `hono/cors`, `exposeHeaders: ['PAYMENT-REQUIRED']`) and send `Access-Control-Allow-Origin`. The 402 of `createHonoMiddleware` and `createFetchPaywall` sets no CORS header of its own; `create402Response` lists the header in its `headers` but sets no `Access-Control-Allow-Origin` (spread `getCorsHeaders(origin)` too).
