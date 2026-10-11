@@ -1283,6 +1283,45 @@ for (const c of DOMAIN_CASES) {
 }
 
 
+// A MEASURED divergence, kept visible: the version as a JSON number. Python
+// compares `str(value)` and signs the string "2"; TypeScript compares exactly
+// and refuses (until 2.104.1 it signed `"version": 2`, a domain that is not
+// the token's). Neither signs a wrong domain. If either side changes, this fails.
+const NUMBER_VERSION_CASES = ['8453', '5042']
+  .filter((chainId) => tsDomains.configs[chainId] && pyDomains.table[chainId])
+  .map((chainId) => {
+    const { network, networkConfig } = tsDomains.configs[chainId];
+    const { name, version } = pyDomains.table[chainId];
+    return {
+      id: `${network}/number-version`,
+      network,
+      networkConfig: { ...networkConfig, usdc_domain_name: name, usdc_domain_version: Number(version) },
+      receiver: DOMAIN_RECEIVER,
+      amountAtomic: '250000',
+      privateKey: DOMAIN_KEY,
+      _version: version,
+    };
+  });
+const strippedNumberCases = NUMBER_VERSION_CASES.map(({ _version, ...rest }) => rest);
+const tsNumberVersion = await ask(NODE, { op: 'escrow_pre_auth', cases: strippedNumberCases });
+const pyNumberVersion = await ask(PY, { op: 'escrow_pre_auth', cases: strippedNumberCases });
+check(NUMBER_VERSION_CASES.length === 2, 'the number-version divergence is measured on Base and Arc', NUMBER_VERSION_CASES.map((c) => c.id).join(' '));
+for (const [index, c] of NUMBER_VERSION_CASES.entries()) {
+  const ts = tsNumberVersion.results[index];
+  const py = pyNumberVersion.results[index];
+  check(
+    Boolean(ts?.error) && ts.signed === false && /domain/i.test(ts.error),
+    `${c.id}: typescript refuses a version written as a JSON number, with nothing signed`,
+    ts?.error ?? `signed ${JSON.stringify(ts?.domain)}`
+  );
+  check(
+    !py?.error && py?.domain?.version === c._version,
+    `${c.id}: python signs it, under the string version "${c._version}"`,
+    py?.error ?? JSON.stringify(py?.domain)
+  );
+}
+
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('\n────────────────────────────────────────────────────────────');
 if (failures.length) {
@@ -1302,6 +1341,7 @@ console.log(
   1 order with a 32-byte salt written as a JSON number: TypeScript refused it, Python signed it exactly.
   ${DOMAIN_CASES.length} escrow pre-auths over the ${DOMAIN_CHAINS.length} rows of VERIFIED_USDC_DOMAINS: the table's domain
   signed by both, the same domain with its name or version changed refused by both.
+  ${NUMBER_VERSION_CASES.length} pre-auths with the version as a JSON number: TypeScript refused them, Python signed "2".
 ` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );

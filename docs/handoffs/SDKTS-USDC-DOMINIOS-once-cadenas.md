@@ -7,9 +7,7 @@
   frozen; a chain without a domain row is refused like one without an escrow row;
   a pair that differs is refused before signing. Per-chain tests, a cross-language
   phase 9, version 2.104.2, CHANGELOG, README.
-- Falta: review of the PR; publishing is not part of this task. No adversarial
-  reviewer subagent could be launched from this environment (no such tool here);
-  the self-review and the mutations below stand in for it.
+- Falta: review of the PR; publishing is not part of this task.
 - Proximo paso: review and merge by the maintainers; publish 2.104.2 when they decide.
 
 ## Base measured (before any change)
@@ -36,8 +34,10 @@
 ## Open points
 
 - The TS comparison is strict (`!==`); Python compares `str(value)`. A config with
-  `usdc_domain_version: 2` (a number) is refused by TS and signed by Python. TS is the
-  stricter side (refuses, never signs a wrong domain); left as is, see the PR.
+  `usdc_domain_version: 2` (a number) is refused by TS and signed by Python with `"2"`.
+  Until 2.104.1 TS signed the number itself (`"version":2`), an authorization that does
+  not settle. Pinned by tests (number version, array name, object name on every chain)
+  and measured as a divergence in xlang phase 9 (Base and Arc).
 - npm already has 2.104.1 published while CHANGELOG still says "unreleased" for it;
   not touched here.
 

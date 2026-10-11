@@ -428,12 +428,45 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
       await expect(attempt).rejects.toMatchObject({
         code: 'INVALID_CONFIG',
         message: expect.stringContaining(
-          `but the token's on-chain domain is '${PYTHON_VERIFIED_USDC_DOMAINS[chainId][0]}' / '${PYTHON_VERIFIED_USDC_DOMAINS[chainId][1]}'`
+          `but the token's on-chain domain is ${JSON.stringify(PYTHON_VERIFIED_USDC_DOMAINS[chainId][0])} / ${JSON.stringify(PYTHON_VERIFIED_USDC_DOMAINS[chainId][1])}`
         ),
       });
       expect(signTypedData).not.toHaveBeenCalled();
     }
   });
+
+  it.each(
+    DOMAIN_CHAINS.flatMap(([network, chainId]) => {
+      const [name, version] = PYTHON_VERIFIED_USDC_DOMAINS[chainId];
+      const boxed = { toString: () => name };
+      return [
+        [network, chainId, 'the version as a number', name, Number(version), `${JSON.stringify(name)} / ${Number(version)},`],
+        [network, chainId, 'the name in an array', [name], version, `[${JSON.stringify(name)}] / ${JSON.stringify(version)},`],
+        [network, chainId, 'the name as an object that prints as it', boxed, version, `{} / ${JSON.stringify(version)},`],
+      ] as const;
+    })
+  )(
+    '%s (chain %i): refuses %s, which is not the string the token signs, before anything is signed',
+    async (network, chainId, _what, name, version, shown) => {
+      for (const extra of [{}, { network }]) {
+        const { wallet, signTypedData } = mockWallet();
+        const attempt = buildEscrowPreAuth(wallet, {
+          ...params({
+            ...tableConfig(chainId),
+            usdc_domain_name: name as unknown as string,
+            usdc_domain_version: version as unknown as string,
+          }),
+          ...extra,
+        });
+        await expect(attempt).rejects.toBeInstanceOf(X402Error);
+        await expect(attempt).rejects.toMatchObject({
+          code: 'INVALID_CONFIG',
+          message: expect.stringContaining(`the USDC domain ${shown} but the token's on-chain domain`),
+        });
+        expect(signTypedData).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   it.each([
     ['name', { usdc_domain_name: 'USD Coin' }],
@@ -1071,7 +1104,7 @@ describe('buildEscrowPreAuth against the SDK tables: valid configs sign as befor
   it("a chain id written as '05042' is Arc: its verified USDC domain and its rows still apply", async () => {
     const arc = withField(tableConfig(5042), 'chain_id', '05042');
     await signs(arc, { network: 'arc' });
-    await refused({ ...arc, usdc_domain_name: 'USD Coin' }, { network: 'arc' }, /on-chain domain is 'USDC'/);
+    await refused({ ...arc, usdc_domain_name: 'USD Coin' }, { network: 'arc' }, /on-chain domain is "USDC"/);
     await refused({ ...arc, escrow: changed(arc.escrow) }, {}, /Escrow address mismatch for chain 5042/);
   });
 

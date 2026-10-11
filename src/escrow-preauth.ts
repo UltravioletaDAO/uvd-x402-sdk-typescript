@@ -791,8 +791,9 @@ export async function buildEscrowPreAuth(
   if (cfg.usdc_domain_name !== verified.name || cfg.usdc_domain_version !== verified.version) {
     throw new X402Error(
       `The escrow config gives chain ${chainId} the USDC domain ` +
-        `'${cfg.usdc_domain_name}' / '${cfg.usdc_domain_version}', but the token's on-chain ` +
-        `domain is '${verified.name}' / '${verified.version}' — refusing to sign an ` +
+        `${JSON.stringify(cfg.usdc_domain_name)} / ${JSON.stringify(cfg.usdc_domain_version)}, but the ` +
+        `token's on-chain domain is ${JSON.stringify(verified.name)} / ${JSON.stringify(verified.version)} ` +
+        '(strings, compared exactly) — refusing to sign an ' +
         'authorization that could never settle.',
       'INVALID_CONFIG'
     );
