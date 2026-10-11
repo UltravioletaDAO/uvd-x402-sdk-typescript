@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { getBytes, parseUnits } from 'ethers';
+import { getAddress, getBytes, parseUnits } from 'ethers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildEscrowPreAuth,
   computeEscrowNonce,
+  DEFAULT_MAX_FEE_BPS,
   ESCROW_DEPOSIT_LIMIT_USD,
   ESCROW_TIER_WINDOWS,
   OPERATOR_FEE_BPS,
@@ -15,11 +16,18 @@ import {
 import type {
   EscrowNetworkConfig,
   EscrowPaymentInfo,
+  EscrowPreAuthParams,
   EscrowTierWindows,
 } from './escrow-preauth';
 import { EnvKeyAdapter } from './adapters/env-key';
 import { ESCROW_CONTRACTS } from './backend';
-import { getChainByName } from './chains';
+import {
+  ESCROW_CONTRACTS as REGISTRY_CONTRACTS,
+  ESCROW_MAX_FEE_BPS,
+  ESCROW_OPERATORS,
+} from './escrow-contracts';
+import { SMA_WRAP_TARGETS, type DelegationResolver } from './erc7702';
+import { getChainById, getChainByName } from './chains';
 import { X402Error } from './types';
 import fixtureRaw from './escrow-preauth.vectors.json';
 import arcVectorRaw from './escrow-preauth.arc-vector.json';
@@ -596,5 +604,646 @@ describe('buildEscrowPreAuth — fail-loud validation (never a silent fallback)'
       })
     ).rejects.toThrow(/Unknown escrow tier 'jumbo'/);
     expect(signTypedData).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// The SDK tables: chain id, escrow, token collector, USDC, operator, fee ceiling
+// ============================================================================
+//
+// config key        where the signature carries it               checked against
+// chain_id          domain.chainId, the nonce, the network       the `network` name
+// escrow            the nonce (AuthCaptureEscrow.getHash)        ESCROW_CONTRACTS
+// token_collector   message.to / authorization.to                ESCROW_CONTRACTS
+// usdc              domain.verifyingContract, paymentInfo.token  ESCROW_CONTRACTS
+// operator          paymentInfo.operator / feeReceiver           ESCROW_OPERATORS
+// max_fee_bps       paymentInfo.maxFeeBps (ceiling)              ESCROW_MAX_FEE_BPS
+//
+// Port of the Python SDK's tests/test_escrow_signing_registry.py (0.96.0).
+
+/**
+ * Execution Market's config of each escrow network of its registry, with the
+ * keys the pre-auth reads: `mcp_server/integrations/x402/network_registry.py`
+ * at execution-market@bf1007d8 (each network's `operator`, `escrow` and
+ * `x402r_infra.tokenCollector`; USDC from the chain registry). The table is
+ * the only other copy of these operators in this repo, so this second one,
+ * with its source, is what turns an edited row red. `skale` is retired in
+ * Execution Market and its payment config no longer serves it; its registry
+ * entry is still the operator of the escrows in flight there.
+ */
+const EM_NETWORKS: Record<string, { chainId: number; operator: string; escrow: string; collector: string }> = {
+  base: {
+    chainId: 8453,
+    operator: '0x271f9fa7f8907aCf178CCFB470076D9129D8F0Eb',
+    escrow: '0xb9488351E48b23D798f24e8174514F28B741Eb4f',
+    collector: '0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8',
+  },
+  ethereum: {
+    chainId: 1,
+    operator: '0x69B67962ffb7c5C7078ff348a87DF604dfA8001b',
+    escrow: '0x9D4146EF898c8E60B3e865AE254ef438E7cEd2A0',
+    collector: '0x206D4DbB6E7b876e4B5EFAAD2a04e7d7813FB6ba',
+  },
+  polygon: {
+    chainId: 137,
+    operator: '0xB87F1ECC85f074e50df3DD16A1F40e4e1EC4102e',
+    escrow: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
+    collector: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+  },
+  arbitrum: {
+    chainId: 42161,
+    operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+  },
+  celo: {
+    chainId: 42220,
+    operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+  },
+  monad: {
+    chainId: 143,
+    operator: '0x9620Dbe2BB549E1d080Dc8e7982623A9e1Df8cC3',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+  },
+  avalanche: {
+    chainId: 43114,
+    operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+  },
+  optimism: {
+    chainId: 10,
+    operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
+    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+  },
+  skale: {
+    chainId: 1187947933,
+    operator: '0x43E46d4587fCCc382285C52012227555ed78D183',
+    escrow: '0xBC151792f80C0EB1973d56b0235e6bee2A60e245',
+    collector: '0x9A12A116a44636F55c9e135189A1321Abcfe2f30',
+  },
+  arc: {
+    chainId: 5042,
+    operator: '0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D',
+    escrow: '0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff',
+    collector: '0x0E3dF9510de65469C4518D7843919c0b8C7A7757',
+  },
+};
+/** The fee bounds Execution Market's payment config serves (`mcp_server/api/h2a.py`). */
+const EM_FEES = { min_fee_bps: 0, max_fee_bps: 1800 };
+
+/** The chains with an operator row, and the name this SDK registers for each. */
+const TABLE_CHAINS = Object.keys(ESCROW_OPERATORS)
+  .map(Number)
+  .sort((a, b) => a - b);
+const nameOf = (chainId: number): string => getChainById(chainId)!.name;
+const TABLE_CASES = TABLE_CHAINS.map((chainId) => [nameOf(chainId), chainId] as const);
+/** Rows in ESCROW_CONTRACTS with no operator, no fee ceiling and no name here. */
+const TESTNETS = [84532, 11155111];
+const ADDRESS_KEYS = [
+  ['escrow', 'escrow'],
+  ['token_collector', 'tokenCollector'],
+  ['usdc', 'usdc'],
+] as const;
+
+/**
+ * A registry address as it is signed (checksummed). Monad's USDC row is
+ * written `0x754704Bc…BC8a…`, a checksum ethers refuses; the address is
+ * `…BC8A…`, the one Execution Market serves.
+ */
+const signed = (address: string): string => getAddress(address.toLowerCase());
+
+/** One network block of the config, from the SDK's own tables only. */
+function tableConfig(chainId: number): EscrowNetworkConfig {
+  const contracts = REGISTRY_CONTRACTS[chainId];
+  const usdc = getChainById(chainId)?.usdc;
+  return {
+    chain_id: chainId,
+    operator: ESCROW_OPERATORS[chainId] ?? getAddress('0x' + chainId.toString(16).padStart(40, '0')),
+    escrow: signed(contracts.escrow),
+    token_collector: signed(contracts.tokenCollector),
+    usdc: signed(contracts.usdc),
+    usdc_domain_name: usdc?.name ?? 'USD Coin',
+    usdc_domain_version: usdc?.version ?? '2',
+    payment_info_typehash: FX.network_config.payment_info_typehash,
+  };
+}
+
+/** Execution Market's block for one of its networks. */
+function emConfig(network: string): EscrowNetworkConfig {
+  const em = EM_NETWORKS[network];
+  const usdc = getChainById(em.chainId)!.usdc;
+  return {
+    chain_id: em.chainId,
+    operator: em.operator,
+    escrow: em.escrow,
+    token_collector: em.collector,
+    usdc: signed(REGISTRY_CONTRACTS[em.chainId].usdc),
+    usdc_domain_name: usdc.name,
+    usdc_domain_version: usdc.version,
+    payment_info_typehash: FX.network_config.payment_info_typehash,
+    ...EM_FEES,
+  };
+}
+
+/** The same address with its last hex digit moved by one, checksummed. */
+function changed(address: string): string {
+  const lower = address.toLowerCase();
+  return getAddress(lower.slice(0, -1) + ((parseInt(lower.slice(-1), 16) + 1) % 16).toString(16));
+}
+
+type ExtraParams = Partial<Omit<EscrowPreAuthParams, 'networkConfig'>>;
+
+function attempt(networkConfig: EscrowNetworkConfig, extra: ExtraParams = {}) {
+  const { wallet, signTypedData } = mockWallet();
+  const result = buildEscrowPreAuth(wallet, {
+    networkConfig,
+    payerWallet: PAYER,
+    workerWallet: WORKER,
+    bountyAtomic: '250000',
+    ...extra,
+  });
+  return { result, signTypedData };
+}
+
+async function signs(networkConfig: EscrowNetworkConfig, extra: ExtraParams = {}) {
+  const { result, signTypedData } = attempt(networkConfig, extra);
+  const wrapper = JSON.parse(await result);
+  expect(signTypedData).toHaveBeenCalledTimes(1);
+  return { wrapper, typedData: JSON.parse(signTypedData.mock.calls[0][0]) };
+}
+
+async function refused(networkConfig: EscrowNetworkConfig, extra: ExtraParams, match: RegExp) {
+  const { result, signTypedData } = attempt(networkConfig, extra);
+  const error = await result.then(
+    () => null,
+    (e: unknown) => e
+  );
+  expect(error, 'the config must be refused').toBeInstanceOf(X402Error);
+  expect((error as X402Error).code).toBe('INVALID_CONFIG');
+  expect((error as X402Error).message).toMatch(match);
+  expect(signTypedData, 'nothing may be signed before the refusal').not.toHaveBeenCalled();
+}
+
+/** A config field set to a value of another type, as a JSON body can carry it. */
+const withField = (cfg: EscrowNetworkConfig, key: string, value: unknown): EscrowNetworkConfig =>
+  ({ ...cfg, [key]: value }) as unknown as EscrowNetworkConfig;
+
+describe('the escrow tables (src/escrow-contracts.ts)', () => {
+  it('backend re-exports the same ESCROW_CONTRACTS object', () => {
+    expect(ESCROW_CONTRACTS).toBe(REGISTRY_CONTRACTS);
+  });
+
+  it('every operator row is a chain of ESCROW_CONTRACTS, and every one has a fee ceiling', () => {
+    for (const chainId of TABLE_CHAINS) expect(REGISTRY_CONTRACTS[chainId], `chain ${chainId}`).toBeDefined();
+    expect(Object.keys(ESCROW_MAX_FEE_BPS).sort()).toEqual(Object.keys(ESCROW_OPERATORS).sort());
+    for (const chainId of TESTNETS) {
+      expect(REGISTRY_CONTRACTS[chainId]).toBeDefined();
+      expect(ESCROW_OPERATORS[chainId]).toBeUndefined();
+      expect(ESCROW_MAX_FEE_BPS[chainId]).toBeUndefined();
+    }
+  });
+
+  it("the fee ceiling is Execution Market's 1800 bps on every row, and the default bound is within it", () => {
+    expect(new Set(Object.values(ESCROW_MAX_FEE_BPS))).toEqual(new Set([EM_FEES.max_fee_bps]));
+    expect(DEFAULT_MAX_FEE_BPS).toBeLessThanOrEqual(Math.min(...Object.values(ESCROW_MAX_FEE_BPS)));
+    expect(OPERATOR_FEE_BPS).toBeLessThanOrEqual(Math.min(...Object.values(ESCROW_MAX_FEE_BPS)));
+  });
+
+  it("the operator rows are Execution Market's, the Base vector's, and Arc's recorded computeAddress", () => {
+    const rpc = JSON.parse(readFileSync(resolve(__dirname, 'fixtures', 'arc-escrow-d.rpc.json'), 'utf8'));
+    const computeAddress = (chain: string) =>
+      getAddress(
+        '0x' +
+          String(rpc.chains[chain].reads.find((r: { label: string }) => r.label === 'operatorFactory.computeAddress').result).slice(-40)
+      );
+    expect(ESCROW_OPERATORS).toEqual({
+      ...Object.fromEntries(Object.values(EM_NETWORKS).map((em) => [em.chainId, em.operator])),
+      5042002: computeAddress('5042002'),
+    });
+    expect(ESCROW_OPERATORS[5042]).toBe(computeAddress('5042'));
+    expect(ESCROW_OPERATORS[8453]).toBe(FX.network_config.operator);
+    for (const address of Object.values(ESCROW_OPERATORS)) expect(getAddress(address)).toBe(address);
+  });
+
+  it.each(Object.keys(EM_NETWORKS))("%s: Execution Market's escrow and collector are the registry row", (network) => {
+    const em = EM_NETWORKS[network];
+    const contracts = REGISTRY_CONTRACTS[em.chainId];
+    expect([contracts.escrow, contracts.tokenCollector]).toEqual([em.escrow, em.collector]);
+    expect(getChainByName(nameOf(em.chainId))!.chainId).toBe(em.chainId);
+  });
+
+  it("the operator row is not the factory that ESCROW_CONTRACTS' operator column holds on Base", () => {
+    // 0x3D08…0260 answers ESCROW() and reverts on FEE_CALCULATOR(): a factory.
+    expect(REGISTRY_CONTRACTS[8453].operator).toBe('0x3D0837fF8Ea36F417261577b9BA568400A840260');
+    expect(ESCROW_OPERATORS[8453]).not.toBe(REGISTRY_CONTRACTS[8453].operator);
+  });
+});
+
+describe('buildEscrowPreAuth against the SDK tables: valid configs sign as before', () => {
+  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config signs, carrying the table's values", async (network) => {
+    const cfg = emConfig(network);
+    const chainId = cfg.chain_id;
+    const contracts = REGISTRY_CONTRACTS[chainId];
+    for (const extra of [{ network }, {}] as ExtraParams[]) {
+      const { wrapper, typedData } = await signs(cfg, extra);
+      const { authorization, paymentInfo } = wrapper.payload;
+      expect(typedData.domain.chainId).toBe(chainId);
+      expect(typedData.domain.verifyingContract).toBe(signed(contracts.usdc));
+      expect(wrapper.paymentRequirements.network).toBe(`eip155:${chainId}`);
+      expect(paymentInfo.token).toBe(signed(contracts.usdc));
+      expect(typedData.message.to).toBe(signed(contracts.tokenCollector));
+      expect(authorization.to).toBe(signed(contracts.tokenCollector));
+      expect(paymentInfo.operator).toBe(ESCROW_OPERATORS[chainId]);
+      expect(paymentInfo.feeReceiver).toBe(ESCROW_OPERATORS[chainId]);
+      expect(paymentInfo.maxFeeBps).toBe(ESCROW_MAX_FEE_BPS[chainId]);
+      expect(authorization.nonce).toBe(
+        computeEscrowNonce(chainId, contracts.escrow, cfg.payment_info_typehash, paymentInfo)
+      );
+    }
+  });
+
+  it.each(TABLE_CASES)('%s (chain %i): the config built from the tables signs', async (network, chainId) => {
+    await signs(tableConfig(chainId), { network });
+  });
+
+  it("monad: Execution Market's USDC matches the row, whose spelling has another checksum", async () => {
+    // execution-market@bf1007d8 network_registry.py, monad USDC.
+    const usdc = '0x754704Bc059F8C67012fEd69BC8A327a5aafb603';
+    expect(REGISTRY_CONTRACTS[143].usdc).not.toBe(usdc);
+    expect(REGISTRY_CONTRACTS[143].usdc.toLowerCase()).toBe(usdc.toLowerCase());
+    const { typedData } = await signs({ ...tableConfig(143), usdc }, { network: 'monad' });
+    expect(typedData.domain.verifyingContract).toBe(usdc);
+  });
+
+  it.each(['base', 'BASE', ' Base ', 'eip155:8453', 'EIP155:8453', ' eip155:8453 ', 'eip155:08453', undefined])(
+    'the Base golden vector is reproduced byte for byte with network %j',
+    async (network) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(FROZEN.now * 1000));
+      vi.stubGlobal('crypto', {
+        getRandomValues: (arr: Uint8Array) => {
+          arr.fill(0xab);
+          return arr;
+        },
+      });
+      const adapter = new EnvKeyAdapter(FROZEN.signer_private_key);
+      const header = await buildEscrowPreAuth(adapter, {
+        networkConfig: NETWORK_CONFIG,
+        network,
+        payerWallet: PAYER,
+        workerWallet: WORKER,
+        bountyAtomic: FX.bounty_atomic,
+        tier: FROZEN.tier,
+        reviewDeadlineSec: FROZEN.deadline,
+      });
+      expect(JSON.parse(header)).toEqual(FROZEN.expected_wrapper);
+    }
+  );
+
+  it('the Arc golden vector is reproduced byte for byte with network arc', async () => {
+    const salt = getBytes(ARC.pre_auth.salt);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(ARC.pre_auth.now * 1000));
+    vi.stubGlobal('crypto', {
+      getRandomValues: (arr: Uint8Array) => {
+        arr.set(salt);
+        return arr;
+      },
+    });
+    const header = await buildEscrowPreAuth(new EnvKeyAdapter(FROZEN.signer_private_key), {
+      networkConfig: { ...ARC.network_config, tiers: FX.escrow_tier_windows },
+      network: ARC.pre_auth.network,
+      payerWallet: ARC.payer,
+      workerWallet: ARC.pre_auth.worker,
+      bountyAtomic: ARC.bounty_atomic,
+      tier: ARC.pre_auth.tier,
+    });
+    expect(JSON.parse(header)).toEqual(ARC.expected_wrapper);
+  });
+
+  it.each(['lower', 'upper'])('the table addresses written in %s case are the same addresses', async (spelling) => {
+    const cfg = tableConfig(8453);
+    const respelled = { ...cfg };
+    for (const key of ['operator', 'escrow', 'token_collector', 'usdc'] as const) {
+      const hex = cfg[key].slice(2);
+      respelled[key] = '0x' + (spelling === 'lower' ? hex.toLowerCase() : hex.toUpperCase());
+    }
+    const { wrapper } = await signs(respelled, { network: 'base' });
+    expect(wrapper.payload.authorization.to).toBe(REGISTRY_CONTRACTS[8453].tokenCollector);
+    expect(wrapper.payload.paymentInfo.operator).toBe(ESCROW_OPERATORS[8453]);
+  });
+
+  it.each(['8453', '08453'])('a chain id written as the digits %j is the same chain, and is signed as the number', async (digits) => {
+    const { wrapper, typedData } = await signs(withField(tableConfig(8453), 'chain_id', digits), { network: 'base' });
+    expect(typedData.domain.chainId).toBe(8453);
+    expect(wrapper.paymentRequirements.network).toBe('eip155:8453');
+  });
+
+  it("a chain id written as '05042' is Arc: its verified USDC domain and its rows still apply", async () => {
+    const arc = withField(tableConfig(5042), 'chain_id', '05042');
+    await signs(arc, { network: 'arc' });
+    await refused({ ...arc, usdc_domain_name: 'USD Coin' }, { network: 'arc' }, /on-chain domain is 'USDC'/);
+    await refused({ ...arc, escrow: changed(arc.escrow) }, {}, /Escrow address mismatch for chain 5042/);
+  });
+
+  it.each([null, undefined])('max_fee_bps %s signs the default bound, within the ceiling', async (value) => {
+    const { wrapper } = await signs(withField(tableConfig(8453), 'max_fee_bps', value), { network: 'base' });
+    expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(DEFAULT_MAX_FEE_BPS);
+  });
+
+  it.each([null, undefined])('network %s: no name to check, the tables are still read', async (network) => {
+    await signs(tableConfig(8453), { network: network as unknown as string });
+    const cfg = { ...tableConfig(8453), token_collector: changed(REGISTRY_CONTRACTS[8453].tokenCollector) };
+    await refused(cfg, { network: network as unknown as string }, /Escrow address mismatch .* asserts token_collector /);
+  });
+});
+
+describe('buildEscrowPreAuth against the SDK tables: one contradiction per field, refused before signing', () => {
+  const ADDRESS_CASES = TABLE_CASES.flatMap(([network, chainId]) =>
+    ADDRESS_KEYS.map(([key]) => [network, chainId, key] as const)
+  );
+
+  it.each(ADDRESS_CASES)('%s (chain %i): a changed %s is refused', async (network, chainId, key) => {
+    const cfg = { ...tableConfig(chainId), [key]: changed(tableConfig(chainId)[key]) };
+    const match = new RegExp(`Escrow address mismatch for chain ${chainId}: the escrow config asserts ${key} `);
+    await refused(cfg, { network }, match);
+    await refused(cfg, {}, match);
+  });
+
+  it.each(TABLE_CASES)('%s (chain %i): a changed operator is refused', async (network, chainId) => {
+    const cfg = { ...tableConfig(chainId), operator: changed(ESCROW_OPERATORS[chainId]) };
+    await refused(cfg, { network }, new RegExp(`Escrow operator mismatch for chain ${chainId}`));
+    await refused(cfg, {}, /Escrow operator mismatch/);
+  });
+
+  // ESCROW_CONTRACTS' operator column: the factory on most chains. On Ethereum,
+  // Arc and Arc Testnet it holds the operator itself, so they are not cases.
+  const COLUMN_CASES = TABLE_CASES.filter(([, chainId]) => REGISTRY_CONTRACTS[chainId].operator !== ESCROW_OPERATORS[chainId]);
+
+  it('the operator column differs from the operator row on every chain but Ethereum, Arc and Arc Testnet', () => {
+    expect(TABLE_CHAINS.filter((c) => !COLUMN_CASES.some(([, chainId]) => chainId === c))).toEqual([1, 5042, 5042002]);
+  });
+
+  it.each(COLUMN_CASES)("%s (chain %i): ESCROW_CONTRACTS' operator column is refused as the operator", async (network, chainId) => {
+    await refused({ ...tableConfig(chainId), operator: REGISTRY_CONTRACTS[chainId].operator }, { network }, /Escrow operator mismatch/);
+  });
+
+  it.each(TABLE_CASES)("%s (chain %i): every other chain's whole config under this name is refused", async (network, chainId) => {
+    for (const other of TABLE_CHAINS.filter((c) => c !== chainId)) {
+      await refused(tableConfig(other), { network }, new RegExp(`Chain id mismatch for '${network}'`));
+    }
+  });
+
+  it.each(TABLE_CASES)('%s (chain %i): the fee ceiling is signed and one bps above it is refused', async (network, chainId) => {
+    const ceiling = ESCROW_MAX_FEE_BPS[chainId];
+    const { wrapper } = await signs({ ...tableConfig(chainId), max_fee_bps: ceiling }, { network });
+    expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(ceiling);
+    const above = { ...tableConfig(chainId), max_fee_bps: ceiling + 1 };
+    const match = new RegExp(`maxFeeBps=${ceiling + 1} for chain ${chainId} is above this SDK's ceiling`);
+    await refused(above, { network }, match);
+    await refused(above, {}, match);
+  });
+
+  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config with another operator, or 1801 bps, is refused", async (network) => {
+    await refused({ ...emConfig(network), operator: changed(EM_NETWORKS[network].operator) }, { network }, /Escrow operator mismatch/);
+    await refused({ ...emConfig(network), max_fee_bps: 1801 }, { network }, /above this SDK's ceiling/);
+  });
+});
+
+describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nulls and limits', () => {
+  it.each(TESTNETS)('testnet %i: rows in ESCROW_CONTRACTS only — any operator and fee bound sign, a changed address does not', async (chainId) => {
+    const operator = getAddress('0x' + '0e'.repeat(20));
+    const { wrapper } = await signs({ ...tableConfig(chainId), operator, max_fee_bps: 2500 }, { network: `eip155:${chainId}` });
+    expect(wrapper.payload.paymentInfo.operator).toBe(operator);
+    expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(2500);
+    for (const [key] of ADDRESS_KEYS) {
+      const cfg = { ...tableConfig(chainId), [key]: changed(tableConfig(chainId)[key]) };
+      await refused(cfg, { network: `eip155:${chainId}` }, new RegExp(`Escrow address mismatch .* asserts ${key} `));
+    }
+  });
+
+  it('a chain no table has a row for is signed with the config as it is', async () => {
+    const cfg: EscrowNetworkConfig = {
+      chain_id: 999999,
+      operator: '0x' + '01'.repeat(20),
+      escrow: '0x' + '02'.repeat(20),
+      token_collector: '0x' + '03'.repeat(20),
+      usdc: '0x' + '04'.repeat(20),
+      usdc_domain_name: 'USD Coin',
+      usdc_domain_version: '2',
+      payment_info_typehash: FX.network_config.payment_info_typehash,
+      max_fee_bps: 5000,
+    };
+    for (const network of ['red-nueva', 'eip155:999999', undefined]) {
+      const { wrapper } = await signs(cfg, { network });
+      expect(wrapper.paymentRequirements.network).toBe('eip155:999999');
+      expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(5000);
+    }
+  });
+
+  it('a registered network with no escrow rows (hyperevm) is checked by name only', async () => {
+    const cfg = { ...tableConfig(8453), chain_id: 999 };
+    await signs(cfg, { network: 'hyperevm' });
+    await refused(cfg, { network: 'base' }, /Chain id mismatch for 'base'/);
+  });
+
+  it.each(['red-nueva', 'bsae', 'constructor', '__proto__', 'toString', 'ｂａｓｅ'])(
+    "a name the chain registry does not know (%j) is not checked by name, and the tables still are",
+    async (network) => {
+      await signs(tableConfig(10), { network });
+      const cfg = { ...tableConfig(10), usdc: changed(REGISTRY_CONTRACTS[10].usdc) };
+      await refused(cfg, { network }, /Escrow address mismatch for chain 10: the escrow config asserts usdc /);
+    }
+  );
+
+  it.each(['skale', 'SKALE', ' Skale '])("%j is the Python registry's alias of skale-base, and is checked", async (network) => {
+    const { wrapper } = await signs(tableConfig(1187947933), { network });
+    expect(wrapper.paymentRequirements.network).toBe('eip155:1187947933');
+    await refused(tableConfig(8453), { network }, /registers '.*' as chain 1187947933/);
+  });
+
+  it("'skale-testnet' is the Python registry's alias of skale-base-sepolia", async () => {
+    expect(getChainByName('skale-base-sepolia')!.chainId).toBe(324705682);
+    await refused(tableConfig(8453), { network: 'skale-testnet' }, /as chain 324705682/);
+  });
+
+  it.each(['BASE', ' Base ', 'Base', 'EIP155:10', ' eip155:10 ', 'eip155:010'])(
+    'another spelling of a known network (%j) is still checked',
+    async (network) => {
+      const cfg = network.toLowerCase().includes('eip155') ? tableConfig(8453) : tableConfig(10);
+      await refused(cfg, { network }, /Chain id mismatch/);
+    }
+  );
+
+  it.each(['eip155:', 'eip155:base', 'eip155:0x2105', 'eip155:-8453', 'eip155:+8453', 'eip155:8453.0', 'eip155:8 453', 'eip155:８４５３'])(
+    '%j names no EVM chain id and is refused',
+    async (network) => {
+      await refused(tableConfig(8453), { network }, /names no EVM chain id/);
+    }
+  );
+
+  it.each(['solana', 'stellar', 'xrpl', 'hedera', 'sui'])('a non-EVM network (%s) is refused', async (network) => {
+    await refused(tableConfig(8453), { network }, /Chain id mismatch/);
+  });
+
+  it.each<[string, unknown]>([
+    ['empty', ''],
+    ['blank', '   '],
+    ['a number', 8453],
+    ['a boolean', true],
+    ['an object', { name: 'base' }],
+  ])('a network that is %s names no network and is refused', async (_label, network) => {
+    await refused(tableConfig(8453), { network: network as string }, /names no network/);
+  });
+
+  it.each<[string, unknown]>([
+    ['true', true],
+    ['a hex string', '0x2105'],
+    ['a padded string', ' 8453'],
+    ['a signed string', '+8453'],
+    ['a decimal string', '8453.0'],
+    ['fullwidth digits', '８４５３'],
+    ['a fraction', 8453.5],
+    ['negative', -8453],
+    ['Infinity', Infinity],
+    ['past 2**53 - 1', 2 ** 53],
+    ['digits past 2**53 - 1', '9007199254740993'],
+    ['a bigint', 8453n],
+    ['an object', { valueOf: () => 8453 }],
+  ])('a chain_id that is %s is refused', async (_label, value) => {
+    await refused(withField(tableConfig(8453), 'chain_id', value), {}, /Invalid chain_id/);
+  });
+
+  it.each(['chain_id', 'operator', 'escrow', 'token_collector', 'usdc'])('a null %s is a missing key', async (key) => {
+    await refused(withField(tableConfig(8453), key, null), { network: 'base' }, new RegExp(`missing ${key}`));
+  });
+
+  it.each<[string, string]>([
+    ['a 0X prefix', '0X'],
+    ['a leading space', ' 0x'],
+    ['no hex', '0xzz'],
+  ])('a table address with %s is refused as not an address', async (_label, prefix) => {
+    for (const key of ['operator', 'escrow', 'token_collector', 'usdc'] as const) {
+      const cfg = tableConfig(8453);
+      const value = prefix === '0xzz' ? '0x' + 'zz'.repeat(20) : prefix + cfg[key].slice(2);
+      await refused({ ...cfg, [key]: value }, { network: 'base' }, new RegExp(`escrow config's ${key} .* is not an address`));
+    }
+  });
+
+  it('a mixed-case address with a wrong checksum is refused as not an address', async () => {
+    const cfg = tableConfig(8453);
+    const swapped = cfg.token_collector.slice(0, 4) + cfg.token_collector[4].toLowerCase() + cfg.token_collector.slice(5);
+    expect(swapped).not.toBe(cfg.token_collector); // '0x48AD…': the A is the one flipped
+    await refused({ ...cfg, token_collector: swapped }, { network: 'base' }, /token_collector .* is not an address/);
+  });
+
+  it.each<[string, unknown]>([
+    ['100%', 10_000],
+    ['uint16 max', 65_535],
+    ['past uint16', 65_536],
+    ['a fraction above', 1800.5],
+    ['a string above', '1801'],
+    ['Infinity', Infinity],
+    ['NaN', Number.NaN],
+    ['not a number', 'abc'],
+  ])('a fee bound that is %s is refused by the ceiling', async (_label, value) => {
+    await refused(withField(tableConfig(8453), 'max_fee_bps', value), { network: 'base' }, /above this SDK's ceiling/);
+  });
+
+  it('the operator fee floor still applies under the ceiling', async () => {
+    const { wrapper } = await signs({ ...tableConfig(8453), max_fee_bps: OPERATOR_FEE_BPS }, { network: 'base' });
+    expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(OPERATOR_FEE_BPS);
+    await refused({ ...tableConfig(8453), max_fee_bps: OPERATOR_FEE_BPS - 1 }, { network: 'base' }, /cannot cover/);
+  });
+
+  it('a fee bound written as a string at or below the ceiling still signs', async () => {
+    await signs(withField(tableConfig(8453), 'max_fee_bps', '1500'), { network: 'base' });
+  });
+
+  it('the config is read once: a getter that changes its answer signs what was checked', async () => {
+    const table = tableConfig(8453);
+    const other = getAddress('0x' + 'ee'.repeat(20));
+    const reads = { token_collector: 0, operator: 0, usdc: 0, escrow: 0 };
+    const cfg = { ...table } as Record<string, unknown>;
+    for (const key of Object.keys(reads) as Array<keyof typeof reads>) {
+      Object.defineProperty(cfg, key, {
+        enumerable: true,
+        get: () => (reads[key]++ === 0 ? table[key] : other),
+      });
+    }
+    const { wrapper, typedData } = await signs(cfg as unknown as EscrowNetworkConfig, { network: 'base' });
+    expect(reads).toEqual({ token_collector: 1, operator: 1, usdc: 1, escrow: 1 });
+    expect(typedData.message.to).toBe(table.token_collector);
+    expect(typedData.domain.verifyingContract).toBe(table.usdc);
+    expect(wrapper.payload.paymentInfo.operator).toBe(table.operator);
+    expect(wrapper.payload.paymentInfo.feeReceiver).toBe(table.operator);
+    expect(wrapper.payload.authorization.nonce).toBe(
+      computeEscrowNonce(8453, table.escrow, table.payment_info_typehash, wrapper.payload.paymentInfo)
+    );
+  });
+
+  it('a Proxy config is read once too', async () => {
+    const table = tableConfig(8453);
+    let reads = 0;
+    const proxy = new Proxy(table, {
+      get: (target, key) => (key === 'token_collector' && reads++ > 0 ? getAddress('0x' + 'ee'.repeat(20)) : Reflect.get(target, key)),
+    });
+    const { typedData } = await signs(proxy, { network: 'base' });
+    expect(reads).toBe(1);
+    expect(typedData.message.to).toBe(table.token_collector);
+  });
+
+  it('a config whose keys are inherited (a class instance, Object.create) signs, read once', async () => {
+    const table = tableConfig(8453);
+    let reads = 0;
+    class Config {
+      get token_collector() {
+        reads++;
+        return table.token_collector;
+      }
+    }
+    for (const key of Object.keys(table) as Array<keyof EscrowNetworkConfig>) {
+      if (key !== 'token_collector') Object.defineProperty(Config.prototype, key, { get: () => table[key] });
+    }
+    const { typedData } = await signs(new Config() as unknown as EscrowNetworkConfig, { network: 'base' });
+    expect(reads).toBe(1);
+    expect(typedData.message.to).toBe(table.token_collector);
+    await signs(Object.create(table) as EscrowNetworkConfig, { network: 'base' });
+    await refused(
+      Object.create({ ...table, operator: changed(table.operator) }) as EscrowNetworkConfig,
+      { network: 'base' },
+      /Escrow operator mismatch/
+    );
+  });
+
+  it('the operator and fee-ceiling tables are frozen', () => {
+    expect(Object.isFrozen(ESCROW_OPERATORS)).toBe(true);
+    expect(Object.isFrozen(ESCROW_MAX_FEE_BPS)).toBe(true);
+  });
+});
+
+describe('buildEscrowPreAuth against the SDK tables: a delegated payer gets the same refusals', () => {
+  // The resolver's verdicts: SMA wrap (bool and target), a 1271 delegate that
+  // takes the plain signature, and a plain EOA.
+  const DELEGATIONS: Record<string, DelegationResolver> = {
+    'sma-bool': () => true,
+    'sma-target': () => SMA_WRAP_TARGETS[0],
+    'plain-1271': () => '0x' + 'd1'.repeat(20),
+    'not-delegated': () => false,
+  };
+
+  it.each(Object.keys(DELEGATIONS))('%s: the table signs, and a changed collector, operator, chain or fee does not', async (name) => {
+    const delegationResolver = DELEGATIONS[name];
+    await signs(tableConfig(8453), { network: 'base', delegationResolver });
+    const base = tableConfig(8453);
+    await refused({ ...base, token_collector: changed(base.token_collector) }, { network: 'base', delegationResolver }, /Escrow address mismatch/);
+    await refused({ ...base, operator: changed(base.operator) }, { network: 'base', delegationResolver }, /Escrow operator mismatch/);
+    await refused(tableConfig(10), { network: 'base', delegationResolver }, /Chain id mismatch/);
+    await refused({ ...base, max_fee_bps: 5000 }, { network: 'base', delegationResolver }, /above this SDK's ceiling/);
   });
 });

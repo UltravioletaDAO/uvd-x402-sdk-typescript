@@ -675,6 +675,7 @@ import { buildEscrowPreAuth, EnvKeyAdapter } from 'uvd-x402-sdk';
 // (e.g. Execution Market's GET /api/v1/h2a/payment-config).
 const paymentAuth = await buildEscrowPreAuth(new EnvKeyAdapter(), {
   networkConfig: config.escrow.networks.base,
+  network: 'base',                    // its chain_id must be the chain this SDK registers for it
   payerWallet: '0xPublisher...',
   workerWallet: '0xWorker...',        // escrow receiver — committed by the nonce
   bountyAtomic: '100000',             // $0.10 in 6-decimal USDC
@@ -683,7 +684,7 @@ const paymentAuth = await buildEscrowPreAuth(new EnvKeyAdapter(), {
 // Send as the X-Payment-Auth header (raw JSON, NOT base64).
 ```
 
-Any `SigningWalletAdapter` works as the signer (only `signTypedData` is used); browser wallets can pass a minimal `{ signTypedData }` wrapper. Validation fails loud instead of falling back: incomplete network config, unknown tier, bounty outside the on-chain deposit limit ($100), or a `maxFeeBps` below the operator's 1300 bps all throw before anything is signed. `computeEscrowNonce` is exported to reproduce `AuthCaptureEscrow.getHash` externally.
+Any `SigningWalletAdapter` works as the signer (only `signTypedData` is used); browser wallets can pass a minimal `{ signTypedData }` wrapper. Validation fails loud instead of falling back: incomplete network config, unknown tier, bounty outside the on-chain deposit limit ($100), or a `maxFeeBps` below the operator's 1300 bps all throw before anything is signed. What the config asserts is also checked against the SDK's own tables before signing, as in the Python SDK: the `chain_id` against the `network` you name (a registry name or `eip155:<id>`), the escrow, token collector and USDC against `ESCROW_CONTRACTS`, the operator against `ESCROW_OPERATORS`, and `maxFeeBps` against the chain's ceiling in `ESCROW_MAX_FEE_BPS`. A contradiction throws `INVALID_CONFIG`; a chain the tables have no row for is signed as before. Pass `network`: without it, the chain is the one the config names. `computeEscrowNonce` is exported to reproduce `AuthCaptureEscrow.getHash` externally.
 
 ## Multi-Stablecoin (EVM)
 

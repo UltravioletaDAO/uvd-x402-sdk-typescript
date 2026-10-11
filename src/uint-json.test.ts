@@ -518,11 +518,13 @@ describe('EnvKeyAdapter.signTypedData', () => {
 // ============================================================================
 
 describe('escrow pre-auth', () => {
-  const COLLECTOR = '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6';
+  // Base's escrow and token collector (ESCROW_CONTRACTS[8453]): the pre-auth
+  // checks them against that row before it reads the bounty.
+  const COLLECTOR = '0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8';
   const CONFIG: EscrowNetworkConfig = {
     chain_id: 8453,
     operator: vectors.paymentInfo.operator,
-    escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
+    escrow: '0xb9488351E48b23D798f24e8174514F28B741Eb4f',
     token_collector: COLLECTOR,
     usdc: vectors.paymentInfo.token,
     usdc_domain_name: 'USD Coin',

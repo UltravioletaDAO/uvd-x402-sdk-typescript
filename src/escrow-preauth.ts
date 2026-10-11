@@ -21,6 +21,15 @@
  * fallback would sign an EIP-3009 authorization with the WRONG EIP-712
  * domain (chainId + verifyingContract): a mismatched, wallet-draining auth.
  *
+ * What the network config asserts is checked against this SDK's own tables
+ * before anything is signed, with the policy of the domain table: the chain id
+ * against the `network` the caller names, the escrow, token collector and USDC
+ * against {@link ESCROW_CONTRACTS}, the operator against
+ * {@link ESCROW_OPERATORS}, and `maxFeeBps` against that chain's ceiling
+ * ({@link ESCROW_MAX_FEE_BPS}). A contradiction throws; a chain the tables
+ * have no row for is signed as before. Mirrors the Python SDK's
+ * `escrow_signing.build_escrow_pre_auth` (0.96.0).
+ *
  * Wire format is pinned by golden vectors (`src/escrow-preauth.vectors.json`):
  * payer-zeroed raw-keccak nonce (`keccak(chainId, escrow,
  * keccak(PAYMENT_INFO_TYPEHASH, paymentInfo tuple with payer=0))`),
@@ -36,6 +45,7 @@
  * // on Execution Market — escrow_networks[network]).
  * const paymentAuth = await buildEscrowPreAuth(new EnvKeyAdapter(), {
  *   networkConfig: config.escrow.networks.base,
+ *   network: 'base',                    // checked against chain_id
  *   payerWallet: '0xPublisher...',
  *   workerWallet: '0xWorker...',        // committed by the nonce
  *   bountyAtomic: '100000',             // $0.10 in 6-decimal USDC
@@ -52,6 +62,7 @@
 
 import { ethers } from 'ethers';
 import { getChainByName } from './chains';
+import { ESCROW_CONTRACTS, ESCROW_MAX_FEE_BPS, ESCROW_OPERATORS } from './escrow-contracts';
 import { X402Error } from './types';
 import { inexactNumberMessage, toUint } from './utils/uint';
 import {
@@ -251,6 +262,175 @@ const REQUIRED_NETWORK_KEYS: Array<keyof EscrowNetworkConfig> = [
   'payment_info_typehash',
 ];
 
+/** Every key of {@link EscrowNetworkConfig}: what `buildEscrowPreAuth` reads from it. */
+const NETWORK_CONFIG_KEYS: Array<keyof EscrowNetworkConfig> = [
+  ...REQUIRED_NETWORK_KEYS,
+  'tiers',
+  'min_fee_bps',
+  'max_fee_bps',
+];
+
+// ── What the signature commits to, against the SDK's tables ─────────────────
+// The domain is not the only thing the server asserts and the signature carries:
+//   chain_id        -> domain.chainId, the nonce and paymentRequirements.network
+//   escrow          -> the nonce (AuthCaptureEscrow.getHash)
+//   token_collector -> message.to and authorization.to
+//   usdc            -> domain.verifyingContract and paymentInfo.token
+//   operator        -> paymentInfo.operator and paymentInfo.feeReceiver
+//   max_fee_bps     -> paymentInfo.maxFeeBps
+// Same policy as VERIFIED_USDC_DOMAINS, with the tables of ./escrow-contracts:
+//   - a network this SDK registers, and a config that names another chain -> refused
+//   - a chain with a row, and a value other than the row's               -> refused
+//   - a chain without a row                                              -> signed
+// Addresses are compared in the form they are signed in (checksummed).
+
+/** Config key -> the ESCROW_CONTRACTS field it is checked against. */
+const REGISTERED_ADDRESS_KEYS = [
+  ['escrow', 'escrow'],
+  ['token_collector', 'tokenCollector'],
+  ['usdc', 'usdc'],
+] as const;
+
+/**
+ * The chain id the authorization is signed for, from the config's `chain_id`:
+ * a positive safe integer, or one written in ASCII decimal digits (the Python
+ * twin reads it with `int()`). Anything else is refused — a boolean (`true`
+ * would read as chain 1), a hex, signed or padded string, a fraction, a number
+ * past 2**53 - 1 — so the chain the tables are read for is the chain signed.
+ */
+function escrowChainId(value: unknown): number {
+  const id =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^[0-9]+$/.test(value)
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new X402Error(
+      `Invalid chain_id ${typeof value === 'string' ? `'${value}'` : String(value)} in the escrow ` +
+        'network config (a positive integer) — refusing to sign.',
+      'INVALID_CONFIG'
+    );
+  }
+  return id;
+}
+
+/**
+ * Names the Python SDK's network registry resolves and `CHAIN_ALIASES`
+ * (`src/chains`) does not: `skale` is Execution Market's and Karmakadabra's
+ * key for SKALE Base. Read only by the check below, so no other lookup of the
+ * chain registry changes.
+ */
+const ESCROW_NETWORK_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  skale: 'skale-base',
+  'skale-testnet': 'skale-base-sepolia',
+});
+
+/**
+ * The chain id this SDK registers for `network`, or `undefined` if none.
+ *
+ * `eip155:<id>` names its own chain id (ASCII decimal digits; anything else
+ * throws); any other name goes through the chain registry
+ * ({@link getChainByName}, aliases included, and {@link ESCROW_NETWORK_ALIASES}),
+ * case and surrounding spaces aside. A non-EVM network is registered with
+ * chain id 0, which no config can match (0 is a missing `chain_id`), so it is
+ * refused like any other mismatch. Mirrors the Python SDK's
+ * `escrow_signing._registered_chain_id`.
+ */
+function registeredChainId(network: string): bigint | undefined {
+  const lowered = network.trim().toLowerCase();
+  const name = Object.prototype.hasOwnProperty.call(ESCROW_NETWORK_ALIASES, lowered)
+    ? ESCROW_NETWORK_ALIASES[lowered]
+    : lowered;
+  if (name.startsWith('eip155:')) {
+    const reference = name.slice('eip155:'.length);
+    if (!/^[0-9]+$/.test(reference)) {
+      throw new X402Error(
+        `'${network}' names no EVM chain id (eip155:<decimal id>) — refusing to sign.`,
+        'INVALID_CONFIG'
+      );
+    }
+    return BigInt(reference);
+  }
+  const chain = getChainByName(name);
+  // The registry is a plain object: a name such as 'constructor' finds an
+  // Object.prototype member, which is no chain.
+  return typeof chain?.chainId === 'number' ? BigInt(chain.chainId) : undefined;
+}
+
+function checkNetworkChainId(network: unknown, chainId: number): void {
+  if (network === undefined || network === null) return;
+  if (typeof network !== 'string' || network.trim() === '') {
+    throw new X402Error(
+      `network ${typeof network === 'string' ? `'${network}'` : String(network)} names no ` +
+        'network — refusing to sign.',
+      'INVALID_CONFIG'
+    );
+  }
+  const registered = registeredChainId(network);
+  if (registered !== undefined && registered !== BigInt(chainId)) {
+    throw new X402Error(
+      `Chain id mismatch for '${network}': the escrow config asserts chain ${chainId} but this ` +
+        `SDK registers '${network}' as chain ${registered} — refusing to sign.`,
+      'INVALID_CONFIG'
+    );
+  }
+}
+
+/** The config's address under `key`, checksummed, or a refusal that names the key. */
+function configAddress(
+  cfg: EscrowNetworkConfig,
+  key: 'operator' | (typeof REGISTERED_ADDRESS_KEYS)[number][0]
+): string {
+  try {
+    return ethers.getAddress(cfg[key]);
+  } catch {
+    throw new X402Error(
+      `The escrow config's ${key} '${String(cfg[key])}' is not an address — refusing to sign.`,
+      'INVALID_CONFIG'
+    );
+  }
+}
+
+/**
+ * A table address in the form it is signed in. Lowercased first: a row is
+ * compared as an address, not as a spelling (Monad's USDC row in
+ * ESCROW_CONTRACTS is written with a checksum ethers does not accept).
+ */
+function tableAddress(address: string): string {
+  return ethers.getAddress(address.toLowerCase());
+}
+
+function checkRegisteredAddresses(cfg: EscrowNetworkConfig, chainId: number): void {
+  const contracts = ESCROW_CONTRACTS[chainId];
+  if (contracts !== undefined) {
+    for (const [key, field] of REGISTERED_ADDRESS_KEYS) {
+      const asserted = configAddress(cfg, key);
+      const expected = tableAddress(contracts[field]);
+      if (asserted !== expected) {
+        throw new X402Error(
+          `Escrow address mismatch for chain ${chainId}: the escrow config asserts ${key} ` +
+            `${asserted} but this SDK's escrow registry (ESCROW_CONTRACTS) has ${expected} — ` +
+            'refusing to sign.',
+          'INVALID_CONFIG'
+        );
+      }
+    }
+  }
+  const operator = ESCROW_OPERATORS[chainId];
+  if (operator !== undefined) {
+    const asserted = configAddress(cfg, 'operator');
+    const expected = tableAddress(operator);
+    if (asserted !== expected) {
+      throw new X402Error(
+        `Escrow operator mismatch for chain ${chainId}: the escrow config asserts operator ` +
+          `${asserted} but this SDK's ESCROW_OPERATORS has ${expected} — refusing to sign.`,
+        'INVALID_CONFIG'
+      );
+    }
+  }
+}
+
 function hex32(value: string): string {
   return value.startsWith('0x') ? value : `0x${value}`;
 }
@@ -357,6 +537,16 @@ export interface EscrowPreAuthParams {
   /** Network escrow config as published by the marketplace server. */
   networkConfig: EscrowNetworkConfig;
   /**
+   * The network the caller took `networkConfig` for: the key of the server's
+   * `escrow_networks` (e.g. `'base'`) or a CAIP-2 id (`'eip155:8453'`). When
+   * this SDK registers that network, a config whose `chain_id` is another
+   * chain is refused before signing; a name the chain registry does not know
+   * is not checked. Pass it: when omitted, the chain is the one the config
+   * names, the tables are read for that chain, and a chain they have no row
+   * for is signed as the config gives it.
+   */
+  network?: string;
+  /**
    * Publisher wallet (payer). Not checked against the signer's address —
    * payer binding is enforced on-chain and by the backend, not here.
    */
@@ -406,6 +596,12 @@ export interface EscrowPreAuthParams {
  * @throws {X402Error} `INVALID_CONFIG` on an incomplete network config,
  *   unknown tier, a `maxFeeBps` that cannot cover the operator's static
  *   fee, or a USDC domain that differs from {@link VERIFIED_USDC_DOMAINS};
+ *   also on a config the SDK's tables contradict: a `chain_id` that is not a
+ *   positive integer or not the chain this SDK registers for `network`, an
+ *   `escrow`, `token_collector` or `usdc` other than the chain's row in
+ *   {@link ESCROW_CONTRACTS}, an `operator` other than its row in
+ *   {@link ESCROW_OPERATORS}, or a `maxFeeBps` above its row in
+ *   {@link ESCROW_MAX_FEE_BPS} (a chain without a row is signed as before);
  *   `INVALID_AMOUNT` on a bounty outside (0, deposit limit], or one that is
  *   not a decimal / 0x-hex string, a bigint, or a number up to 2**53 - 1.
  */
@@ -413,7 +609,12 @@ export async function buildEscrowPreAuth(
   wallet: EscrowPreAuthSigner,
   params: EscrowPreAuthParams
 ): Promise<string> {
-  const cfg = params.networkConfig;
+  // Read once, key by key: every value checked below is the value signed. A
+  // getter (own or inherited) or a Proxy is read here, and only here.
+  const source = params.networkConfig;
+  const cfg = Object.fromEntries(
+    NETWORK_CONFIG_KEYS.map((key) => [key, source?.[key]])
+  ) as unknown as EscrowNetworkConfig;
 
   const missing = REQUIRED_NETWORK_KEYS.filter((key) => !cfg[key]);
   if (missing.length > 0) {
@@ -424,19 +625,27 @@ export async function buildEscrowPreAuth(
     );
   }
 
-  const verified = VERIFIED_USDC_DOMAINS[cfg.chain_id];
+  // The chain, against the network the caller named: everything below (the
+  // domain, the rows of the tables, what is signed) is read for this chain id.
+  const chainId = escrowChainId(cfg.chain_id);
+  checkNetworkChainId(params.network, chainId);
+
+  const verified = VERIFIED_USDC_DOMAINS[chainId];
   if (
     verified &&
     (cfg.usdc_domain_name !== verified.name || cfg.usdc_domain_version !== verified.version)
   ) {
     throw new X402Error(
-      `The escrow config gives chain ${cfg.chain_id} the USDC domain ` +
+      `The escrow config gives chain ${chainId} the USDC domain ` +
         `'${cfg.usdc_domain_name}' / '${cfg.usdc_domain_version}', but the token's on-chain ` +
         `domain is '${verified.name}' / '${verified.version}' — refusing to sign an ` +
         'authorization that could never settle.',
       'INVALID_CONFIG'
     );
   }
+
+  // Escrow, token collector, USDC and operator, against ./escrow-contracts.
+  checkRegisteredAddresses(cfg, chainId);
 
   const maxAmount = toUint(params.bountyAtomic, 'bountyAtomic', 'INVALID_AMOUNT');
   if (maxAmount <= 0n) {
@@ -461,6 +670,16 @@ export async function buildEscrowPreAuth(
     throw new X402Error(
       `maxFeeBps=${maxFeeBps} cannot cover the operator's ${OPERATOR_FEE_BPS} ` +
         'bps static fee — the on-chain release would revert.',
+      'INVALID_CONFIG'
+    );
+  }
+  // SDK policy, not an on-chain limit. Written so that a bound that is not a
+  // number at or below the ceiling (NaN, a non-numeric string) is refused too.
+  const maxFeeCeiling = ESCROW_MAX_FEE_BPS[chainId];
+  if (maxFeeCeiling !== undefined && !(maxFeeBps <= maxFeeCeiling)) {
+    throw new X402Error(
+      `maxFeeBps=${String(maxFeeBps)} for chain ${chainId} is above this SDK's ceiling for ` +
+        `that chain (${maxFeeCeiling} bps, ESCROW_MAX_FEE_BPS) — refusing to sign.`,
       'INVALID_CONFIG'
     );
   }
@@ -500,7 +719,7 @@ export async function buildEscrowPreAuth(
   };
 
   const nonce = computeEscrowNonce(
-    cfg.chain_id,
+    chainId,
     cfg.escrow,
     cfg.payment_info_typehash,
     paymentInfo
@@ -516,7 +735,7 @@ export async function buildEscrowPreAuth(
     domain: {
       name: cfg.usdc_domain_name,
       version: cfg.usdc_domain_version,
-      chainId: cfg.chain_id,
+      chainId: chainId,
       verifyingContract: ethers.getAddress(cfg.usdc),
     },
     types: RECEIVE_WITH_AUTHORIZATION_TYPES,
@@ -550,13 +769,13 @@ export async function buildEscrowPreAuth(
   // raw for an SMA.
   const { delegated, target } = await resolveDelegation(
     payer,
-    `eip155:${cfg.chain_id}`,
+    `eip155:${chainId}`,
     params.delegationResolver
   );
   if (delegated === null && params.delegationResolver) {
     throw new X402Error(
       `Could not determine whether ${payer} is EIP-7702-delegated on chain ` +
-        `${cfg.chain_id} (the resolver gave no verdict) — refusing to sign an ` +
+        `${chainId} (the resolver gave no verdict) — refusing to sign an ` +
         'escrow authorization blindly: the wrong dialect is unsettleable ' +
         'on-chain and the failure only shows up at lock time. Retry when the ' +
         'chain is readable.',
@@ -575,7 +794,7 @@ export async function buildEscrowPreAuth(
       typedData.types,
       typedData.message
     );
-    const replaySafe = replaySafeTypedData(innerDigest, cfg.chain_id, payer);
+    const replaySafe = replaySafeTypedData(innerDigest, chainId, payer);
     const wrapped = await wallet.signTypedData(
       JSON.stringify({ ...replaySafe, primaryType: 'ReplaySafeHash' })
     );
@@ -612,7 +831,7 @@ export async function buildEscrowPreAuth(
     },
     paymentRequirements: {
       scheme: 'escrow',
-      network: `eip155:${cfg.chain_id}`,
+      network: `eip155:${chainId}`,
     },
   });
 }

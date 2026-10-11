@@ -387,6 +387,7 @@ export {
   DEFAULT_MAX_FEE_BPS,
   VERIFIED_USDC_DOMAINS,
 } from './escrow-preauth';
+export { ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS } from './escrow-contracts';
 export type {
   EscrowNetworkConfig,
   EscrowPaymentInfo,
