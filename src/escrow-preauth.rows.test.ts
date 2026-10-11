@@ -5,14 +5,16 @@ import fixture from './escrow-preauth.vectors.json';
 import { X402Error } from './types';
 
 /**
- * A chain is signed only with a row in each of the three escrow tables. The
- * shipped tables never have a chain in one or two of them (a test in
- * `src/escrow-preauth.test.ts` pins that every operator row has a contract row
- * and a fee ceiling), so here the tables are replaced by ones that do:
+ * A chain is signed only with a row in each of the three escrow tables and in
+ * `VERIFIED_USDC_DOMAINS`. The shipped tables never have a chain in only some
+ * of them (tests in `src/escrow-preauth.test.ts` pin that every operator row
+ * has a contract row, a fee ceiling and a domain row), so here the escrow
+ * tables are replaced by ones that do:
  *   8453  contracts + operator, no fee ceiling
  *   1     contracts + fee ceiling, no operator
  *   10    operator + fee ceiling, no contracts
- *   42161 all three (the control)
+ *   84532 all three escrow rows, no domain row (Base Sepolia)
+ *   42161 all four (the control)
  */
 vi.mock('./escrow-contracts', async (importOriginal) => {
   const real = await importOriginal<typeof import('./escrow-contracts')>();
@@ -20,9 +22,9 @@ vi.mock('./escrow-contracts', async (importOriginal) => {
     Object.fromEntries(chains.map((chain) => [chain, table[chain]]));
   return {
     ...real,
-    ESCROW_CONTRACTS: pick(real.ESCROW_CONTRACTS, [8453, 1, 42161]),
-    ESCROW_OPERATORS: pick(real.ESCROW_OPERATORS, [8453, 10, 42161]),
-    ESCROW_MAX_FEE_BPS: pick(real.ESCROW_MAX_FEE_BPS, [1, 10, 42161]),
+    ESCROW_CONTRACTS: pick(real.ESCROW_CONTRACTS, [8453, 1, 42161, 84532]),
+    ESCROW_OPERATORS: { ...pick(real.ESCROW_OPERATORS, [8453, 10, 42161]), 84532: real.ESCROW_OPERATORS[8453] },
+    ESCROW_MAX_FEE_BPS: { ...pick(real.ESCROW_MAX_FEE_BPS, [1, 10, 42161]), 84532: 1800 },
   };
 });
 
@@ -40,7 +42,7 @@ function config(chainId: number): EscrowNetworkConfig {
   const c = ESCROW_CONTRACTS[chainId];
   return {
     chain_id: chainId,
-    operator: ESCROW_OPERATORS[chainId],
+    operator: ESCROW_OPERATORS[chainId] ?? ESCROW_OPERATORS[8453],
     escrow: c.escrow,
     token_collector: c.tokenCollector,
     usdc: c.usdc,
@@ -66,11 +68,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('a chain is signed only with a row in each of the three escrow tables', () => {
+describe('a chain is signed only with a row in each of the three escrow tables and a verified domain', () => {
   it.each<[number, string]>([
     [8453, 'ESCROW_MAX_FEE_BPS'],
     [1, 'ESCROW_OPERATORS'],
     [10, 'ESCROW_CONTRACTS'],
+    [84532, 'VERIFIED_USDC_DOMAINS'],
   ])('chain %i, missing only %s, is refused before anything is signed', async (chainId, missing) => {
     const { error, signTypedData } = await attempt(chainId);
     expect(error).toBeInstanceOf(X402Error);
@@ -81,7 +84,7 @@ describe('a chain is signed only with a row in each of the three escrow tables',
     expect(signTypedData).not.toHaveBeenCalled();
   });
 
-  it('chain 42161, with all three, signs', async () => {
+  it('chain 42161, with all four, signs', async () => {
     const { header, error, signTypedData } = await attempt(42161);
     expect(error).toBeNull();
     expect(JSON.parse(header as string).paymentRequirements.network).toBe('eip155:42161');

@@ -28,6 +28,9 @@ Protocol
             {"op":"price_network","cases":[{id,network,amount,payTo}]}
             {"op":"sign_lifecycle","cases":[{id,action,paymentInfo,payer,amount,
                                              chainId,deadline,nonce,privateKey}]}
+            {"op":"usdc_domains"}
+            {"op":"escrow_pre_auth","cases":[{id,network,networkConfig,receiver,
+                                              amountAtomic,privateKey}]}
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ import asyncio
 import hashlib
 import json
 import sys
+from decimal import Decimal
 
 
 def die(message: str) -> "None":
@@ -371,6 +375,58 @@ def sign_lifecycle(cases):
     return {"runtime": "python", "results": results}
 
 
+def usdc_domains():
+    """``escrow_signing.VERIFIED_USDC_DOMAINS``, keyed as JSON keys it."""
+    from uvd_x402_sdk.escrow_signing import VERIFIED_USDC_DOMAINS
+
+    return {
+        "runtime": "python",
+        "table": {
+            str(chain_id): {"name": name, "version": version}
+            for chain_id, (name, version) in VERIFIED_USDC_DOMAINS.items()
+        },
+    }
+
+
+def escrow_pre_auth(cases):
+    """Sign the escrow pre-auth lock (``build_escrow_pre_auth``).
+
+    The mirror of the TypeScript agent's ``escrowPreAuth``: the domain handed to
+    the wallet, or the refusal and whether anything was signed first. The key is
+    the driver's synthetic 0x11*32 test key; it has never held funds.
+    """
+    from uvd_x402_sdk.escrow_signing import build_escrow_pre_auth
+
+    results = []
+    for case in cases:
+        firmante = _CapturaElDocumento(EnvKeyAdapter(case["privateKey"]))
+        firmante.documento = None
+        try:
+            net = dict(case["networkConfig"])
+            typehash = net.pop("payment_info_typehash")
+            header = build_escrow_pre_auth(
+                {"escrow": {"networks": {case["network"]: net}, "payment_info_typehash": typehash}},
+                case["network"],
+                firmante.get_address(),
+                case["receiver"],
+                Decimal(int(case["amountAtomic"])) / Decimal(10**6),
+                None,
+                firmante,
+            )
+            results.append(
+                {
+                    "id": case["id"],
+                    "domain": (firmante.documento or {}).get("domain"),
+                    "network": json.loads(header).get("paymentRequirements", {}).get("network"),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - a refusal is a comparable result
+            results.append(
+                {"id": case["id"], "error": f"{exc}", "signed": firmante.documento is not None}
+            )
+    return {"runtime": "python", "results": results}
+
+
 def main() -> None:
     try:
         request = json.loads(sys.stdin.read())
@@ -387,6 +443,10 @@ def main() -> None:
             response = price_network(request["cases"])
         elif op == "sign_lifecycle":
             response = sign_lifecycle(request["cases"])
+        elif op == "usdc_domains":
+            response = usdc_domains()
+        elif op == "escrow_pre_auth":
+            response = escrow_pre_auth(request["cases"])
         else:
             die(f"unknown op: {op!r}")
             return

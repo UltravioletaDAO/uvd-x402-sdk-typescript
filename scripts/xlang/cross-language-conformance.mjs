@@ -1183,6 +1183,145 @@ check(
 );
 
 
+// -- phase 9: THE USDC DOMAIN OF THE ESCROW PRE-AUTH -------------------------
+//
+// The pre-auth lock is signed under the USDC EIP-712 domain the server's
+// config gives (`usdc_domain_name` / `usdc_domain_version`). A wrong pair is a
+// signature that never settles. Both SDKs check it against a table of domains
+// read on-chain, VERIFIED_USDC_DOMAINS; until 2.104.2 the TypeScript table had
+// 2 rows and Python's 11, so on Base the TypeScript SDK signed a domain Python
+// refused, and nothing above could see it. Here both tables are compared row by
+// row, and on every chain of the table both SDKs sign the table's domain and
+// refuse the same domain with its name or its version changed, before anything
+// is handed to the wallet.
+//
+// The key is the synthetic 0x11*32 test key. It has never held funds.
+console.log('');
+console.log('PHASE 9 - the USDC domain of the escrow pre-auth: same table, same verdicts');
+
+const tsDomains = await ask(NODE, { op: 'usdc_domains' });
+const pyDomains = await ask(PY, { op: 'usdc_domains' });
+const DOMAIN_CHAINS = Object.keys(pyDomains.table);
+check(DOMAIN_CHAINS.length > 0, 'python carries a VERIFIED_USDC_DOMAINS table', JSON.stringify(pyDomains.table));
+check(
+  eq(tsDomains.table, pyDomains.table),
+  'both SDKs carry the same VERIFIED_USDC_DOMAINS, row for row',
+  `ts=${JSON.stringify(stable(tsDomains.table))} py=${JSON.stringify(stable(pyDomains.table))}`
+);
+check(
+  eq(Object.keys(tsDomains.configs).sort(), [...DOMAIN_CHAINS].sort()),
+  'every chain with a typescript escrow operator row has a python domain row, and no other',
+  `operators=${Object.keys(tsDomains.configs).sort()} domains=${[...DOMAIN_CHAINS].sort()}`
+);
+
+const DOMAIN_KEY = '0x' + '11'.repeat(32);
+const DOMAIN_RECEIVER = '0x' + '33'.repeat(20);
+const otherDomainName = (name) => (name === 'USD Coin' ? 'USDC' : 'USD Coin');
+const DOMAIN_CASES = DOMAIN_CHAINS.filter((chainId) => tsDomains.configs[chainId]).flatMap((chainId) => {
+  const { network, networkConfig } = tsDomains.configs[chainId];
+  const { name, version } = pyDomains.table[chainId];
+  const at = (kind, domainName, domainVersion, expectSigned) => ({
+    id: `${network}/${kind}`,
+    chainId,
+    expectSigned,
+    network,
+    networkConfig: { ...networkConfig, usdc_domain_name: domainName, usdc_domain_version: domainVersion },
+    receiver: DOMAIN_RECEIVER,
+    amountAtomic: '250000',
+    privateKey: DOMAIN_KEY,
+  });
+  return [
+    at('table-domain', name, version, true),
+    at('other-name', otherDomainName(name), version, false),
+    at('other-version', name, String(Number(version) + 1), false),
+  ];
+});
+const strippedDomainCases = DOMAIN_CASES.map(({ chainId, expectSigned, ...rest }) => rest);
+const tsPreAuth = await ask(NODE, { op: 'escrow_pre_auth', cases: strippedDomainCases });
+const pyPreAuth = await ask(PY, { op: 'escrow_pre_auth', cases: strippedDomainCases });
+const tsPreAuthById = Object.fromEntries(tsPreAuth.results.map((r) => [r.id, r]));
+const pyPreAuthById = Object.fromEntries(pyPreAuth.results.map((r) => [r.id, r]));
+const signedDomain = (domain) =>
+  domain && {
+    name: domain.name,
+    version: domain.version,
+    chainId: Number(domain.chainId),
+    verifyingContract: String(domain.verifyingContract).toLowerCase(),
+  };
+
+for (const c of DOMAIN_CASES) {
+  const ts = tsPreAuthById[c.id];
+  const py = pyPreAuthById[c.id];
+  if (c.expectSigned) {
+    const expected = {
+      ...pyDomains.table[c.chainId],
+      chainId: Number(c.chainId),
+      verifyingContract: String(c.networkConfig.usdc).toLowerCase(),
+    };
+    check(
+      !ts?.error && !py?.error && eq(signedDomain(ts.domain), expected) && eq(signedDomain(py.domain), expected),
+      `${c.id}: both SDKs sign it, under the table's domain`,
+      `ts=${ts?.error ?? JSON.stringify(signedDomain(ts?.domain))} py=${py?.error ?? JSON.stringify(signedDomain(py?.domain))}`
+    );
+    check(
+      ts?.network === `eip155:${c.chainId}` && py?.network === ts?.network,
+      `${c.id}: both headers name eip155:${c.chainId}`,
+      `ts=${ts?.network} py=${py?.network}`
+    );
+  } else {
+    check(
+      Boolean(ts?.error) && Boolean(py?.error) && ts.signed === false && py.signed === false,
+      `${c.id}: both SDKs refuse it, with nothing handed to the wallet`,
+      `ts=${ts?.error ?? 'signed'} (signed=${ts?.signed}) py=${py?.error ?? 'signed'} (signed=${py?.signed})`
+    );
+    check(
+      /domain/i.test(ts?.error ?? '') && /domain/i.test(py?.error ?? ''),
+      `${c.id}: both refusals name the domain`,
+      `ts=${ts?.error} py=${py?.error}`
+    );
+  }
+}
+
+
+// A MEASURED divergence, kept visible: the version as a JSON number. Python
+// compares `str(value)` and signs the string "2"; TypeScript compares exactly
+// and refuses (until 2.104.1 it signed `"version": 2`, a domain that is not
+// the token's). Neither signs a wrong domain. If either side changes, this fails.
+const NUMBER_VERSION_CASES = ['8453', '5042']
+  .filter((chainId) => tsDomains.configs[chainId] && pyDomains.table[chainId])
+  .map((chainId) => {
+    const { network, networkConfig } = tsDomains.configs[chainId];
+    const { name, version } = pyDomains.table[chainId];
+    return {
+      id: `${network}/number-version`,
+      network,
+      networkConfig: { ...networkConfig, usdc_domain_name: name, usdc_domain_version: Number(version) },
+      receiver: DOMAIN_RECEIVER,
+      amountAtomic: '250000',
+      privateKey: DOMAIN_KEY,
+      _version: version,
+    };
+  });
+const strippedNumberCases = NUMBER_VERSION_CASES.map(({ _version, ...rest }) => rest);
+const tsNumberVersion = await ask(NODE, { op: 'escrow_pre_auth', cases: strippedNumberCases });
+const pyNumberVersion = await ask(PY, { op: 'escrow_pre_auth', cases: strippedNumberCases });
+check(NUMBER_VERSION_CASES.length === 2, 'the number-version divergence is measured on Base and Arc', NUMBER_VERSION_CASES.map((c) => c.id).join(' '));
+for (const [index, c] of NUMBER_VERSION_CASES.entries()) {
+  const ts = tsNumberVersion.results[index];
+  const py = pyNumberVersion.results[index];
+  check(
+    Boolean(ts?.error) && ts.signed === false && /domain/i.test(ts.error),
+    `${c.id}: typescript refuses a version written as a JSON number, with nothing signed`,
+    ts?.error ?? `signed ${JSON.stringify(ts?.domain)}`
+  );
+  check(
+    !py?.error && py?.domain?.version === c._version,
+    `${c.id}: python signs it, under the string version "${c._version}"`,
+    py?.error ?? JSON.stringify(py?.domain)
+  );
+}
+
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('\n────────────────────────────────────────────────────────────');
 if (failures.length) {
@@ -1191,7 +1330,7 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 8 phases.\n` +
+  `CROSS-LANGUAGE CONFORMANCE PASSED — ${checked} checks across 9 phases.\n` +
     `  ${SIGN_CASES.length} signatures produced live by TypeScript and verified live by Python,\n` +
     `  ${SIGN_CASES.length} produced live by Python and verified live by TypeScript,\n` +
     `  ${f3_3.verify_cases.length} matrix verdicts compared verifier to verifier,\n` +
@@ -1200,6 +1339,9 @@ console.log(
     `  ${LIFECYCLE_CASES.length} escrow lifecycle orders both SDKs signed, compared signature byte to byte
   AND document to document -- primaryType included, which no signature can prove.
   1 order with a 32-byte salt written as a JSON number: TypeScript refused it, Python signed it exactly.
+  ${DOMAIN_CASES.length} escrow pre-auths over the ${DOMAIN_CHAINS.length} rows of VERIFIED_USDC_DOMAINS: the table's domain
+  signed by both, the same domain with its name or version changed refused by both.
+  ${NUMBER_VERSION_CASES.length} pre-auths with the version as a JSON number: TypeScript refused them, Python signed "2".
 ` +
     '  Nothing here was a stored-string comparison; both runtimes were invoked.'
 );
