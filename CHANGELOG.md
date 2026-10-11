@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `createFetchPaywall`, `createHonoMiddleware` and `createPaymentMiddleware` (`uvd-x402-sdk/backend`) take an opt-in `durable` (`DurableEvidenceOptions`): a paid `2xx` answer is captured once, up to `maxBodyBytes` (default `ANCHOR_MAX_REQUEST_BYTES`) and within `timeoutMs` (default the new `DURABLE_DEFAULT_TIMEOUT_MS`, 5000), sealed and anchored with `anchorEvidence`, and answered with `X-Durable-Evidence`. Only a payment the same request settled with a transaction hash is anchored. A body over the cap, past the deadline, an event stream, a locked or read body, a stream that fails and a failed anchor keep the response as it was, with a skip notice in the header and no anchor; `HEAD`, non-`2xx` answers and responses that already carry the header are left alone. A misconfigured `durable` throws `TypeError` when the paywall is built. Without `durable`, nothing changes.
+
+### Tests
+
+- `src/backend/durable-evidence.test.ts`: facilitator and sink doubles on loopback with the network closed; for the three paywalls, one anchor and a valid header for a settled payment, the anchored envelope opened with a synthetic payer key equals the served bytes, zero anchors without `durable`, and every skip keeps status, body and the one settle.
+
 ## [2.104.1] - unreleased (dated the day it is published)
 
 ### Fixed

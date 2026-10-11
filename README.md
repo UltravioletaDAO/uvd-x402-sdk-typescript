@@ -2050,6 +2050,39 @@ const result = await anchorEvidence(body, {
 res.setHeader('X-Durable-Evidence', evidenceHeader(result));
 ```
 
+### Seller: from the paywall itself (`durable`)
+
+`createFetchPaywall`, `createHonoMiddleware` and `createPaymentMiddleware`
+(Express) take an opt-in `durable`. With it, a paid `2xx` answer that the
+handler did not anchor itself is captured once, sealed and anchored through
+`anchorEvidence`, and goes out with `X-Durable-Evidence`:
+
+```ts
+import { createFetchPaywall } from 'uvd-x402-sdk/backend';
+import { payerKeyFromEvmSignature } from 'uvd-x402-sdk';
+
+const paywall = createFetchPaywall({
+  accepts,
+  durable: {
+    payerKey: ({ payment }) => payerKeyFromEvmSignature(signatureOf(payment.payment), digestOf(payment.payment)),
+    maxBodyBytes: 64 * 1024, // default ANCHOR_MAX_REQUEST_BYTES
+    timeoutMs: 5000,         // default DURABLE_DEFAULT_TIMEOUT_MS
+  },
+});
+```
+
+Without `durable` nothing changes and nothing is anchored. It anchors only a
+payment this request settled with a transaction hash (`'manual'`: once
+`x402.settle()` resolved successfully before the answer). The body is read once
+and held at most `maxBodyBytes`; past that, past `timeoutMs`, for an event
+stream, for a body already locked or read, or when the handler's own stream
+fails, the response goes out whole and unchanged except for a skip notice in
+the header, and nothing is anchored. A failed anchor is a skip notice too: the
+response and the payment stand. A `HEAD`, a non-`2xx` answer and a response that
+already has `X-Durable-Evidence` are left alone. Every field of `durable` but
+`payerKey`, `maxBodyBytes` and `timeoutMs` is the `anchorEvidence` option of the
+same name; `facilitator` defaults to the paywall's facilitator.
+
 **It never throws.** Every failure resolves to `result.skipped`, because
 evidence is an addition to the payment path and must never be a gate in front of
 it. An unreachable facilitator costs the receipt, never the sale.
