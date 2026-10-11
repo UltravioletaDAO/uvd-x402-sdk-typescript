@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [2.104.1] - unreleased (dated the day it is published)
+
+### Fixed
+
+- `ESCROW_CONTRACTS[143].usdc` (Monad, `uvd-x402-sdk/backend`) is written in its EIP-55 checksum, `0x754704Bc059F8C67012fEd69BC8A327a5aafb603`, the spelling of Execution Market's network registry. It was `0x754704Bc059F8C67012fEd69BC8a327a5aafb603`, which `ethers.getAddress` rejects. Same address: `buildEscrowPreAuth` lowercased every table address before checksumming it, so what it signed does not change; it no longer lowercases, and a table row with a wrong checksum would throw instead of being repaired.
+- `buildEscrowPreAuth` refuses a network config whose `payment_info_typehash` is not AuthCaptureEscrow's PaymentInfo typehash, the new `ESCROW_PAYMENT_INFO_TYPEHASH` (exported from the root; `0xae68ac7c…6591`, equal to the backend's `PAYMENT_INFO_TYPEHASH`), as the Python SDK's `build_escrow_pre_auth` does. Case, an `0x` / `0X` prefix and surrounding spaces aside; any other value, or a value that is not a string, throws `X402Error` `INVALID_CONFIG` before any delegation lookup and with nothing signed. Before, the config's value went into the nonce as given, and a different one produced a nonce that is not the escrow's `getHash`.
+
+- `buildEscrowPreAuth` refuses a `min_fee_bps` above the operator's static fee, `OPERATOR_FEE_BPS` (1300), as the Python SDK does from 0.97.0: `X402Error` `INVALID_CONFIG`, with nothing signed. 0 to 1300 sign as before.
+
+### Changed
+
+- `CHAIN_ALIASES` has `skale` -> `skale-base` and `skale-testnet` -> `skale-base-sepolia`, as the Python SDK's `_NETWORK_ALIASES`. Every lookup through the chain registry now resolves them, not only `buildEscrowPreAuth`'s `network` check (2.104.0): `getChainByName('skale')` is SKALE Base, `isChainSupported('skale')` is `true` and `chainToCAIP2('skale')` is `eip155:1187947933`, as `hedera` and `xrpl-mainnet` already resolved. The escrow-only alias table is gone.
+- `VERIFIED_USDC_DOMAINS` and `ESCROW_TIER_WINDOWS` are frozen, and so is each of their rows; both are typed `Readonly`. Code that wrote to them now fails to compile; at run time a write throws a `TypeError` in strict code (ESM) and is ignored in sloppy CommonJS.
+
+### Tests
+
+- `src/escrow-preauth.test.ts`: every address of every `ESCROW_CONTRACTS` and `ESCROW_OPERATORS` row is its EIP-55 checksum, and the table configs are no longer re-checksummed by the test helper; Monad signs with the checksummed USDC; `ESCROW_PAYMENT_INFO_TYPEHASH` is the keccak256 of the PaymentInfo struct, the backend's constant and the golden vector's; a filler, one changed digit, another struct's typehash, a byte more or less, a doubled prefix, a number and an array are refused with nothing signed and no delegation looked up, on every chain with rows; the accepted spellings sign the canonical typehash into the nonce; `CHAIN_ALIASES` equals the Python SDK's aliases; `skale` and `skale-testnet` resolve in any case; both tables and their rows are frozen. `min_fee_bps` 0, 1299 and 1300 sign; 1301, 1800 and 65535 (numbers or decimal strings) are refused, and 1301 on every chain with rows. `src/uint-json.test.ts` signs with `PAYMENT_INFO_TYPEHASH` instead of a filler.
+- `src/fixtures/escrow-operator-snapshot.json`: Monad's `usdc` re-spelled by hand, with a note saying so.
+
 ## [2.104.0] - unreleased (dated the day it is published)
 
 ### Changed

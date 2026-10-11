@@ -1130,11 +1130,14 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
  * spelling "right for a lookup and wrong for a wire format"
  * (`x402-rs/src/network.rs:251,189,719`).
  *
- * Mirrors `_NETWORK_ALIASES` in the Python SDK (`networks/base.py:199`).
+ * Mirrors `_NETWORK_ALIASES` in the Python SDK (`networks/base.py`).
  */
 export const CHAIN_ALIASES: Record<string, string> = {
   hedera: 'hedera:mainnet',
   'hedera-testnet': 'hedera:testnet',
+  // Execution Market's and Karmakadabra's keys for SKALE Base.
+  skale: 'skale-base',
+  'skale-testnet': 'skale-base-sepolia',
   // Renamed in 2.85.0: the facilitator advertises the mainnet as `xrpl`.
   'xrpl-mainnet': 'xrpl',
 };

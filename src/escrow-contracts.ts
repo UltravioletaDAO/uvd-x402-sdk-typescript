@@ -142,7 +142,7 @@ export const ESCROW_CONTRACTS: Readonly<Record<number, Readonly<AdvancedEscrowCo
     tokenCollector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
     protocolFeeConfig: '0xD979dBfBdA5f4b16AAF60Eaab32A44f352076838',
     refundRequest: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
-    usdc: '0x754704Bc059F8C67012fEd69BC8a327a5aafb603',
+    usdc: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
   },
   // Avalanche (chain 43114)
   43114: {
