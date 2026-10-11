@@ -773,10 +773,11 @@ describe('createPaymentMiddleware (Express) with durable', () => {
 
   it('send then a second end() and a late write: the paid body whole, once, and the anchor is of those bytes', async () => {
     let lateEnd = false;
+    const late: { wrote?: boolean; error?: string } = {};
     const response = await express({ durable: durable() }, (res) => {
       res.send(BODY);
       res.end(() => { lateEnd = true; });
-      res.write('late');
+      late.wrote = res.write('late', (error?: Error | null) => { late.error = (error as { code?: string } | null)?.code; });
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(BODY);
@@ -785,6 +786,7 @@ describe('createPaymentMiddleware (Express) with durable', () => {
     expect(evidenceFromHeaders(response.headers).contentHash).toBe(contentHash(new TextEncoder().encode(BODY)));
     expect(open(sealedOf(anchors()[0]))).toBe(BODY);
     await vi.waitFor(() => expect(lateEnd).toBe(true));
+    expect(late).toEqual({ wrote: false, error: 'ERR_STREAM_WRITE_AFTER_END' });
   });
 
   it('a fallback that checks headersSent after send leaves the paid answer alone, and late headers are refused', async () => {
@@ -794,6 +796,8 @@ describe('createPaymentMiddleware (Express) with durable', () => {
       seen.headersSent = res.headersSent;
       seen.writableEnded = res.writableEnded;
       if (!res.headersSent) res.status(404).send('Cannot GET /api/premium');
+      // Express's res.status does not look at headersSent: the status that went out stands.
+      res.status(500);
       try {
         res.setHeader('X-Late', '1');
       } catch (error) {
