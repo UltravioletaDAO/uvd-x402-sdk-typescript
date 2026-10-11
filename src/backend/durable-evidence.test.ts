@@ -592,6 +592,18 @@ describe('durable: the edges the surfaces share', () => {
     expect(anchors()).toHaveLength(0);
   });
 
+  it("'manual' with a settle that answered success: false but named a transaction: nothing is anchored", async () => {
+    facilitator.settle = { body: { success: false, transaction: TX, network: 'base', payer: PAYER, errorReason: 'reverted' } };
+    const route = createFetchPaywall(options({ settlementStrategy: 'manual', durable: durable() }))(async (_request: Request, x402: VerifiedPaymentState) => {
+      await x402.settle().catch(() => undefined);
+      return new Response(BODY);
+    });
+    const response = await route(paid());
+    expect(await response.text()).toBe(BODY);
+    expect(response.headers.has(EVIDENCE_HEADER)).toBe(false);
+    expect(anchors()).toHaveLength(0);
+  });
+
   it('a body the handler already locked is returned untouched, not read a second time', async () => {
     const { stream } = counted([BODY]);
     const locked = new Response(stream);
