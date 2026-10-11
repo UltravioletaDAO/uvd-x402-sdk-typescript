@@ -446,6 +446,9 @@ export {
   // Astro endpoints, Next.js route handlers, Vercel and Cloudflare functions.
   createFetchPaywall,
   create402Response,
+  // `extra.discoverable` on an accept: the facilitator lists the resource in
+  // its Bazaar after a settle. `discoverable` in the paywall options sets it on all.
+  withDiscoverable,
   // The `bazaar` entry of a v2 challenge's `extensions` (x402 bazaar spec):
   // how the endpoint is called (POST with a body, GET with a query), and what
   // it answers. Pass it to create402Response as `extensions`.
