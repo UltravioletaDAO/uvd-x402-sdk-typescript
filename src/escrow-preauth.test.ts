@@ -27,7 +27,7 @@ import {
   ESCROW_OPERATORS,
 } from './escrow-contracts';
 import { SMA_WRAP_TARGETS, type DelegationResolver } from './erc7702';
-import { getChainById, getChainByName } from './chains';
+import { getChainById, getChainByName, SUPPORTED_CHAINS } from './chains';
 import { X402Error } from './types';
 import fixtureRaw from './escrow-preauth.vectors.json';
 import arcVectorRaw from './escrow-preauth.arc-vector.json';
@@ -624,73 +624,86 @@ describe('buildEscrowPreAuth — fail-loud validation (never a silent fallback)'
 /**
  * Execution Market's config of each escrow network of its registry, with the
  * keys the pre-auth reads: `mcp_server/integrations/x402/network_registry.py`
- * at execution-market@bf1007d8 (each network's `operator`, `escrow` and
- * `x402r_infra.tokenCollector`; USDC from the chain registry). The table is
- * the only other copy of these operators in this repo, so this second one,
- * with its source, is what turns an edited row red. `skale` is retired in
+ * at execution-market@bf1007d8 (each network's `operator`, `escrow`,
+ * `x402r_infra.tokenCollector` and `tokens.USDC.address`). The table is the
+ * only other copy of these addresses in this repo, so this second one, with
+ * its source, is what turns an edited row red. `skale` is retired in
  * Execution Market and its payment config no longer serves it; its registry
  * entry is still the operator of the escrows in flight there.
  */
-const EM_NETWORKS: Record<string, { chainId: number; operator: string; escrow: string; collector: string }> = {
+const EM_NETWORKS: Record<
+  string,
+  { chainId: number; operator: string; escrow: string; collector: string; usdc: string }
+> = {
   base: {
     chainId: 8453,
     operator: '0x271f9fa7f8907aCf178CCFB470076D9129D8F0Eb',
     escrow: '0xb9488351E48b23D798f24e8174514F28B741Eb4f',
     collector: '0x48ADf6E37F9b31dC2AAD0462C5862B5422C736B8',
+    usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   },
   ethereum: {
     chainId: 1,
     operator: '0x69B67962ffb7c5C7078ff348a87DF604dfA8001b',
     escrow: '0x9D4146EF898c8E60B3e865AE254ef438E7cEd2A0',
     collector: '0x206D4DbB6E7b876e4B5EFAAD2a04e7d7813FB6ba',
+    usdc: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
   },
   polygon: {
     chainId: 137,
     operator: '0xB87F1ECC85f074e50df3DD16A1F40e4e1EC4102e',
     escrow: '0x32d6AC59BCe8DFB3026F10BcaDB8D00AB218f5b6',
     collector: '0xc1256Bb30bd0cdDa07D8C8Cf67a59105f2EA1b98',
+    usdc: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
   },
   arbitrum: {
     chainId: 42161,
     operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
     escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
     collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    usdc: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
   },
   celo: {
     chainId: 42220,
     operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
     escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
     collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    usdc: '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
   },
   monad: {
     chainId: 143,
     operator: '0x9620Dbe2BB549E1d080Dc8e7982623A9e1Df8cC3',
     escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
     collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    usdc: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
   },
   avalanche: {
     chainId: 43114,
     operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
     escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
     collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    usdc: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
   },
   optimism: {
     chainId: 10,
     operator: '0xC2377a9Db1de2520BD6b2756eD012f4E82F7938e',
     escrow: '0x320a3c35F131E5D2Fb36af56345726B298936037',
     collector: '0x230fd3A171750FA45db2976121376b7F47Cba308',
+    usdc: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
   },
   skale: {
     chainId: 1187947933,
     operator: '0x43E46d4587fCCc382285C52012227555ed78D183',
     escrow: '0xBC151792f80C0EB1973d56b0235e6bee2A60e245',
     collector: '0x9A12A116a44636F55c9e135189A1321Abcfe2f30',
+    usdc: '0x85889c8c714505E0c94b30fcfcF64fE3Ac8FCb20',
   },
   arc: {
     chainId: 5042,
     operator: '0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D',
     escrow: '0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff',
     collector: '0x0E3dF9510de65469C4518D7843919c0b8C7A7757',
+    usdc: '0x3600000000000000000000000000000000000000',
   },
 };
 /** The fee bounds Execution Market's payment config serves (`mcp_server/api/h2a.py`). */
@@ -736,15 +749,15 @@ function tableConfig(chainId: number): EscrowNetworkConfig {
 /** Execution Market's block for one of its networks. */
 function emConfig(network: string): EscrowNetworkConfig {
   const em = EM_NETWORKS[network];
-  const usdc = getChainById(em.chainId)!.usdc;
+  const domain = getChainById(em.chainId)!.usdc;
   return {
     chain_id: em.chainId,
     operator: em.operator,
     escrow: em.escrow,
     token_collector: em.collector,
-    usdc: signed(REGISTRY_CONTRACTS[em.chainId].usdc),
-    usdc_domain_name: usdc.name,
-    usdc_domain_version: usdc.version,
+    usdc: em.usdc,
+    usdc_domain_name: domain.name,
+    usdc_domain_version: domain.version,
     payment_info_typehash: FX.network_config.payment_info_typehash,
     ...EM_FEES,
   };
@@ -830,10 +843,10 @@ describe('the escrow tables (src/escrow-contracts.ts)', () => {
     for (const address of Object.values(ESCROW_OPERATORS)) expect(getAddress(address)).toBe(address);
   });
 
-  it.each(Object.keys(EM_NETWORKS))("%s: Execution Market's escrow and collector are the registry row", (network) => {
+  it.each(Object.keys(EM_NETWORKS))("%s: Execution Market's escrow, collector and USDC are the registry row", (network) => {
     const em = EM_NETWORKS[network];
     const contracts = REGISTRY_CONTRACTS[em.chainId];
-    expect([contracts.escrow, contracts.tokenCollector]).toEqual([em.escrow, em.collector]);
+    expect([contracts.escrow, contracts.tokenCollector, signed(contracts.usdc)]).toEqual([em.escrow, em.collector, em.usdc]);
     expect(getChainByName(nameOf(em.chainId))!.chainId).toBe(em.chainId);
   });
 
@@ -845,24 +858,25 @@ describe('the escrow tables (src/escrow-contracts.ts)', () => {
 });
 
 describe('buildEscrowPreAuth against the SDK tables: valid configs sign as before', () => {
-  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config signs, carrying the table's values", async (network) => {
+  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config signs, carrying Execution Market's values", async (network) => {
+    // Expected values from EM_NETWORKS (Execution Market's registry), not from the tables under test.
+    const em = EM_NETWORKS[network];
     const cfg = emConfig(network);
-    const chainId = cfg.chain_id;
-    const contracts = REGISTRY_CONTRACTS[chainId];
     for (const extra of [{ network }, {}] as ExtraParams[]) {
       const { wrapper, typedData } = await signs(cfg, extra);
       const { authorization, paymentInfo } = wrapper.payload;
-      expect(typedData.domain.chainId).toBe(chainId);
-      expect(typedData.domain.verifyingContract).toBe(signed(contracts.usdc));
-      expect(wrapper.paymentRequirements.network).toBe(`eip155:${chainId}`);
-      expect(paymentInfo.token).toBe(signed(contracts.usdc));
-      expect(typedData.message.to).toBe(signed(contracts.tokenCollector));
-      expect(authorization.to).toBe(signed(contracts.tokenCollector));
-      expect(paymentInfo.operator).toBe(ESCROW_OPERATORS[chainId]);
-      expect(paymentInfo.feeReceiver).toBe(ESCROW_OPERATORS[chainId]);
-      expect(paymentInfo.maxFeeBps).toBe(ESCROW_MAX_FEE_BPS[chainId]);
+      expect(typedData.domain.chainId).toBe(em.chainId);
+      expect(typedData.domain.verifyingContract).toBe(em.usdc);
+      expect(wrapper.paymentRequirements.network).toBe(`eip155:${em.chainId}`);
+      expect(paymentInfo.token).toBe(em.usdc);
+      expect(typedData.message.to).toBe(em.collector);
+      expect(authorization.to).toBe(em.collector);
+      expect(paymentInfo.operator).toBe(em.operator);
+      expect(paymentInfo.feeReceiver).toBe(em.operator);
+      expect(paymentInfo.maxFeeBps).toBe(EM_FEES.max_fee_bps);
+      expect(paymentInfo.minFeeBps).toBe(EM_FEES.min_fee_bps);
       expect(authorization.nonce).toBe(
-        computeEscrowNonce(chainId, contracts.escrow, cfg.payment_info_typehash, paymentInfo)
+        computeEscrowNonce(em.chainId, em.escrow, cfg.payment_info_typehash, paymentInfo)
       );
     }
   });
@@ -1027,37 +1041,92 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     }
   });
 
-  it('a chain no table has a row for is signed with the config as it is', async () => {
-    const cfg: EscrowNetworkConfig = {
-      chain_id: 999999,
+  /** A config for a chain with no escrow row: its USDC from the chain registry, the rest made up. */
+  const rowlessConfig = (chainId: number): EscrowNetworkConfig => {
+    const usdc = getChainById(chainId)?.usdc;
+    return {
+      chain_id: chainId,
       operator: '0x' + '01'.repeat(20),
       escrow: '0x' + '02'.repeat(20),
       token_collector: '0x' + '03'.repeat(20),
-      usdc: '0x' + '04'.repeat(20),
-      usdc_domain_name: 'USD Coin',
-      usdc_domain_version: '2',
+      usdc: usdc ? signed(usdc.address) : '0x' + '04'.repeat(20),
+      usdc_domain_name: usdc?.name ?? 'USD Coin',
+      usdc_domain_version: usdc?.version ?? '2',
       payment_info_typehash: FX.network_config.payment_info_typehash,
       max_fee_bps: 5000,
     };
-    for (const network of ['red-nueva', 'eip155:999999', undefined]) {
+  };
+  const NO_ROW = /Chain \d+ has no row in this SDK's escrow registry \(ESCROW_CONTRACTS\)/;
+  const UNREGISTERED = /is not a network this SDK registers/;
+
+  it.each<[string, number]>([
+    ['hyperevm', 999],
+    ['unichain', 130],
+    ['scroll', 534352],
+    ['robinhood', 4663],
+  ])('%s (chain %i), with no escrow row: refused without network or under an unknown one, signed under its own name', async (name, chainId) => {
+    expect(REGISTRY_CONTRACTS[chainId]).toBeUndefined();
+    expect(getChainByName(name)!.chainId).toBe(chainId);
+    const cfg = rowlessConfig(chainId);
+    await refused(cfg, {}, NO_ROW);
+    await refused(cfg, { network: null as unknown as string }, NO_ROW);
+    await refused(cfg, { network: 'red-nueva' }, UNREGISTERED);
+    await refused(cfg, { network: 'base' }, /Chain id mismatch for 'base'/);
+    for (const network of [name, name.toUpperCase(), `eip155:${chainId}`]) {
       const { wrapper } = await signs(cfg, { network });
-      expect(wrapper.paymentRequirements.network).toBe('eip155:999999');
+      expect(wrapper.paymentRequirements.network).toBe(`eip155:${chainId}`);
       expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(5000);
     }
   });
 
-  it('a registered network with no escrow rows (hyperevm) is checked by name only', async () => {
-    const cfg = { ...tableConfig(8453), chain_id: 999 };
-    await signs(cfg, { network: 'hyperevm' });
-    await refused(cfg, { network: 'base' }, /Chain id mismatch for 'base'/);
+  it('every EVM chain of the chain registry without an escrow row is refused without network', async () => {
+    const rowless = Object.values(SUPPORTED_CHAINS).filter(
+      (chain) => chain.networkType === 'evm' && REGISTRY_CONTRACTS[chain.chainId] === undefined
+    );
+    expect(rowless.map((chain) => chain.chainId)).toEqual(expect.arrayContaining([999, 130, 534352, 4663]));
+    for (const chain of rowless) await refused(rowlessConfig(chain.chainId), {}, NO_ROW);
   });
 
-  it.each(['red-nueva', 'bsae', 'constructor', '__proto__', 'toString', 'ｂａｓｅ'])(
-    "a name the chain registry does not know (%j) is not checked by name, and the tables still are",
+  it('a row inherited from Object.prototype is no row', async () => {
+    const cfg = rowlessConfig(534352);
+    const proto = Object.prototype as Record<string, unknown>;
+    proto['534352'] = { escrow: cfg.escrow, tokenCollector: cfg.token_collector, usdc: cfg.usdc };
+    try {
+      await refused(cfg, {}, NO_ROW);
+    } finally {
+      delete proto['534352'];
+    }
+    expect(Object.hasOwn(Object.prototype, '534352')).toBe(false);
+  });
+
+  it('a chain no registry knows signs only under the eip155 id that names it', async () => {
+    const cfg = rowlessConfig(999999);
+    await refused(cfg, {}, NO_ROW);
+    await refused(cfg, { network: 'red-nueva' }, UNREGISTERED);
+    await refused(cfg, { network: 'eip155:999998' }, /Chain id mismatch/);
+    const { wrapper } = await signs(cfg, { network: 'eip155:999999' });
+    expect(wrapper.paymentRequirements.network).toBe('eip155:999999');
+  });
+
+  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config still signs with no network", async (network) => {
+    await signs(emConfig(network));
+  });
+
+  it.each<[string, number]>([
+    ['base-sepolia', 84532],
+    ['ethereum-sepolia', 11155111],
+  ])('%s (chain %i): a row in ESCROW_CONTRACTS and no operator row signs with no network; its name is not registered here', async (name, chainId) => {
+    expect(ESCROW_OPERATORS[chainId]).toBeUndefined();
+    expect(getChainByName(name)).toBeUndefined();
+    const { wrapper } = await signs(tableConfig(chainId));
+    expect(wrapper.paymentRequirements.network).toBe(`eip155:${chainId}`);
+    await refused(tableConfig(chainId), { network: name }, UNREGISTERED);
+  });
+
+  it.each(['red-nueva', 'bsae', 'base-sepolia', 'constructor', '__proto__', 'toString', 'hasOwnProperty', 'ｂａｓｅ'])(
+    'a name this SDK does not register (%j) is refused, also for a chain with rows',
     async (network) => {
-      await signs(tableConfig(10), { network });
-      const cfg = { ...tableConfig(10), usdc: changed(REGISTRY_CONTRACTS[10].usdc) };
-      await refused(cfg, { network }, /Escrow address mismatch for chain 10: the escrow config asserts usdc /);
+      await refused(tableConfig(10), { network }, UNREGISTERED);
     }
   );
 
@@ -1145,14 +1214,15 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
   it.each<[string, unknown]>([
     ['100%', 10_000],
     ['uint16 max', 65_535],
-    ['past uint16', 65_536],
-    ['a fraction above', 1800.5],
     ['a string above', '1801'],
-    ['Infinity', Infinity],
-    ['NaN', Number.NaN],
-    ['not a number', 'abc'],
   ])('a fee bound that is %s is refused by the ceiling', async (_label, value) => {
     await refused(withField(tableConfig(8453), 'max_fee_bps', value), { network: 'base' }, /above this SDK's ceiling/);
+  });
+
+  it.each(['min_fee_bps', 'max_fee_bps'])('%s that is not an integer from 0 to 65535 is refused', async (key) => {
+    for (const value of [65_536, -1, 1800.5, 0.5, Infinity, Number.NaN, 'abc', '', ' 1500', '1500.0', '+1500', '0x5dc', '1e3', true, 1500n, [1500], {}]) {
+      await refused(withField(tableConfig(8453), key, value), { network: 'base' }, new RegExp(`Invalid ${key} .*\\(an integer number of bps, 0 to 65535\\)`));
+    }
   });
 
   it('the operator fee floor still applies under the ceiling', async () => {
@@ -1161,8 +1231,19 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     await refused({ ...tableConfig(8453), max_fee_bps: OPERATOR_FEE_BPS - 1 }, { network: 'base' }, /cannot cover/);
   });
 
-  it('a fee bound written as a string at or below the ceiling still signs', async () => {
-    await signs(withField(tableConfig(8453), 'max_fee_bps', '1500'), { network: 'base' });
+  it.each<[unknown, unknown, number, number]>([
+    ['1500', '0', 1500, 0],
+    ['01800', '100', 1800, 100],
+    [1500, 0, 1500, 0],
+    [undefined, null, DEFAULT_MAX_FEE_BPS, 0],
+  ])('fee bounds max %j / min %j are signed as the integers %i / %i', async (max, min, maxBps, minBps) => {
+    const cfg = withField(withField(tableConfig(8453), 'max_fee_bps', max), 'min_fee_bps', min);
+    const { wrapper } = await signs(cfg, { network: 'base' });
+    expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(maxBps);
+    expect(wrapper.payload.paymentInfo.minFeeBps).toBe(minBps);
+    expect(wrapper.payload.authorization.nonce).toBe(
+      computeEscrowNonce(8453, REGISTRY_CONTRACTS[8453].escrow, FX.network_config.payment_info_typehash, wrapper.payload.paymentInfo)
+    );
   });
 
   it('the config is read once: a getter that changes its answer signs what was checked', async () => {
@@ -1221,9 +1302,16 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     );
   });
 
-  it('the operator and fee-ceiling tables are frozen', () => {
+  it('the escrow registry, each of its rows, and the operator and fee-ceiling tables are frozen', () => {
+    expect(Object.isFrozen(REGISTRY_CONTRACTS)).toBe(true);
+    for (const [chainId, row] of Object.entries(REGISTRY_CONTRACTS)) expect(Object.isFrozen(row), `row ${chainId}`).toBe(true);
     expect(Object.isFrozen(ESCROW_OPERATORS)).toBe(true);
     expect(Object.isFrozen(ESCROW_MAX_FEE_BPS)).toBe(true);
+    // ESM is strict: a write to a frozen row throws instead of changing what is signed.
+    expect(() => {
+      (REGISTRY_CONTRACTS[8453] as { escrow: string }).escrow = '0x' + '02'.repeat(20);
+    }).toThrow(TypeError);
+    expect(REGISTRY_CONTRACTS[8453].escrow).toBe(EM_NETWORKS.base.escrow);
   });
 });
 

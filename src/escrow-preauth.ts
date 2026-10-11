@@ -26,9 +26,9 @@
  * against the `network` the caller names, the escrow, token collector and USDC
  * against {@link ESCROW_CONTRACTS}, the operator against
  * {@link ESCROW_OPERATORS}, and `maxFeeBps` against that chain's ceiling
- * ({@link ESCROW_MAX_FEE_BPS}). A contradiction throws; a chain the tables
- * have no row for is signed as before. Mirrors the Python SDK's
- * `escrow_signing.build_escrow_pre_auth` (0.96.0).
+ * ({@link ESCROW_MAX_FEE_BPS}). A contradiction throws. A chain without a row
+ * in ESCROW_CONTRACTS is signed only when the caller names its `network`.
+ * Mirrors the Python SDK's `escrow_signing.build_escrow_pre_auth` (0.96.0).
  *
  * Wire format is pinned by golden vectors (`src/escrow-preauth.vectors.json`):
  * payer-zeroed raw-keccak nonce (`keccak(chainId, escrow,
@@ -280,9 +280,21 @@ const NETWORK_CONFIG_KEYS: Array<keyof EscrowNetworkConfig> = [
 //   max_fee_bps     -> paymentInfo.maxFeeBps
 // Same policy as VERIFIED_USDC_DOMAINS, with the tables of ./escrow-contracts:
 //   - a network this SDK registers, and a config that names another chain -> refused
+//   - a network this SDK does not register                                -> refused
 //   - a chain with a row, and a value other than the row's               -> refused
-//   - a chain without a row                                              -> signed
+//   - a chain without an ESCROW_CONTRACTS row and no network             -> refused
+//   - a chain without a row, under the network that names it             -> signed
 // Addresses are compared in the form they are signed in (checksummed).
+
+/** A table's row for `chainId`: own rows only, never one inherited from a prototype. */
+function rowOf<T>(table: Readonly<Record<number, T>>, chainId: number): T | undefined {
+  return Object.hasOwn(table, chainId) ? table[chainId] : undefined;
+}
+
+/** A config value as an error shows it: strings quoted, anything else with its type. */
+function shown(value: unknown): string {
+  return typeof value === 'string' ? `'${value}'` : `${String(value)} (${typeof value})`;
+}
 
 /** Config key -> the ESCROW_CONTRACTS field it is checked against. */
 const REGISTERED_ADDRESS_KEYS = [
@@ -307,7 +319,7 @@ function escrowChainId(value: unknown): number {
         : Number.NaN;
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new X402Error(
-      `Invalid chain_id ${typeof value === 'string' ? `'${value}'` : String(value)} in the escrow ` +
+      `Invalid chain_id ${shown(value)} in the escrow ` +
         'network config (a positive integer) — refusing to sign.',
       'INVALID_CONFIG'
     );
@@ -325,6 +337,30 @@ const ESCROW_NETWORK_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   skale: 'skale-base',
   'skale-testnet': 'skale-base-sepolia',
 });
+
+/**
+ * A fee bound of the config as the integer the paymentInfo signs (uint16), or
+ * `fallback` when the key is absent: a number, or one written in ASCII decimal
+ * digits (the Python twin reads it with `int()`), from 0 to 65535. Anything
+ * else is refused, so the bound the guards compare is the one on the wire.
+ */
+function feeBps(value: unknown, fallback: number, key: 'min_fee_bps' | 'max_fee_bps'): number {
+  if (value === undefined || value === null) return fallback;
+  const bps =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^[0-9]+$/.test(value)
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isInteger(bps) || bps < 0 || bps > 65535) {
+    throw new X402Error(
+      `Invalid ${key} ${shown(value)} in the escrow ` +
+        'network config (an integer number of bps, 0 to 65535) — refusing to sign.',
+      'INVALID_CONFIG'
+    );
+  }
+  return bps;
+}
 
 /**
  * The chain id this SDK registers for `network`, or `undefined` if none.
@@ -358,8 +394,25 @@ function registeredChainId(network: string): bigint | undefined {
   return typeof chain?.chainId === 'number' ? BigInt(chain.chainId) : undefined;
 }
 
+/**
+ * The chain is either named by the caller or one of the escrow registry's:
+ *   - no `network`: only a chain with a row in ESCROW_CONTRACTS is signed;
+ *   - a `network` this SDK registers (a chain registry name, an alias, or
+ *     `eip155:<id>`): its chain must be the config's;
+ *   - a `network` it does not register: refused.
+ */
 function checkNetworkChainId(network: unknown, chainId: number): void {
-  if (network === undefined || network === null) return;
+  if (network === undefined || network === null) {
+    if (rowOf(ESCROW_CONTRACTS, chainId) === undefined) {
+      throw new X402Error(
+        `Chain ${chainId} has no row in this SDK's escrow registry (ESCROW_CONTRACTS): to sign on ` +
+          'it, pass as `network` the network you expect to pay on, never one read from the ' +
+          'config — refusing to sign.',
+        'INVALID_CONFIG'
+      );
+    }
+    return;
+  }
   if (typeof network !== 'string' || network.trim() === '') {
     throw new X402Error(
       `network ${typeof network === 'string' ? `'${network}'` : String(network)} names no ` +
@@ -368,7 +421,14 @@ function checkNetworkChainId(network: unknown, chainId: number): void {
     );
   }
   const registered = registeredChainId(network);
-  if (registered !== undefined && registered !== BigInt(chainId)) {
+  if (registered === undefined) {
+    throw new X402Error(
+      `'${network}' is not a network this SDK registers (a chain registry name or ` +
+        'eip155:<decimal id>) — refusing to sign.',
+      'INVALID_CONFIG'
+    );
+  }
+  if (registered !== BigInt(chainId)) {
     throw new X402Error(
       `Chain id mismatch for '${network}': the escrow config asserts chain ${chainId} but this ` +
         `SDK registers '${network}' as chain ${registered} — refusing to sign.`,
@@ -402,7 +462,7 @@ function tableAddress(address: string): string {
 }
 
 function checkRegisteredAddresses(cfg: EscrowNetworkConfig, chainId: number): void {
-  const contracts = ESCROW_CONTRACTS[chainId];
+  const contracts = rowOf(ESCROW_CONTRACTS, chainId);
   if (contracts !== undefined) {
     for (const [key, field] of REGISTERED_ADDRESS_KEYS) {
       const asserted = configAddress(cfg, key);
@@ -417,7 +477,7 @@ function checkRegisteredAddresses(cfg: EscrowNetworkConfig, chainId: number): vo
       }
     }
   }
-  const operator = ESCROW_OPERATORS[chainId];
+  const operator = rowOf(ESCROW_OPERATORS, chainId);
   if (operator !== undefined) {
     const asserted = configAddress(cfg, 'operator');
     const expected = tableAddress(operator);
@@ -538,12 +598,13 @@ export interface EscrowPreAuthParams {
   networkConfig: EscrowNetworkConfig;
   /**
    * The network the caller took `networkConfig` for: the key of the server's
-   * `escrow_networks` (e.g. `'base'`) or a CAIP-2 id (`'eip155:8453'`). When
-   * this SDK registers that network, a config whose `chain_id` is another
-   * chain is refused before signing; a name the chain registry does not know
-   * is not checked. Pass it: when omitted, the chain is the one the config
-   * names, the tables are read for that chain, and a chain they have no row
-   * for is signed as the config gives it.
+   * `escrow_networks` (e.g. `'base'`) or a CAIP-2 id (`'eip155:8453'`). A
+   * config whose `chain_id` is another chain than the one this SDK registers
+   * for it is refused before signing, and so is a name the SDK does not
+   * register. Optional: when omitted, only a chain with a row in
+   * {@link ESCROW_CONTRACTS} is signed; to sign on any other chain, name it.
+   * Name the network you expect to pay on, from your own code: never one read
+   * from the config or from the server that sent it.
    */
   network?: string;
   /**
@@ -594,14 +655,17 @@ export interface EscrowPreAuthParams {
  * `em_plugin_sdk.escrow_signing.build_escrow_pre_auth`.
  *
  * @throws {X402Error} `INVALID_CONFIG` on an incomplete network config,
- *   unknown tier, a `maxFeeBps` that cannot cover the operator's static
- *   fee, or a USDC domain that differs from {@link VERIFIED_USDC_DOMAINS};
+ *   unknown tier, a `min_fee_bps` / `max_fee_bps` that is not an integer from
+ *   0 to 65535, a `maxFeeBps` that cannot cover the operator's static fee, or
+ *   a USDC domain that differs from {@link VERIFIED_USDC_DOMAINS};
  *   also on a config the SDK's tables contradict: a `chain_id` that is not a
- *   positive integer or not the chain this SDK registers for `network`, an
- *   `escrow`, `token_collector` or `usdc` other than the chain's row in
+ *   positive integer or not the chain this SDK registers for `network`, a
+ *   `network` it does not register, a chain without a row in
+ *   {@link ESCROW_CONTRACTS} and no `network`, an `escrow`,
+ *   `token_collector` or `usdc` other than the chain's row in
  *   {@link ESCROW_CONTRACTS}, an `operator` other than its row in
  *   {@link ESCROW_OPERATORS}, or a `maxFeeBps` above its row in
- *   {@link ESCROW_MAX_FEE_BPS} (a chain without a row is signed as before);
+ *   {@link ESCROW_MAX_FEE_BPS};
  *   `INVALID_AMOUNT` on a bounty outside (0, deposit limit], or one that is
  *   not a decimal / 0x-hex string, a bigint, or a number up to 2**53 - 1.
  */
@@ -630,7 +694,7 @@ export async function buildEscrowPreAuth(
   const chainId = escrowChainId(cfg.chain_id);
   checkNetworkChainId(params.network, chainId);
 
-  const verified = VERIFIED_USDC_DOMAINS[chainId];
+  const verified = rowOf(VERIFIED_USDC_DOMAINS, chainId);
   if (
     verified &&
     (cfg.usdc_domain_name !== verified.name || cfg.usdc_domain_version !== verified.version)
@@ -664,8 +728,8 @@ export async function buildEscrowPreAuth(
     );
   }
 
-  const minFeeBps = cfg.min_fee_bps ?? DEFAULT_MIN_FEE_BPS;
-  const maxFeeBps = cfg.max_fee_bps ?? DEFAULT_MAX_FEE_BPS;
+  const minFeeBps = feeBps(cfg.min_fee_bps, DEFAULT_MIN_FEE_BPS, 'min_fee_bps');
+  const maxFeeBps = feeBps(cfg.max_fee_bps, DEFAULT_MAX_FEE_BPS, 'max_fee_bps');
   if (maxFeeBps < OPERATOR_FEE_BPS) {
     throw new X402Error(
       `maxFeeBps=${maxFeeBps} cannot cover the operator's ${OPERATOR_FEE_BPS} ` +
@@ -673,12 +737,11 @@ export async function buildEscrowPreAuth(
       'INVALID_CONFIG'
     );
   }
-  // SDK policy, not an on-chain limit. Written so that a bound that is not a
-  // number at or below the ceiling (NaN, a non-numeric string) is refused too.
-  const maxFeeCeiling = ESCROW_MAX_FEE_BPS[chainId];
-  if (maxFeeCeiling !== undefined && !(maxFeeBps <= maxFeeCeiling)) {
+  // SDK policy, not an on-chain limit.
+  const maxFeeCeiling = rowOf(ESCROW_MAX_FEE_BPS, chainId);
+  if (maxFeeCeiling !== undefined && maxFeeBps > maxFeeCeiling) {
     throw new X402Error(
-      `maxFeeBps=${String(maxFeeBps)} for chain ${chainId} is above this SDK's ceiling for ` +
+      `maxFeeBps=${maxFeeBps} for chain ${chainId} is above this SDK's ceiling for ` +
         `that chain (${maxFeeCeiling} bps, ESCROW_MAX_FEE_BPS) — refusing to sign.`,
       'INVALID_CONFIG'
     );
