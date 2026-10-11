@@ -501,6 +501,8 @@ export {
   // A request carrying the stack key never follows a redirect: it fails with this.
   STACK_KEY_HEADER,
   StackKeyRedirectError,
+  // Opt-in `durable` of the paywalls: the default time budget of the anchor.
+  DURABLE_DEFAULT_TIMEOUT_MS,
 } from './backend';
 export type {
   ResourceInfoV2,
@@ -516,6 +518,8 @@ export type {
   FetchRouteInput,
   PaymentAcceptance,
   PaymentMiddlewareOptions,
+  DurableEvidenceOptions,
+  DurableEvidenceContext,
   VerifiedPaymentState,
   FacilitatorErrorInfo,
   FacilitatorFailureFields,

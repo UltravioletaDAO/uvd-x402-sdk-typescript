@@ -112,7 +112,11 @@ import {
 import type { FacilitatorErrorInfo, FacilitatorFailureFields } from './facilitator-error';
 import { bindStackKey, stackKeyFetch, stackKeyFetcher } from './stack-key';
 import type { StackKeyOptions } from './stack-key';
+import { captureNodeResponse, createDurableAnchorer, isDurableNodeResponse, withDurableEvidence } from './durable';
+import type { DurableAnchorer, DurableEvidenceOptions } from './durable';
 export type { StackKeyOptions } from './stack-key';
+export { DURABLE_DEFAULT_TIMEOUT_MS } from './durable';
+export type { DurableEvidenceContext, DurableEvidenceOptions } from './durable';
 export { STACK_KEY_HEADER, StackKeyRedirectError } from './stack-key';
 
 // A facilitator refusal is DATA, not prose. `402` and `503` say opposite things
@@ -372,6 +376,25 @@ export interface PaymentMiddlewareOptions extends FacilitatorClientOptions {
    * - before-handler: settle immediately before calling next()
    */
   settlementStrategy?: 'manual' | 'before-handler';
+  /**
+   * Opt-in DX402 evidence of each paid response: the body the handler answers
+   * with is sealed to the payer and anchored, and the response carries
+   * `X-Durable-Evidence`. Only after a successful settle of the same request
+   * (in `'manual'` mode, a `settle()` that resolved before the response was
+   * complete); a body over `maxBodyBytes`, an event stream, a timeout or a
+   * failed anchor leave the response and the payment as they were, with a
+   * skip notice. Off when absent. See {@link DurableEvidenceOptions}.
+   */
+  durable?: DurableEvidenceOptions;
+}
+
+/** The anchorer of `options.durable`, bound to the paywall's facilitator and stack key. */
+function durableAnchorerFor(options: PaymentMiddlewareOptions): DurableAnchorer | undefined {
+  return createDurableAnchorer(options.durable, {
+    facilitator: options.facilitatorUrl || options.baseUrl || 'https://facilitator.ultravioletadao.xyz',
+    stackKey: options.stackKey,
+    stackKeyHosts: options.stackKeyHosts,
+  });
 }
 
 /**
@@ -2385,6 +2408,7 @@ export function createPaymentMiddleware(
     stackKeyHosts: options.stackKeyHosts,
   });
   const settlementStrategy = options.settlementStrategy || 'before-handler';
+  const anchorer = durableAnchorerFor(options);
 
   return async (req, res, next) => {
     // Extract payment header
@@ -2440,8 +2464,12 @@ export function createPaymentMiddleware(
       return;
     }
 
+    let settled: SettleResponse | undefined;
     req.x402 = createVerifiedPaymentState(client, payment, requirements, verifyResult, binding,
-      result => setExpressPaymentHeaders(res, result));
+      result => {
+        settled = result;
+        setExpressPaymentHeaders(res, result);
+      });
 
     if (settlementStrategy === 'before-handler') {
       const settleResult = await req.x402.settle();
@@ -2469,6 +2497,9 @@ export function createPaymentMiddleware(
       }
     }
 
+    if (anchorer && isDurableNodeResponse(res) && (req.method ?? '').toUpperCase() !== 'HEAD') {
+      captureNodeResponse(res, anchorer, req.x402, () => settled, req.method);
+    }
     next();
   };
 }
@@ -2569,7 +2600,7 @@ type HonoLikeContext = {
   /** Hono's response-header setter. Optional so older context doubles still fit. */
   header?: (name: string, value: string) => void;
   /** Hono's response so far, read to merge with headers a CORS middleware set. */
-  res?: { headers: { get: (name: string) => string | null } };
+  res?: { headers: { get: (name: string) => string | null } } | Response;
   /** True once a handler's response was committed to the context. */
   finalized?: boolean;
 };
@@ -2608,6 +2639,8 @@ interface PaymentGateHooks {
   onResult: (result: VerifyResponse | SettleResponse) => void;
   /** The payment, once verified and before any settle. */
   onVerified?: (payment: VerifiedPaymentState) => void;
+  /** Each settle result, before `onResult` sees it. */
+  onSettled?: (result: SettleResponse) => void;
 }
 
 /**
@@ -2708,7 +2741,10 @@ function createAcceptsPaymentGate(options: HonoMiddlewareOptions) {
     }
 
     const verifiedPayment = createVerifiedPaymentState(client, parsed, requirement, verifyResult, binding,
-      hooks.onResult);
+      (result) => {
+        hooks.onSettled?.(result);
+        hooks.onResult(result);
+      });
     hooks.onVerified?.(verifiedPayment);
 
     if (settlementStrategy === 'before-handler') {
@@ -2731,17 +2767,28 @@ function createAcceptsPaymentGate(options: HonoMiddlewareOptions) {
 
 export function createHonoMiddleware(options: HonoMiddlewareOptions) {
   const gate = createAcceptsPaymentGate(options);
+  const anchorer = durableAnchorerFor(options);
 
   return async (
     c: HonoLikeContext,
     next: () => Promise<void>
   ) => {
+    let settled: SettleResponse | undefined;
     const outcome = await gate(c.req, {
       onResult: (result) => setHonoPaymentHeaders(c, result),
       onVerified: (payment) => c.set?.('x402', payment),
+      onSettled: (result) => { settled = result; },
     });
     if ('reply' in outcome) return respondHono(c, outcome.reply);
     await next();
+    if (anchorer && c.res instanceof Response) {
+      c.res = await withDurableEvidence(c.res, {
+        anchorer,
+        payment: outcome.payment,
+        settled,
+        method: c.req.method || c.req.raw?.method,
+      });
+    }
   };
 }
 
@@ -2848,12 +2895,14 @@ function withPaymentHeaders(response: Response, result: VerifyResponse | SettleR
  */
 export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
   const gate = createAcceptsPaymentGate(options);
+  const anchorer = durableAnchorerFor(options);
 
   return (handler) => async (input, ...rest) => {
     const request = requestOf(input);
     // The latest result with a receipt. Encoded here, where Hono sets the
     // header, so a receipt no header can carry fails before the settle.
     let receipted: VerifyResponse | SettleResponse | undefined;
+    let settled: SettleResponse | undefined;
     const outcome = await gate(
       { header: (name) => request.headers.get(name) ?? undefined, url: request.url, method: request.method, raw: request },
       {
@@ -2862,6 +2911,7 @@ export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
           paymentResponseHeaders(propagatedResult(result));
           receipted = result;
         },
+        onSettled: (result) => { settled = result; },
       },
     );
     if ('reply' in outcome) {
@@ -2872,8 +2922,9 @@ export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
       });
       return withPaymentHeaders(response, receipted);
     }
+    let response: Response;
     try {
-      return withPaymentHeaders(await handler(input, outcome.payment, ...rest), receipted);
+      response = withPaymentHeaders(await handler(input, outcome.payment, ...rest), receipted);
     } catch (error) {
       if (!receipted) throw error;
       // A thrown Response is the route's answer (React Router, Remix): it
@@ -2892,6 +2943,8 @@ export function createFetchPaywall(options: FetchPaywallOptions): FetchPaywall {
         headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
       }), receipted);
     }
+    if (!anchorer) return response;
+    return withDurableEvidence(response, { anchorer, payment: outcome.payment, settled, method: request.method });
   };
 }
 
