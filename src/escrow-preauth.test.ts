@@ -9,8 +9,12 @@ import {
   computeEscrowNonce,
   DEFAULT_MAX_FEE_BPS,
   ESCROW_DEPOSIT_LIMIT_USD,
+  ESCROW_MAX_AUTHORIZATION_SEC,
+  ESCROW_TIER_WINDOW_MAX,
   ESCROW_TIER_WINDOWS,
   OPERATOR_FEE_BPS,
+  REFUND_WINDOW_SEC,
+  REVIEW_WINDOW_SEC,
   VERIFIED_USDC_DOMAINS,
 } from './escrow-preauth';
 import type {
@@ -20,7 +24,7 @@ import type {
   EscrowTierWindows,
 } from './escrow-preauth';
 import { EnvKeyAdapter } from './adapters/env-key';
-import { ESCROW_CONTRACTS } from './backend';
+import { ESCROW_CONTRACTS, TIER_TIMINGS } from './backend';
 import {
   ESCROW_CONTRACTS as REGISTRY_CONTRACTS,
   ESCROW_MAX_FEE_BPS,
@@ -708,6 +712,16 @@ const EM_NETWORKS: Record<
 };
 /** The fee bounds Execution Market's payment config serves (`mcp_server/api/h2a.py`). */
 const EM_FEES = { min_fee_bps: 0, max_fee_bps: 1800 };
+/**
+ * The tier windows Execution Market's payment config serves:
+ * `_effective_tier_windows` in `mcp_server/api/h2a.py` at bf1007d8, the SDK's
+ * micro / standard tiers with `auth` raised to REVIEW_WINDOW_SEC and `refund`
+ * to auth + REFUND_WINDOW_SEC.
+ */
+const EM_TIERS = {
+  micro: { pre: 3600, auth: 604800, refund: 1209600 },
+  standard: { pre: 7200, auth: 604800, refund: 1209600 },
+};
 
 /** The chains with an operator row, and the name this SDK registers for each. */
 const TABLE_CHAINS = Object.keys(ESCROW_OPERATORS)
@@ -759,6 +773,7 @@ function emConfig(network: string): EscrowNetworkConfig {
     usdc_domain_name: domain.name,
     usdc_domain_version: domain.version,
     payment_info_typehash: FX.network_config.payment_info_typehash,
+    tiers: EM_TIERS,
     ...EM_FEES,
   };
 }
@@ -1030,17 +1045,6 @@ describe('buildEscrowPreAuth against the SDK tables: one contradiction per field
 });
 
 describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nulls and limits', () => {
-  it.each(TESTNETS)('testnet %i: rows in ESCROW_CONTRACTS only — any operator and fee bound sign, a changed address does not', async (chainId) => {
-    const operator = getAddress('0x' + '0e'.repeat(20));
-    const { wrapper } = await signs({ ...tableConfig(chainId), operator, max_fee_bps: 2500 }, { network: `eip155:${chainId}` });
-    expect(wrapper.payload.paymentInfo.operator).toBe(operator);
-    expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(2500);
-    for (const [key] of ADDRESS_KEYS) {
-      const cfg = { ...tableConfig(chainId), [key]: changed(tableConfig(chainId)[key]) };
-      await refused(cfg, { network: `eip155:${chainId}` }, new RegExp(`Escrow address mismatch .* asserts ${key} `));
-    }
-  });
-
   /** A config for a chain with no escrow row: its USDC from the chain registry, the rest made up. */
   const rowlessConfig = (chainId: number): EscrowNetworkConfig => {
     const usdc = getChainById(chainId)?.usdc;
@@ -1053,38 +1057,54 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
       usdc_domain_name: usdc?.name ?? 'USD Coin',
       usdc_domain_version: usdc?.version ?? '2',
       payment_info_typehash: FX.network_config.payment_info_typehash,
-      max_fee_bps: 5000,
+      max_fee_bps: 1800,
     };
   };
-  const NO_ROW = /Chain \d+ has no row in this SDK's escrow registry \(ESCROW_CONTRACTS\)/;
+  /** The refusal of a chain missing rows, naming exactly the tables it lacks. */
+  const noRows = (chainId: number, tables: string) =>
+    new RegExp(`^Chain ${chainId} has no row in this SDK's escrow tables \\(${tables}\\) — refusing to sign\\.$`);
+  const ALL_THREE = 'ESCROW_CONTRACTS, ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS';
   const UNREGISTERED = /is not a network this SDK registers/;
+
+  it.each<[string, number]>([
+    ['base-sepolia', 84532],
+    ['ethereum-sepolia', 11155111],
+  ])('testnet %s (chain %i): a row in ESCROW_CONTRACTS only, refused with and without network; its name is not registered here', async (name, chainId) => {
+    expect(REGISTRY_CONTRACTS[chainId]).toBeDefined();
+    expect(ESCROW_OPERATORS[chainId]).toBeUndefined();
+    expect(ESCROW_MAX_FEE_BPS[chainId]).toBeUndefined();
+    expect(getChainByName(name)).toBeUndefined();
+    const missing = noRows(chainId, 'ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS');
+    await refused(tableConfig(chainId), {}, missing);
+    await refused(tableConfig(chainId), { network: `eip155:${chainId}` }, missing);
+    await refused(tableConfig(chainId), { network: name }, UNREGISTERED);
+  });
 
   it.each<[string, number]>([
     ['hyperevm', 999],
     ['unichain', 130],
     ['scroll', 534352],
     ['robinhood', 4663],
-  ])('%s (chain %i), with no escrow row: refused without network or under an unknown one, signed under its own name', async (name, chainId) => {
+  ])('%s (chain %i), with no escrow row: refused with and without network', async (name, chainId) => {
     expect(REGISTRY_CONTRACTS[chainId]).toBeUndefined();
     expect(getChainByName(name)!.chainId).toBe(chainId);
     const cfg = rowlessConfig(chainId);
-    await refused(cfg, {}, NO_ROW);
-    await refused(cfg, { network: null as unknown as string }, NO_ROW);
+    for (const network of [undefined, null, name, name.toUpperCase(), `eip155:${chainId}`]) {
+      await refused(cfg, { network: network as string | undefined }, noRows(chainId, ALL_THREE));
+    }
     await refused(cfg, { network: 'red-nueva' }, UNREGISTERED);
     await refused(cfg, { network: 'base' }, /Chain id mismatch for 'base'/);
-    for (const network of [name, name.toUpperCase(), `eip155:${chainId}`]) {
-      const { wrapper } = await signs(cfg, { network });
-      expect(wrapper.paymentRequirements.network).toBe(`eip155:${chainId}`);
-      expect(wrapper.payload.paymentInfo.maxFeeBps).toBe(5000);
-    }
   });
 
-  it('every EVM chain of the chain registry without an escrow row is refused without network', async () => {
+  it('every EVM chain of the chain registry without its escrow rows is refused, with and without its name', async () => {
     const rowless = Object.values(SUPPORTED_CHAINS).filter(
-      (chain) => chain.networkType === 'evm' && REGISTRY_CONTRACTS[chain.chainId] === undefined
+      (chain) => chain.networkType === 'evm' && ESCROW_OPERATORS[chain.chainId] === undefined
     );
     expect(rowless.map((chain) => chain.chainId)).toEqual(expect.arrayContaining([999, 130, 534352, 4663]));
-    for (const chain of rowless) await refused(rowlessConfig(chain.chainId), {}, NO_ROW);
+    for (const chain of rowless) {
+      await refused(rowlessConfig(chain.chainId), {}, noRows(chain.chainId, ALL_THREE));
+      await refused(rowlessConfig(chain.chainId), { network: chain.name }, noRows(chain.chainId, ALL_THREE));
+    }
   });
 
   it('a row inherited from Object.prototype is no row', async () => {
@@ -1092,35 +1112,31 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     const proto = Object.prototype as Record<string, unknown>;
     proto['534352'] = { escrow: cfg.escrow, tokenCollector: cfg.token_collector, usdc: cfg.usdc };
     try {
-      await refused(cfg, {}, NO_ROW);
+      await refused(cfg, {}, noRows(534352, ALL_THREE));
     } finally {
       delete proto['534352'];
     }
     expect(Object.hasOwn(Object.prototype, '534352')).toBe(false);
   });
 
-  it('a chain no registry knows signs only under the eip155 id that names it', async () => {
+  it('a chain no registry knows is refused, also under the eip155 id that names it', async () => {
     const cfg = rowlessConfig(999999);
-    await refused(cfg, {}, NO_ROW);
+    await refused(cfg, {}, noRows(999999, ALL_THREE));
+    await refused(cfg, { network: 'eip155:999999' }, noRows(999999, ALL_THREE));
     await refused(cfg, { network: 'red-nueva' }, UNREGISTERED);
     await refused(cfg, { network: 'eip155:999998' }, /Chain id mismatch/);
-    const { wrapper } = await signs(cfg, { network: 'eip155:999999' });
-    expect(wrapper.paymentRequirements.network).toBe('eip155:999999');
   });
 
-  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config still signs with no network", async (network) => {
-    await signs(emConfig(network));
+  it.each(Object.keys(EM_NETWORKS))("Execution Market's %s config still signs with no network, on both tiers it serves", async (network) => {
+    for (const tier of Object.keys(EM_TIERS)) await signs(emConfig(network), { tier });
   });
 
-  it.each<[string, number]>([
-    ['base-sepolia', 84532],
-    ['ethereum-sepolia', 11155111],
-  ])('%s (chain %i): a row in ESCROW_CONTRACTS and no operator row signs with no network; its name is not registered here', async (name, chainId) => {
-    expect(ESCROW_OPERATORS[chainId]).toBeUndefined();
-    expect(getChainByName(name)).toBeUndefined();
-    const { wrapper } = await signs(tableConfig(chainId));
-    expect(wrapper.paymentRequirements.network).toBe(`eip155:${chainId}`);
-    await refused(tableConfig(chainId), { network: name }, UNREGISTERED);
+  it("Execution Market's served windows fit the tier ceilings (its auth floor is the auth ceiling)", () => {
+    expect(REVIEW_WINDOW_SEC).toBeLessThanOrEqual(ESCROW_TIER_WINDOW_MAX.auth);
+    expect(REVIEW_WINDOW_SEC + REFUND_WINDOW_SEC).toBeLessThanOrEqual(ESCROW_TIER_WINDOW_MAX.refund);
+    for (const windows of Object.values(EM_TIERS)) {
+      for (const key of ['pre', 'auth', 'refund'] as const) expect(windows[key]).toBeLessThanOrEqual(ESCROW_TIER_WINDOW_MAX[key]);
+    }
   });
 
   it.each(['red-nueva', 'bsae', 'base-sepolia', 'constructor', '__proto__', 'toString', 'hasOwnProperty', 'ｂａｓｅ'])(
@@ -1244,6 +1260,86 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     expect(wrapper.payload.authorization.nonce).toBe(
       computeEscrowNonce(8453, REGISTRY_CONTRACTS[8453].escrow, FX.network_config.payment_info_typehash, wrapper.payload.paymentInfo)
     );
+  });
+
+  it("the tier ceilings are TIER_TIMINGS' enterprise tier, the authorization ceiling EM's 720 h plus the review window", () => {
+    expect(ESCROW_TIER_WINDOW_MAX).toEqual(TIER_TIMINGS.enterprise);
+    expect(ESCROW_TIER_WINDOW_MAX).toEqual({ pre: 86400, auth: 604800, refund: 2592000 });
+    expect(Object.isFrozen(ESCROW_TIER_WINDOW_MAX)).toBe(true);
+    expect(ESCROW_MAX_AUTHORIZATION_SEC).toBe(3196800);
+    expect(ESCROW_MAX_AUTHORIZATION_SEC).toBe(720 * 3600 + FX.review_window_sec);
+    for (const windows of Object.values(ESCROW_TIER_WINDOWS)) {
+      for (const key of ['pre', 'auth', 'refund'] as const) expect(windows[key]).toBeLessThanOrEqual(ESCROW_TIER_WINDOW_MAX[key]);
+    }
+  });
+
+  describe('tier windows and the authorization window (refused past the ceiling, never clamped)', () => {
+    const NOW = FROZEN.now;
+    const withTier = (windows: unknown): EscrowNetworkConfig =>
+      ({ ...tableConfig(8453), tiers: { custom: windows } }) as unknown as EscrowNetworkConfig;
+    const signedInfo = async (cfg: EscrowNetworkConfig, extra: ExtraParams = {}) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(NOW * 1000));
+      return (await signs(cfg, { network: 'base', tier: 'custom', ...extra })).wrapper.payload.paymentInfo;
+    };
+    const refusedAt = async (cfg: EscrowNetworkConfig, extra: ExtraParams, match: RegExp) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(NOW * 1000));
+      await refused(cfg, { network: 'base', tier: 'custom', ...extra }, match);
+    };
+
+    it('a tier at the ceilings signs exactly them', async () => {
+      const pi = await signedInfo(withTier({ ...ESCROW_TIER_WINDOW_MAX }));
+      expect(pi.preApprovalExpiry).toBe(NOW + 86400);
+      expect(pi.authorizationExpiry).toBe(NOW + 604800);
+      expect(pi.refundExpiry).toBe(NOW + 2592000);
+    });
+
+    it('windows written as decimal digits are signed as the numbers', async () => {
+      const pi = await signedInfo(withTier({ pre: '3600', auth: '7200', refund: '86400' }));
+      expect(pi.preApprovalExpiry).toBe(NOW + 3600);
+      expect(typeof pi.preApprovalExpiry).toBe('number');
+      expect(pi.authorizationExpiry).toBe(NOW + FX.review_window_sec);
+    });
+
+    it.each(['pre', 'auth', 'refund'] as const)('a %s window one second over its ceiling is refused', async (key) => {
+      const windows = { ...ESCROW_TIER_WINDOW_MAX, [key]: ESCROW_TIER_WINDOW_MAX[key] + 1 };
+      await refusedAt(withTier(windows), {}, new RegExp(`Invalid ${key} window ${ESCROW_TIER_WINDOW_MAX[key] + 1} \\(number\\) for escrow tier 'custom'`));
+    });
+
+    it.each(['pre', 'auth', 'refund'] as const)('a %s window that is not an integer from 0 is refused', async (key) => {
+      for (const value of [-1, 1.5, Number.NaN, Infinity, 'abc', ' 3600', '3600.0', '', null, undefined, true, 3600n]) {
+        await refusedAt(withTier({ pre: 3600, auth: 7200, refund: 86400, [key]: value }), {}, new RegExp(`Invalid ${key} window .* for escrow tier 'custom'`));
+      }
+    });
+
+    it('a tier that is not an object of windows is refused', async () => {
+      for (const windows of [5, 'micro', []]) await refusedAt(withTier(windows), {}, /Invalid pre window/);
+    });
+
+    it('a zero window signs', async () => {
+      const pi = await signedInfo(withTier({ pre: 0, auth: 0, refund: 0 }));
+      expect(pi.preApprovalExpiry).toBe(NOW);
+    });
+
+    it('a review deadline 720 h ahead signs at the authorization ceiling; one second later is refused', async () => {
+      const deadline = NOW + 720 * 3600;
+      const pi = await signedInfo(tableConfig(8453), { tier: 'micro', reviewDeadlineSec: deadline });
+      expect(pi.authorizationExpiry).toBe(NOW + ESCROW_MAX_AUTHORIZATION_SEC);
+      await refusedAt(tableConfig(8453), { tier: 'micro', reviewDeadlineSec: deadline + 1 }, /past this SDK's 3196800 s \(ESCROW_MAX_AUTHORIZATION_SEC\)/);
+      await refusedAt(tableConfig(8453), { tier: 'micro', reviewDeadlineSec: NOW + 100 * 365 * 24 * 3600 }, /ESCROW_MAX_AUTHORIZATION_SEC/);
+    });
+
+    it('a review deadline that is not an integer is refused, not signed', async () => {
+      for (const deadline of [Number.NaN, Infinity, NOW + 0.5, '', String(NOW + 3600), ` ${NOW} `, true, BigInt(NOW), [NOW]]) {
+        await refusedAt(tableConfig(8453), { tier: 'micro', reviewDeadlineSec: deadline as number }, /Invalid reviewDeadlineSec .*\(epoch seconds, an integer\)/);
+      }
+    });
+
+    it('a null review deadline is no deadline', async () => {
+      const pi = await signedInfo(tableConfig(8453), { tier: 'micro', reviewDeadlineSec: null as unknown as number });
+      expect(pi.authorizationExpiry).toBe(NOW + FX.review_window_sec);
+    });
   });
 
   it('the config is read once: a getter that changes its answer signs what was checked', async () => {

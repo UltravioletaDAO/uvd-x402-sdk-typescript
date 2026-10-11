@@ -26,8 +26,10 @@
  * against the `network` the caller names, the escrow, token collector and USDC
  * against {@link ESCROW_CONTRACTS}, the operator against
  * {@link ESCROW_OPERATORS}, and `maxFeeBps` against that chain's ceiling
- * ({@link ESCROW_MAX_FEE_BPS}). A contradiction throws. A chain without a row
- * in ESCROW_CONTRACTS is signed only when the caller names its `network`.
+ * ({@link ESCROW_MAX_FEE_BPS}). A contradiction throws, and so does a chain
+ * without a row in any of the three tables, with or without `network`. Tier
+ * windows and the authorization window have ceilings
+ * ({@link ESCROW_TIER_WINDOW_MAX}, {@link ESCROW_MAX_AUTHORIZATION_SEC}).
  * Mirrors the Python SDK's `escrow_signing.build_escrow_pre_auth` (0.96.0).
  *
  * Wire format is pinned by golden vectors (`src/escrow-preauth.vectors.json`):
@@ -188,6 +190,29 @@ export const REVIEW_WINDOW_SEC = 7 * 24 * 3600; // >=7 days to approve after the
 export const REFUND_WINDOW_SEC = 7 * 24 * 3600; // +7 days to refund after that
 
 /**
+ * The longest window a tier may give each expiry, in seconds: the `enterprise`
+ * tier of `TIER_TIMINGS` (`uvd-x402-sdk/backend`), the longest the SDK ships
+ * (pinned by a test). A server-published tier above it is refused before
+ * signing, never clamped. The windows Execution Market serves today reach the
+ * `auth` ceiling exactly (REVIEW_WINDOW_SEC); a test pins that they fit.
+ */
+export const ESCROW_TIER_WINDOW_MAX: Readonly<EscrowTierWindows> = Object.freeze({
+  pre: 86400,
+  auth: 604800,
+  refund: 2592000,
+});
+
+/**
+ * The latest `authorizationExpiry` the pre-auth signs, in seconds after now:
+ * Execution Market's longest task deadline (720 h: `deadline_hours` is
+ * `le=720` in its task models) plus {@link REVIEW_WINDOW_SEC}. A later one
+ * (from a `reviewDeadlineSec` further ahead) is refused, never clamped. Now is
+ * the signer's clock: a deadline exactly 720 h ahead, read by a clock that runs
+ * behind, is refused.
+ */
+export const ESCROW_MAX_AUTHORIZATION_SEC = 720 * 3600 + REVIEW_WINDOW_SEC;
+
+/**
  * One network's escrow parameters, as published by the marketplace server
  * (e.g. Execution Market's `GET /api/v1/h2a/payment-config` →
  * `escrow_networks[network]`). Snake_case on purpose: pass the server's
@@ -282,8 +307,7 @@ const NETWORK_CONFIG_KEYS: Array<keyof EscrowNetworkConfig> = [
 //   - a network this SDK registers, and a config that names another chain -> refused
 //   - a network this SDK does not register                                -> refused
 //   - a chain with a row, and a value other than the row's               -> refused
-//   - a chain without an ESCROW_CONTRACTS row and no network             -> refused
-//   - a chain without a row, under the network that names it             -> signed
+//   - a chain without a row in any of the three tables                   -> refused
 // Addresses are compared in the form they are signed in (checksummed).
 
 /** A table's row for `chainId`: own rows only, never one inherited from a prototype. */
@@ -304,6 +328,16 @@ const REGISTERED_ADDRESS_KEYS = [
 ] as const;
 
 /**
+ * A number of the config as given, or one written in ASCII decimal digits (the
+ * Python twin reads both with `int()`); `NaN` for anything else. Each caller
+ * checks the range.
+ */
+function configInteger(value: unknown): number {
+  if (typeof value === 'number') return value;
+  return typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : Number.NaN;
+}
+
+/**
  * The chain id the authorization is signed for, from the config's `chain_id`:
  * a positive safe integer, or one written in ASCII decimal digits (the Python
  * twin reads it with `int()`). Anything else is refused — a boolean (`true`
@@ -311,12 +345,7 @@ const REGISTERED_ADDRESS_KEYS = [
  * past 2**53 - 1 — so the chain the tables are read for is the chain signed.
  */
 function escrowChainId(value: unknown): number {
-  const id =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string' && /^[0-9]+$/.test(value)
-        ? Number(value)
-        : Number.NaN;
+  const id = configInteger(value);
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new X402Error(
       `Invalid chain_id ${shown(value)} in the escrow ` +
@@ -346,12 +375,7 @@ const ESCROW_NETWORK_ALIASES: Readonly<Record<string, string>> = Object.freeze({
  */
 function feeBps(value: unknown, fallback: number, key: 'min_fee_bps' | 'max_fee_bps'): number {
   if (value === undefined || value === null) return fallback;
-  const bps =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string' && /^[0-9]+$/.test(value)
-        ? Number(value)
-        : Number.NaN;
+  const bps = configInteger(value);
   if (!Number.isInteger(bps) || bps < 0 || bps > 65535) {
     throw new X402Error(
       `Invalid ${key} ${shown(value)} in the escrow ` +
@@ -360,6 +384,28 @@ function feeBps(value: unknown, fallback: number, key: 'min_fee_bps' | 'max_fee_
     );
   }
   return bps;
+}
+
+/**
+ * The tier's windows as the integers the paymentInfo adds to now(): each one an
+ * integer from 0 to its {@link ESCROW_TIER_WINDOW_MAX}, or one written in
+ * decimal digits. A window above the ceiling is refused, never clamped.
+ */
+function tierWindows(windows: EscrowTierWindows, tier: string): EscrowTierWindows {
+  const read = (key: keyof EscrowTierWindows): number => {
+    const value = (windows as unknown as Record<string, unknown>)[key];
+    const seconds = configInteger(value);
+    const max = ESCROW_TIER_WINDOW_MAX[key];
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > max) {
+      throw new X402Error(
+        `Invalid ${key} window ${shown(value)} for escrow tier '${tier}' (an integer number of ` +
+          `seconds, 0 to ${max}: ESCROW_TIER_WINDOW_MAX) — refusing to sign.`,
+        'INVALID_CONFIG'
+      );
+    }
+    return seconds;
+  };
+  return { pre: read('pre'), auth: read('auth'), refund: read('refund') };
 }
 
 /**
@@ -395,24 +441,14 @@ function registeredChainId(network: string): bigint | undefined {
 }
 
 /**
- * The chain is either named by the caller or one of the escrow registry's:
- *   - no `network`: only a chain with a row in ESCROW_CONTRACTS is signed;
+ * The network the caller named, against the config's chain:
+ *   - no `network`: nothing to check here (the chain still needs its rows);
  *   - a `network` this SDK registers (a chain registry name, an alias, or
  *     `eip155:<id>`): its chain must be the config's;
  *   - a `network` it does not register: refused.
  */
 function checkNetworkChainId(network: unknown, chainId: number): void {
-  if (network === undefined || network === null) {
-    if (rowOf(ESCROW_CONTRACTS, chainId) === undefined) {
-      throw new X402Error(
-        `Chain ${chainId} has no row in this SDK's escrow registry (ESCROW_CONTRACTS): to sign on ` +
-          'it, pass as `network` the network you expect to pay on, never one read from the ' +
-          'config — refusing to sign.',
-        'INVALID_CONFIG'
-      );
-    }
-    return;
-  }
+  if (network === undefined || network === null) return;
   if (typeof network !== 'string' || network.trim() === '') {
     throw new X402Error(
       `network ${typeof network === 'string' ? `'${network}'` : String(network)} names no ` +
@@ -461,33 +497,53 @@ function tableAddress(address: string): string {
   return ethers.getAddress(address.toLowerCase());
 }
 
-function checkRegisteredAddresses(cfg: EscrowNetworkConfig, chainId: number): void {
+/** The chain's row in each of the three escrow tables; a chain missing any is refused. */
+interface EscrowRows {
+  contracts: (typeof ESCROW_CONTRACTS)[number];
+  operator: string;
+  maxFeeBps: number;
+}
+
+function escrowRows(chainId: number): EscrowRows {
   const contracts = rowOf(ESCROW_CONTRACTS, chainId);
-  if (contracts !== undefined) {
-    for (const [key, field] of REGISTERED_ADDRESS_KEYS) {
-      const asserted = configAddress(cfg, key);
-      const expected = tableAddress(contracts[field]);
-      if (asserted !== expected) {
-        throw new X402Error(
-          `Escrow address mismatch for chain ${chainId}: the escrow config asserts ${key} ` +
-            `${asserted} but this SDK's escrow registry (ESCROW_CONTRACTS) has ${expected} — ` +
-            'refusing to sign.',
-          'INVALID_CONFIG'
-        );
-      }
-    }
-  }
   const operator = rowOf(ESCROW_OPERATORS, chainId);
-  if (operator !== undefined) {
-    const asserted = configAddress(cfg, 'operator');
-    const expected = tableAddress(operator);
+  const maxFeeBps = rowOf(ESCROW_MAX_FEE_BPS, chainId);
+  if (contracts === undefined || operator === undefined || maxFeeBps === undefined) {
+    const missing = [
+      contracts === undefined ? 'ESCROW_CONTRACTS' : null,
+      operator === undefined ? 'ESCROW_OPERATORS' : null,
+      maxFeeBps === undefined ? 'ESCROW_MAX_FEE_BPS' : null,
+    ].filter((name) => name !== null);
+    throw new X402Error(
+      `Chain ${chainId} has no row in this SDK's escrow tables (${missing.join(', ')}) — ` +
+        'refusing to sign.',
+      'INVALID_CONFIG'
+    );
+  }
+  return { contracts, operator, maxFeeBps };
+}
+
+function checkRegisteredAddresses(cfg: EscrowNetworkConfig, chainId: number, rows: EscrowRows): void {
+  for (const [key, field] of REGISTERED_ADDRESS_KEYS) {
+    const asserted = configAddress(cfg, key);
+    const expected = tableAddress(rows.contracts[field]);
     if (asserted !== expected) {
       throw new X402Error(
-        `Escrow operator mismatch for chain ${chainId}: the escrow config asserts operator ` +
-          `${asserted} but this SDK's ESCROW_OPERATORS has ${expected} — refusing to sign.`,
+        `Escrow address mismatch for chain ${chainId}: the escrow config asserts ${key} ` +
+          `${asserted} but this SDK's escrow registry (ESCROW_CONTRACTS) has ${expected} — ` +
+          'refusing to sign.',
         'INVALID_CONFIG'
       );
     }
+  }
+  const operator = configAddress(cfg, 'operator');
+  const expectedOperator = tableAddress(rows.operator);
+  if (operator !== expectedOperator) {
+    throw new X402Error(
+      `Escrow operator mismatch for chain ${chainId}: the escrow config asserts operator ` +
+        `${operator} but this SDK's ESCROW_OPERATORS has ${expectedOperator} — refusing to sign.`,
+      'INVALID_CONFIG'
+    );
   }
 }
 
@@ -601,10 +657,10 @@ export interface EscrowPreAuthParams {
    * `escrow_networks` (e.g. `'base'`) or a CAIP-2 id (`'eip155:8453'`). A
    * config whose `chain_id` is another chain than the one this SDK registers
    * for it is refused before signing, and so is a name the SDK does not
-   * register. Optional: when omitted, only a chain with a row in
-   * {@link ESCROW_CONTRACTS} is signed; to sign on any other chain, name it.
-   * Name the network you expect to pay on, from your own code: never one read
-   * from the config or from the server that sent it.
+   * register. Optional; with it or without it, only a chain with a row in
+   * each of the SDK's escrow tables is signed. Name the network you expect to
+   * pay on, from your own code: never one read from the config or from the
+   * server that sent it.
    */
   network?: string;
   /**
@@ -661,7 +717,10 @@ export interface EscrowPreAuthParams {
  *   also on a config the SDK's tables contradict: a `chain_id` that is not a
  *   positive integer or not the chain this SDK registers for `network`, a
  *   `network` it does not register, a chain without a row in
- *   {@link ESCROW_CONTRACTS} and no `network`, an `escrow`,
+ *   {@link ESCROW_CONTRACTS}, {@link ESCROW_OPERATORS} or
+ *   {@link ESCROW_MAX_FEE_BPS}, a tier window that is not an integer from 0 to
+ *   {@link ESCROW_TIER_WINDOW_MAX}, an `authorizationExpiry` further than
+ *   {@link ESCROW_MAX_AUTHORIZATION_SEC} from now, an `escrow`,
  *   `token_collector` or `usdc` other than the chain's row in
  *   {@link ESCROW_CONTRACTS}, an `operator` other than its row in
  *   {@link ESCROW_OPERATORS}, or a `maxFeeBps` above its row in
@@ -693,6 +752,7 @@ export async function buildEscrowPreAuth(
   // domain, the rows of the tables, what is signed) is read for this chain id.
   const chainId = escrowChainId(cfg.chain_id);
   checkNetworkChainId(params.network, chainId);
+  const rows = escrowRows(chainId);
 
   const verified = rowOf(VERIFIED_USDC_DOMAINS, chainId);
   if (
@@ -709,7 +769,7 @@ export async function buildEscrowPreAuth(
   }
 
   // Escrow, token collector, USDC and operator, against ./escrow-contracts.
-  checkRegisteredAddresses(cfg, chainId);
+  checkRegisteredAddresses(cfg, chainId, rows);
 
   const maxAmount = toUint(params.bountyAtomic, 'bountyAtomic', 'INVALID_AMOUNT');
   if (maxAmount <= 0n) {
@@ -738,18 +798,17 @@ export async function buildEscrowPreAuth(
     );
   }
   // SDK policy, not an on-chain limit.
-  const maxFeeCeiling = rowOf(ESCROW_MAX_FEE_BPS, chainId);
-  if (maxFeeCeiling !== undefined && maxFeeBps > maxFeeCeiling) {
+  if (maxFeeBps > rows.maxFeeBps) {
     throw new X402Error(
       `maxFeeBps=${maxFeeBps} for chain ${chainId} is above this SDK's ceiling for ` +
-        `that chain (${maxFeeCeiling} bps, ESCROW_MAX_FEE_BPS) — refusing to sign.`,
+        `that chain (${rows.maxFeeBps} bps, ESCROW_MAX_FEE_BPS) — refusing to sign.`,
       'INVALID_CONFIG'
     );
   }
 
   const tierKey = params.tier ?? 'micro';
-  const windows = cfg.tiers?.[tierKey] ?? ESCROW_TIER_WINDOWS[tierKey];
-  if (!windows) {
+  const tierWindowsGiven = cfg.tiers?.[tierKey] ?? ESCROW_TIER_WINDOWS[tierKey];
+  if (!tierWindowsGiven) {
     const known = [...new Set([...Object.keys(cfg.tiers ?? {}), ...Object.keys(ESCROW_TIER_WINDOWS)])].sort();
     throw new X402Error(
       `Unknown escrow tier '${tierKey}' — known tiers: ${known.join(', ')}`,
@@ -757,14 +816,33 @@ export async function buildEscrowPreAuth(
     );
   }
 
+  const windows = tierWindows(tierWindowsGiven, tierKey);
+
   const now = Math.floor(Date.now() / 1000);
 
   // The release window must outlast the human review. Base it on the task
   // deadline (the worker delivers near it) plus a generous buffer, and never
   // shorter than the SDK tier window. preApprovalExpiry stays short — the
   // lock executes immediately at assignment.
-  const reviewBase = Math.max(now, params.reviewDeadlineSec ?? now);
+  const deadline = params.reviewDeadlineSec;
+  if (deadline !== undefined && deadline !== null && !Number.isSafeInteger(deadline)) {
+    throw new X402Error(
+      `Invalid reviewDeadlineSec ${shown(deadline)} (epoch seconds, an integer) — refusing to sign.`,
+      'INVALID_CONFIG'
+    );
+  }
+  const reviewBase = Math.max(now, deadline ?? now);
   const authExpiry = Math.max(now + windows.auth, reviewBase + REVIEW_WINDOW_SEC);
+  // Refused, never clamped: a shorter window than asked would sign another
+  // authorization.
+  if (authExpiry - now > ESCROW_MAX_AUTHORIZATION_SEC) {
+    throw new X402Error(
+      `authorizationExpiry ${authExpiry} is ${authExpiry - now} s after now, past this SDK's ` +
+        `${ESCROW_MAX_AUTHORIZATION_SEC} s (ESCROW_MAX_AUTHORIZATION_SEC): reviewDeadlineSec is at ` +
+        `most ${ESCROW_MAX_AUTHORIZATION_SEC - REVIEW_WINDOW_SEC} s ahead — refusing to sign.`,
+      'INVALID_CONFIG'
+    );
+  }
   const refundExpiry = Math.max(now + windows.refund, authExpiry + REFUND_WINDOW_SEC);
 
   const paymentInfo: EscrowPaymentInfo = {

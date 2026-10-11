@@ -386,6 +386,8 @@ export {
   DEFAULT_MIN_FEE_BPS,
   DEFAULT_MAX_FEE_BPS,
   VERIFIED_USDC_DOMAINS,
+  ESCROW_TIER_WINDOW_MAX,
+  ESCROW_MAX_AUTHORIZATION_SEC,
 } from './escrow-preauth';
 export { ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS } from './escrow-contracts';
 export type {

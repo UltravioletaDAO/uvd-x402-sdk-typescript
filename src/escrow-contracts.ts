@@ -14,9 +14,9 @@
  *   pre-auth signs on that chain.
  *
  * `buildEscrowPreAuth` reads all three: on a chain with a row, a network
- * config that contradicts it is refused before anything is signed; a chain
- * without an ESCROW_CONTRACTS row is signed only under the `network` that
- * names it. Mirrors the Python SDK's `uvd_x402_sdk.escrow_contracts` (0.96.0).
+ * config that contradicts it is refused before anything is signed, and so is a
+ * chain without a row in any of the three. Mirrors the Python SDK's
+ * `uvd_x402_sdk.escrow_contracts` (0.96.0).
  * All three are frozen, rows included.
  */
 
@@ -208,8 +208,8 @@ export const ESCROW_CONTRACTS: Readonly<Record<number, Readonly<AdvancedEscrowCo
  * serves it, but the row is still the operator of the escrows in flight there;
  * and Execution Market's registry has no Arc Testnet entry: that row is the
  * factory's `computeAddress` for the same operator, recorded on both Arc chains
- * in `src/fixtures/arc-escrow-d.rpc.json`. A chain without a row is signed with
- * the config's operator.
+ * in `src/fixtures/arc-escrow-d.rpc.json`. The pre-auth refuses a chain without
+ * a row here (the testnet rows of ESCROW_CONTRACTS have none).
  */
 export const ESCROW_OPERATORS: Readonly<Record<number, string>> = Object.freeze({
   8453: '0x271f9fa7f8907aCf178CCFB470076D9129D8F0Eb', // Base
@@ -236,8 +236,8 @@ export const ESCROW_OPERATORS: Readonly<Record<number, string>> = Object.freeze(
  * `mcp_server/api/h2a.py`, and `FASE5_MAX_FEE_BPS`,
  * `mcp_server/integrations/x402/fees.py`, both read at execution-market@bf1007d8),
  * the operator's 1300 bps plus room for a protocol fee of up to 500. Same rows
- * as `uvd_x402_sdk.escrow_contracts.ESCROW_MAX_FEE_BPS`. A chain without a row
- * is signed with the config's bound.
+ * as `uvd_x402_sdk.escrow_contracts.ESCROW_MAX_FEE_BPS`. The pre-auth refuses a
+ * chain without a row here.
  */
 export const ESCROW_MAX_FEE_BPS: Readonly<Record<number, number>> = Object.freeze({
   8453: 1800, // Base
