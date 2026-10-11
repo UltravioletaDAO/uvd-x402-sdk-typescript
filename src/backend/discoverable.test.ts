@@ -249,6 +249,12 @@ describe.each([
     expect(facilitator.calls).toEqual([]);
   });
 
+  it.each(INVALID_FLAGS.map((value) => [String(JSON.stringify(value)), value]))('discoverable: %s with no accept to copy', (_label, value) => {
+    expect(() => create({ accepts: [], facilitatorUrl: facilitator.url, discoverable: value as boolean }))
+      .toThrow(/discoverable must be true or false/);
+    expect(fetchCalls).toBe(0);
+  });
+
   it.each(INVALID_ACCEPTS)('%s', (_label, accept) => {
     for (const discoverable of [true, false]) {
       expect(() => create({ accepts: [baseAccept(), accept], facilitatorUrl: facilitator.url, discoverable }))

@@ -8,7 +8,8 @@
   `src/backend/discoverable.test.ts`, README y CHANGELOG (Unreleased, sin bump de
   version). Con Node 20 y red cerrada: typecheck, suite completa, lint, build,
   `npm pack --dry-run`, `derive-erc8128-f3-3 --check` y conformidad cruzada TS <-> PY
-  en verde. Mutaciones: ver el cuerpo del PR.
+  en verde. Mutaciones M1..M15 en rojo y revertidas (M12 sobrevivia: se agrego el
+  caso `accepts: []` con flag invalido, que la mata).
 - Falta: CI del PR y la revision de c0der. Sin merge, deploy ni publish.
 - Proximo paso: mirar el CI del PR.
 
