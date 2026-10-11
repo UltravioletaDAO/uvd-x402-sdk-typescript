@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [2.104.2] - unreleased (dated the day it is published)
+
+### Fixed
+
+- `VERIFIED_USDC_DOMAINS` has a row for each of the 11 chains with an escrow operator row, the rows of the Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS` (0.97.0): `USD Coin` / `2` on Base, Ethereum, Polygon, Arbitrum, Avalanche and Optimism; `USDC` / `2` on Celo, Monad, Arc and Arc Testnet; `Bridged USDC (SKALE Bridge)` / `2` on SKALE Base. It had Arc and Arc Testnet only, so on the other 9 chains `buildEscrowPreAuth` signed whatever `usdc_domain_name` / `usdc_domain_version` the config gave, and a wrong pair produced an authorization that never settles. Now a config whose pair differs from the chain's row, in any character (case and spaces included), throws `X402Error` `INVALID_CONFIG` with nothing signed, as in the Python SDK. The rows are written out, not read from the chain registry, and frozen, each row included.
+- A chain without a `VERIFIED_USDC_DOMAINS` row is refused like a chain without a row in `ESCROW_CONTRACTS`, `ESCROW_OPERATORS` or `ESCROW_MAX_FEE_BPS`, and the refusal names the table, as in the Python SDK. Every chain the escrow tables sign has one, so no chain that signed with the right domain is refused.
+
+### Tests
+
+- `src/escrow-preauth.test.ts`: the table is the Python SDK's 11 rows, written out in the test; it has a row for every chain with an escrow operator row and no other; the chain registry's USDC domain is the table's on each chain. On every chain, with and without `network`: the table's domain signs, and is the domain signed; another name, the name in lower case or with a trailing space, another version and the version with a leading space are refused with nothing signed. A Base config with `USDC` is refused. `src/escrow-preauth.rows.test.ts`: a chain with all three escrow rows and no domain row is refused, naming `VERIFIED_USDC_DOMAINS`.
+- `scripts/xlang/cross-language-conformance.mjs`, phase 9: both SDKs' `VERIFIED_USDC_DOMAINS` are compared row by row, and on each of its chains both sign the table's domain and both refuse it with the name or the version changed, with nothing handed to the wallet.
+
 ## [2.104.1] - unreleased (dated the day it is published)
 
 ### Fixed

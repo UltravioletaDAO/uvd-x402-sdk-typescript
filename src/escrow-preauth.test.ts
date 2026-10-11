@@ -351,12 +351,88 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
     bountyAtomic: FX.bounty_atomic,
   });
 
-  it('lists Arc and Arc Testnet, with the chain registry domain', () => {
-    expect(VERIFIED_USDC_DOMAINS).toEqual({
-      5042: { name: getChainByName('arc')!.usdc.name, version: getChainByName('arc')!.usdc.version },
-      5042002: { name: getChainByName('arc-testnet')!.usdc.name, version: getChainByName('arc-testnet')!.usdc.version },
-    });
-    expect(VERIFIED_USDC_DOMAINS[5042]).toEqual({ name: 'USDC', version: '2' });
+  /**
+   * The Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`
+   * (uvd-x402-sdk-python@3c81050, 0.97.0), written out here: not read from the
+   * table under test, nor from the chain registry.
+   */
+  const PYTHON_VERIFIED_USDC_DOMAINS: Record<number, [string, string]> = {
+    8453: ['USD Coin', '2'],
+    1: ['USD Coin', '2'],
+    137: ['USD Coin', '2'],
+    42161: ['USD Coin', '2'],
+    42220: ['USDC', '2'],
+    143: ['USDC', '2'],
+    43114: ['USD Coin', '2'],
+    10: ['USD Coin', '2'],
+    1187947933: ['Bridged USDC (SKALE Bridge)', '2'],
+    5042: ['USDC', '2'],
+    5042002: ['USDC', '2'],
+  };
+  const DOMAIN_CHAINS = Object.keys(PYTHON_VERIFIED_USDC_DOMAINS)
+    .map(Number)
+    .map((chainId) => [getChainById(chainId)!.name, chainId] as const);
+  /** The other spelling a server could plausibly send. */
+  const otherName = (name: string) => (name === 'USD Coin' ? 'USDC' : 'USD Coin');
+
+  it("has the Python SDK's eleven rows, no more", () => {
+    expect(VERIFIED_USDC_DOMAINS).toEqual(
+      Object.fromEntries(
+        Object.entries(PYTHON_VERIFIED_USDC_DOMAINS).map(([chainId, [name, version]]) => [chainId, { name, version }])
+      )
+    );
+  });
+
+  it('has a row for every chain with an escrow operator row, and none without one', () => {
+    expect(Object.keys(VERIFIED_USDC_DOMAINS).sort()).toEqual(Object.keys(ESCROW_OPERATORS).sort());
+  });
+
+  it.each(DOMAIN_CHAINS)("%s (chain %i): the chain registry's USDC domain is the table's", (network, chainId) => {
+    const { name, version } = getChainByName(network)!.usdc;
+    expect({ name, version }).toEqual(VERIFIED_USDC_DOMAINS[chainId]);
+  });
+
+  it.each(DOMAIN_CHAINS)('%s (chain %i): signs with the table domain, and signs that domain', async (network, chainId) => {
+    const [name, version] = PYTHON_VERIFIED_USDC_DOMAINS[chainId];
+    for (const extra of [{}, { network }]) {
+      const { wallet, signTypedData } = mockWallet();
+      await buildEscrowPreAuth(wallet, {
+        ...params({ ...tableConfig(chainId), usdc_domain_name: name, usdc_domain_version: version }),
+        ...extra,
+      });
+      expect(signTypedData).toHaveBeenCalledTimes(1);
+      const { domain } = JSON.parse(signTypedData.mock.calls[0][0]);
+      expect([domain.name, domain.version, Number(domain.chainId)]).toEqual([name, version, chainId]);
+    }
+  });
+
+  it.each(
+    DOMAIN_CHAINS.flatMap(([network, chainId]) => {
+      const [name, version] = PYTHON_VERIFIED_USDC_DOMAINS[chainId];
+      return [
+        [network, chainId, 'another name', otherName(name), version],
+        [network, chainId, 'the name in lower case', name.toLowerCase(), version],
+        [network, chainId, 'the name with a trailing space', `${name} `, version],
+        [network, chainId, 'another version', name, '1'],
+        [network, chainId, 'the version with a leading space', name, ` ${version}`],
+      ] as const;
+    })
+  )('%s (chain %i): refuses %s (%j / %j) before anything is signed', async (network, chainId, _what, name, version) => {
+    for (const extra of [{}, { network }]) {
+      const { wallet, signTypedData } = mockWallet();
+      const attempt = buildEscrowPreAuth(wallet, {
+        ...params({ ...tableConfig(chainId), usdc_domain_name: name, usdc_domain_version: version }),
+        ...extra,
+      });
+      await expect(attempt).rejects.toBeInstanceOf(X402Error);
+      await expect(attempt).rejects.toMatchObject({
+        code: 'INVALID_CONFIG',
+        message: expect.stringContaining(
+          `but the token's on-chain domain is '${PYTHON_VERIFIED_USDC_DOMAINS[chainId][0]}' / '${PYTHON_VERIFIED_USDC_DOMAINS[chainId][1]}'`
+        ),
+      });
+      expect(signTypedData).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -376,12 +452,14 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
     expect(signTypedData).toHaveBeenCalledTimes(1);
   });
 
-  it('signs a chain outside the table exactly as before, with the domain the config gives', async () => {
-    expect(VERIFIED_USDC_DOMAINS[NETWORK_CONFIG.chain_id]).toBeUndefined();
-    const { wallet, signTypedData } = mockWallet();
-    await buildEscrowPreAuth(wallet, params({ ...NETWORK_CONFIG, usdc_domain_name: 'Not The Token Name' }));
-    expect(signTypedData).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(signTypedData.mock.calls[0][0]).domain.name).toBe('Not The Token Name');
+  it('refuses a Base config with a domain other than the token\'s, which it signed until 2.104.1', async () => {
+    expect(VERIFIED_USDC_DOMAINS[NETWORK_CONFIG.chain_id]).toEqual({ name: 'USD Coin', version: '2' });
+    for (const usdc_domain_name of ['USDC', 'Not The Token Name']) {
+      const { wallet, signTypedData } = mockWallet();
+      const attempt = buildEscrowPreAuth(wallet, params({ ...NETWORK_CONFIG, usdc_domain_name }));
+      await expect(attempt).rejects.toMatchObject({ code: 'INVALID_CONFIG' });
+      expect(signTypedData).not.toHaveBeenCalled();
+    }
   });
 });
 
@@ -1080,7 +1158,7 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
   /** The refusal of a chain missing rows, naming exactly the tables it lacks. */
   const noRows = (chainId: number, tables: string) =>
     new RegExp(`^Chain ${chainId} has no row in this SDK's escrow tables \\(${tables}\\) — refusing to sign\\.$`);
-  const ALL_THREE = 'ESCROW_CONTRACTS, ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS';
+  const ALL_FOUR = 'ESCROW_CONTRACTS, ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS, VERIFIED_USDC_DOMAINS';
   const UNREGISTERED = /is not a network this SDK registers/;
 
   it.each<[string, number]>([
@@ -1090,8 +1168,9 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     expect(REGISTRY_CONTRACTS[chainId]).toBeDefined();
     expect(ESCROW_OPERATORS[chainId]).toBeUndefined();
     expect(ESCROW_MAX_FEE_BPS[chainId]).toBeUndefined();
+    expect(VERIFIED_USDC_DOMAINS[chainId]).toBeUndefined();
     expect(getChainByName(name)).toBeUndefined();
-    const missing = noRows(chainId, 'ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS');
+    const missing = noRows(chainId, 'ESCROW_OPERATORS, ESCROW_MAX_FEE_BPS, VERIFIED_USDC_DOMAINS');
     await refused(tableConfig(chainId), {}, missing);
     await refused(tableConfig(chainId), { network: `eip155:${chainId}` }, missing);
     await refused(tableConfig(chainId), { network: name }, UNREGISTERED);
@@ -1107,7 +1186,7 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     expect(getChainByName(name)!.chainId).toBe(chainId);
     const cfg = rowlessConfig(chainId);
     for (const network of [undefined, null, name, name.toUpperCase(), `eip155:${chainId}`]) {
-      await refused(cfg, { network: network as string | undefined }, noRows(chainId, ALL_THREE));
+      await refused(cfg, { network: network as string | undefined }, noRows(chainId, ALL_FOUR));
     }
     await refused(cfg, { network: 'red-nueva' }, UNREGISTERED);
     await refused(cfg, { network: 'base' }, /Chain id mismatch for 'base'/);
@@ -1119,8 +1198,8 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     );
     expect(rowless.map((chain) => chain.chainId)).toEqual(expect.arrayContaining([999, 130, 534352, 4663]));
     for (const chain of rowless) {
-      await refused(rowlessConfig(chain.chainId), {}, noRows(chain.chainId, ALL_THREE));
-      await refused(rowlessConfig(chain.chainId), { network: chain.name }, noRows(chain.chainId, ALL_THREE));
+      await refused(rowlessConfig(chain.chainId), {}, noRows(chain.chainId, ALL_FOUR));
+      await refused(rowlessConfig(chain.chainId), { network: chain.name }, noRows(chain.chainId, ALL_FOUR));
     }
   });
 
@@ -1129,7 +1208,7 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     const proto = Object.prototype as Record<string, unknown>;
     proto['534352'] = { escrow: cfg.escrow, tokenCollector: cfg.token_collector, usdc: cfg.usdc };
     try {
-      await refused(cfg, {}, noRows(534352, ALL_THREE));
+      await refused(cfg, {}, noRows(534352, ALL_FOUR));
     } finally {
       delete proto['534352'];
     }
@@ -1138,8 +1217,8 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
 
   it('a chain no registry knows is refused, also under the eip155 id that names it', async () => {
     const cfg = rowlessConfig(999999);
-    await refused(cfg, {}, noRows(999999, ALL_THREE));
-    await refused(cfg, { network: 'eip155:999999' }, noRows(999999, ALL_THREE));
+    await refused(cfg, {}, noRows(999999, ALL_FOUR));
+    await refused(cfg, { network: 'eip155:999999' }, noRows(999999, ALL_FOUR));
     await refused(cfg, { network: 'red-nueva' }, UNREGISTERED);
     await refused(cfg, { network: 'eip155:999998' }, /Chain id mismatch/);
   });
@@ -1556,12 +1635,17 @@ describe('VERIFIED_USDC_DOMAINS and ESCROW_TIER_WINDOWS are frozen, rows include
     expect(Object.isFrozen(VERIFIED_USDC_DOMAINS)).toBe(true);
     for (const [chainId, domain] of Object.entries(VERIFIED_USDC_DOMAINS)) expect(Object.isFrozen(domain), `chain ${chainId}`).toBe(true);
     expect(() => {
-      (VERIFIED_USDC_DOMAINS as Record<number, { name: string; version: string }>)[8453] = { name: 'USD Coin', version: '2' };
+      (VERIFIED_USDC_DOMAINS as Record<number, { name: string; version: string }>)[84532] = { name: 'USDC', version: '2' };
     }).toThrow(TypeError);
     expect(() => {
       (VERIFIED_USDC_DOMAINS[5042] as { name: string }).name = 'USD Coin';
     }).toThrow(TypeError);
-    expect(Object.keys(VERIFIED_USDC_DOMAINS)).toEqual(['5042', '5042002']);
+    expect(() => {
+      (VERIFIED_USDC_DOMAINS[8453] as { version: string }).version = '1';
+    }).toThrow(TypeError);
+    expect(VERIFIED_USDC_DOMAINS[84532]).toBeUndefined();
+    expect(VERIFIED_USDC_DOMAINS[8453]).toEqual({ name: 'USD Coin', version: '2' });
+    expect(Object.keys(VERIFIED_USDC_DOMAINS).sort()).toEqual(Object.keys(ESCROW_OPERATORS).sort());
     expect(VERIFIED_USDC_DOMAINS[5042]).toEqual({ name: 'USDC', version: '2' });
   });
 

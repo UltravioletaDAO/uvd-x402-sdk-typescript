@@ -27,10 +27,11 @@
  * against {@link ESCROW_CONTRACTS}, the operator against
  * {@link ESCROW_OPERATORS}, and `maxFeeBps` against that chain's ceiling
  * ({@link ESCROW_MAX_FEE_BPS}). A contradiction throws, and so does a chain
- * without a row in any of the three tables, with or without `network`. Tier
+ * without a row in any of those three tables or in
+ * {@link VERIFIED_USDC_DOMAINS}, with or without `network`. Tier
  * windows and the authorization window have ceilings
  * ({@link ESCROW_TIER_WINDOW_MAX}, {@link ESCROW_MAX_AUTHORIZATION_SEC}).
- * Mirrors the Python SDK's `escrow_signing.build_escrow_pre_auth` (0.96.0).
+ * Mirrors the Python SDK's `escrow_signing.build_escrow_pre_auth` (0.97.0).
  *
  * Wire format is pinned by golden vectors (`src/escrow-preauth.vectors.json`):
  * payer-zeroed raw-keccak nonce (`keccak(chainId, escrow,
@@ -257,28 +258,31 @@ export interface EscrowPaymentInfo {
  *
  * `usdc_domain_name` / `usdc_domain_version` arrive with the server's config,
  * and they ARE the domain the authorization is signed under: a wrong pair
- * produces an authorization that never settles. For a chain in this table,
- * {@link buildEscrowPreAuth} refuses a config whose pair differs. A chain that
- * is not in the table is signed exactly as before.
+ * produces an authorization that never settles. {@link buildEscrowPreAuth}
+ * refuses a config whose pair differs from the chain's row, and a chain with
+ * no row here is refused like a chain with no row in the escrow tables.
  *
- * Only chains whose domain this SDK checked against the token's own
- * `DOMAIN_SEPARATOR()` are listed: Arc and Arc Testnet
- * (`src/fixtures/arc-escrow-d.rpc.json`, pinned by
- * `src/backend/escrow-arc-d.test.ts`). The values come from the chain
- * registry (`src/chains`), not typed again here. Mirrors the refusal policy of
- * the Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`. Frozen, each row
+ * The rows of the Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`
+ * (uvd-x402-sdk 0.97.0), read from each token's `name()` / `version()`, one
+ * per chain with an escrow operator row. Written out here, not read from the
+ * chain registry (`src/chains`), so that a registry edit cannot move the
+ * domain this check accepts; a test pins that both agree. Frozen, each row
  * included.
  */
 export const VERIFIED_USDC_DOMAINS: Readonly<Record<number, Readonly<{ name: string; version: string }>>> =
-  Object.freeze(
-    Object.fromEntries(
-      (['arc', 'arc-testnet'] as const).map((network) => {
-        const chain = getChainByName(network);
-        if (!chain) throw new Error(`The chain registry has no '${network}'.`);
-        return [chain.chainId, Object.freeze({ name: chain.usdc.name, version: chain.usdc.version })];
-      })
-    )
-  );
+  Object.freeze({
+    8453: Object.freeze({ name: 'USD Coin', version: '2' }), // Base
+    1: Object.freeze({ name: 'USD Coin', version: '2' }), // Ethereum
+    137: Object.freeze({ name: 'USD Coin', version: '2' }), // Polygon
+    42161: Object.freeze({ name: 'USD Coin', version: '2' }), // Arbitrum
+    42220: Object.freeze({ name: 'USDC', version: '2' }), // Celo
+    143: Object.freeze({ name: 'USDC', version: '2' }), // Monad
+    43114: Object.freeze({ name: 'USD Coin', version: '2' }), // Avalanche
+    10: Object.freeze({ name: 'USD Coin', version: '2' }), // Optimism
+    1187947933: Object.freeze({ name: 'Bridged USDC (SKALE Bridge)', version: '2' }), // SKALE Base
+    5042: Object.freeze({ name: 'USDC', version: '2' }), // Arc
+    5042002: Object.freeze({ name: 'USDC', version: '2' }), // Arc Testnet
+  });
 
 /**
  * AuthCaptureEscrow's PaymentInfo typehash: keccak256 of
@@ -325,7 +329,7 @@ const NETWORK_CONFIG_KEYS: Array<keyof EscrowNetworkConfig> = [
 //   - a network this SDK registers, and a config that names another chain -> refused
 //   - a network this SDK does not register                                -> refused
 //   - a chain with a row, and a value other than the row's               -> refused
-//   - a chain without a row in any of the three tables                   -> refused
+//   - a chain without a row in any of the three tables (or the domain's) -> refused
 // Addresses are compared in the form they are signed in (checksummed).
 
 /** A table's row for `chainId`: own rows only, never one inherited from a prototype. */
@@ -522,22 +526,25 @@ function checkPaymentInfoTypehash(typehash: unknown): string {
   return ESCROW_PAYMENT_INFO_TYPEHASH;
 }
 
-/** The chain's row in each of the three escrow tables; a chain missing any is refused. */
+/** The chain's row in each of the four tables; a chain missing any is refused. */
 interface EscrowRows {
   contracts: (typeof ESCROW_CONTRACTS)[number];
   operator: string;
   maxFeeBps: number;
+  domain: Readonly<{ name: string; version: string }>;
 }
 
 function escrowRows(chainId: number): EscrowRows {
   const contracts = rowOf(ESCROW_CONTRACTS, chainId);
   const operator = rowOf(ESCROW_OPERATORS, chainId);
   const maxFeeBps = rowOf(ESCROW_MAX_FEE_BPS, chainId);
-  if (contracts === undefined || operator === undefined || maxFeeBps === undefined) {
+  const domain = rowOf(VERIFIED_USDC_DOMAINS, chainId);
+  if (contracts === undefined || operator === undefined || maxFeeBps === undefined || domain === undefined) {
     const missing = [
       contracts === undefined ? 'ESCROW_CONTRACTS' : null,
       operator === undefined ? 'ESCROW_OPERATORS' : null,
       maxFeeBps === undefined ? 'ESCROW_MAX_FEE_BPS' : null,
+      domain === undefined ? 'VERIFIED_USDC_DOMAINS' : null,
     ].filter((name) => name !== null);
     throw new X402Error(
       `Chain ${chainId} has no row in this SDK's escrow tables (${missing.join(', ')}) — ` +
@@ -545,7 +552,7 @@ function escrowRows(chainId: number): EscrowRows {
       'INVALID_CONFIG'
     );
   }
-  return { contracts, operator, maxFeeBps };
+  return { contracts, operator, maxFeeBps, domain };
 }
 
 function checkRegisteredAddresses(cfg: EscrowNetworkConfig, chainId: number, rows: EscrowRows): void {
@@ -743,8 +750,8 @@ export interface EscrowPreAuthParams {
  *   also on a config the SDK's tables contradict: a `chain_id` that is not a
  *   positive integer or not the chain this SDK registers for `network`, a
  *   `network` it does not register, a chain without a row in
- *   {@link ESCROW_CONTRACTS}, {@link ESCROW_OPERATORS} or
- *   {@link ESCROW_MAX_FEE_BPS}, a tier window that is not an integer from 0 to
+ *   {@link ESCROW_CONTRACTS}, {@link ESCROW_OPERATORS},
+ *   {@link ESCROW_MAX_FEE_BPS} or {@link VERIFIED_USDC_DOMAINS}, a tier window that is not an integer from 0 to
  *   {@link ESCROW_TIER_WINDOW_MAX}, an `authorizationExpiry` further than
  *   {@link ESCROW_MAX_AUTHORIZATION_SEC} from now, an `escrow`,
  *   `token_collector` or `usdc` other than the chain's row in
@@ -780,11 +787,8 @@ export async function buildEscrowPreAuth(
   checkNetworkChainId(params.network, chainId);
   const rows = escrowRows(chainId);
 
-  const verified = rowOf(VERIFIED_USDC_DOMAINS, chainId);
-  if (
-    verified &&
-    (cfg.usdc_domain_name !== verified.name || cfg.usdc_domain_version !== verified.version)
-  ) {
+  const verified = rows.domain;
+  if (cfg.usdc_domain_name !== verified.name || cfg.usdc_domain_version !== verified.version) {
     throw new X402Error(
       `The escrow config gives chain ${chainId} the USDC domain ` +
         `'${cfg.usdc_domain_name}' / '${cfg.usdc_domain_version}', but the token's on-chain ` +
