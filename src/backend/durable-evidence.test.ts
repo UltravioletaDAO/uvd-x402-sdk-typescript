@@ -578,3 +578,43 @@ describe('createPaymentMiddleware (Express) with durable', () => {
     expect(anchors()).toHaveLength(0);
   });
 });
+
+describe('durable: the edges the surfaces share', () => {
+  it("'manual' with a settle that failed: the handler answered anyway, and nothing is anchored", async () => {
+    facilitator.settle = { body: { success: false, errorReason: 'reverted' } };
+    const route = createFetchPaywall(options({ settlementStrategy: 'manual', durable: durable() }))(async (_request: Request, x402: VerifiedPaymentState) => {
+      await x402.settle().catch(() => undefined);
+      return new Response(BODY);
+    });
+    const response = await route(paid());
+    expect(await response.text()).toBe(BODY);
+    expect(response.headers.has(EVIDENCE_HEADER)).toBe(false);
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it('a body the handler already locked is returned untouched, not read a second time', async () => {
+    const { stream } = counted([BODY]);
+    const locked = new Response(stream);
+    const reader = locked.body!.getReader();
+    const route = createFetchPaywall(options({ durable: durable() }))(async () => locked);
+    const response = await route(paid());
+    expect(response).toBe(locked);
+    expect(response.headers.has(EVIDENCE_HEADER)).toBe(false);
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe(BODY);
+    expect(anchors()).toHaveLength(0);
+  });
+
+  it('Express: past the deadline the held bytes are flushed while the handler is still writing', async () => {
+    let sentBeforeEnd: boolean | undefined;
+    const response = await express({ durable: durable({ timeoutMs: 40 }) }, async (res) => {
+      res.write('early,');
+      await sleep(150);
+      sentBeforeEnd = res.headersSent;
+      res.end('late');
+    });
+    expect(sentBeforeEnd).toBe(true);
+    expect(await response.text()).toBe('early,late');
+    expect(skipped(response.headers)).toBe('timeout');
+    expect(anchors()).toHaveLength(0);
+  });
+});
