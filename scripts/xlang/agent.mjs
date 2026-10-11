@@ -26,6 +26,9 @@
  *           {"op":"price_network","cases":[{id,network,amount,payTo}]}
  *           {"op":"sign_lifecycle","cases":[{id,action,paymentInfo,payer,amount,
  *                                            chainId,deadline,nonce,privateKey}]}
+ *           {"op":"usdc_domains"}
+ *           {"op":"escrow_pre_auth","cases":[{id,network,networkConfig,receiver,
+ *                                             amountAtomic,privateKey}]}
  *   stdout  {"runtime":"typescript", ...}   exit 0
  *           {"error":"…"}                   exit 1
  */
@@ -352,6 +355,67 @@ async function signLifecycle(cases) {
   return { runtime: 'typescript', results };
 }
 
+/**
+ * The USDC domain table, and one network block per escrow chain built from the
+ * SDK's own escrow tables (domain fields left to the driver).
+ */
+async function usdcDomains() {
+  const backend = await import(pathToFileURL(join(HERE, '..', '..', 'dist', 'backend', 'index.mjs')).href);
+  const configs = {};
+  for (const [chainId, operator] of Object.entries(root.ESCROW_OPERATORS)) {
+    const contracts = backend.ESCROW_CONTRACTS[chainId];
+    configs[chainId] = {
+      network: root.getChainById(Number(chainId))?.name ?? null,
+      networkConfig: {
+        chain_id: Number(chainId),
+        operator,
+        escrow: contracts?.escrow ?? null,
+        token_collector: contracts?.tokenCollector ?? null,
+        usdc: contracts?.usdc ?? null,
+        payment_info_typehash: root.ESCROW_PAYMENT_INFO_TYPEHASH,
+      },
+    };
+  }
+  return { runtime: 'typescript', table: root.VERIFIED_USDC_DOMAINS, configs };
+}
+
+/** Sign the escrow pre-auth lock; report the domain handed to the wallet, or the refusal. */
+async function escrowPreAuth(cases) {
+  const { Wallet } = await import('ethers');
+  const results = [];
+  for (const c of cases) {
+    let handed = null;
+    try {
+      const wallet = new Wallet(c.privateKey);
+      const signer = {
+        getAddress: () => wallet.address,
+        async signTypedData(typedData) {
+          handed = JSON.parse(typedData);
+          const { domain, types, message } = handed;
+          const clean = { ...types };
+          delete clean['EIP712Domain'];
+          return { signature: await wallet.signTypedData(domain, clean, message) };
+        },
+      };
+      const header = await root.buildEscrowPreAuth(signer, {
+        networkConfig: c.networkConfig,
+        network: c.network,
+        payerWallet: wallet.address,
+        workerWallet: c.receiver,
+        bountyAtomic: c.amountAtomic,
+      });
+      results.push({
+        id: c.id,
+        domain: handed?.domain ?? null,
+        network: JSON.parse(header).paymentRequirements?.network ?? null,
+      });
+    } catch (error) {
+      results.push({ id: c.id, error: String(error?.message ?? error), signed: handed !== null });
+    }
+  }
+  return { runtime: 'typescript', results };
+}
+
 try {
   const request = JSON.parse(await readStdin());
   let response;
@@ -361,6 +425,8 @@ try {
   else if (request.op === 'build_envelope') response = await buildEnvelope(request.cases);
   else if (request.op === 'price_network') response = await priceNetwork(request.cases);
   else if (request.op === 'sign_lifecycle') response = await signLifecycle(request.cases);
+  else if (request.op === 'usdc_domains') response = await usdcDomains();
+  else if (request.op === 'escrow_pre_auth') response = await escrowPreAuth(request.cases);
   else die(`unknown op: ${JSON.stringify(request.op)}`);
   process.stdout.write(JSON.stringify(response));
 } catch (error) {
