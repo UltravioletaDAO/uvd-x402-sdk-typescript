@@ -138,9 +138,14 @@ export function createDurableAnchorer(
   };
 }
 
-/** Whether this request's payment settled, with a transaction, and evidence can name it. */
+/**
+ * Whether this request's payment settled, with a transaction, and evidence can
+ * name it. A replayed settle names a payment an earlier request already
+ * anchored: a second anchor would be a second claim on it.
+ */
 export function settledForEvidence(settle: SettleResponse | undefined): settle is SettleResponse {
-  return settle?.success === true && typeof settle.transactionHash === 'string' && settle.transactionHash !== '';
+  return settle?.success === true && settle.replayed !== true
+    && typeof settle.transactionHash === 'string' && settle.transactionHash !== '';
 }
 
 /** A deadline: `signal` aborts after `ms`; `expired` resolves then. `clear()` releases the timer. */

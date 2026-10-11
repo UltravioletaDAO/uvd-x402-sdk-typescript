@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { createFetchPaywall, createHonoMiddleware, createPaymentMiddleware, DURABLE_DEFAULT_TIMEOUT_MS } from './index';
 import type { DurableEvidenceOptions, FetchPaywallOptions, VerifiedPaymentState } from './index';
+import { settledForEvidence } from './durable';
 import {
   ANCHOR_MAX_REQUEST_BYTES,
   EVIDENCE_HEADER,
@@ -628,5 +629,23 @@ describe('durable: the edges the surfaces share', () => {
     expect(await response.text()).toBe('early,late');
     expect(skipped(response.headers)).toBe('timeout');
     expect(anchors()).toHaveLength(0);
+  });
+});
+
+describe('settledForEvidence', () => {
+  it('only a successful, first-time settle with a transaction hash', () => {
+    expect(settledForEvidence({ success: true, transactionHash: TX })).toBe(true);
+    expect(settledForEvidence({ success: true, transactionHash: TX, replayed: false })).toBe(true);
+    for (const settle of [
+      undefined,
+      { success: false, transactionHash: TX },
+      { success: true },
+      { success: true, transactionHash: '' },
+      { success: true, transactionHash: TX, replayed: true },
+      { success: 'true', transactionHash: TX },
+      { success: true, transactionHash: 42 },
+    ]) {
+      expect(settledForEvidence(settle as never), JSON.stringify(settle)).toBe(false);
+    }
   });
 });
