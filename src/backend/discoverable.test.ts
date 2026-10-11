@@ -271,6 +271,13 @@ describe.each([
     expect(fetchCalls).toBe(0);
   });
 
+  it.each([['no network', undefined], ['a numeric network', 8453]])('an accept with %s', (_label, network) => {
+    const accept = { ...baseAccept(), network } as unknown as PaymentAcceptance;
+    expect(() => create({ accepts: [accept], facilitatorUrl: facilitator.url, discoverable: true }))
+      .toThrow(/discoverable: the accept has no network/);
+    expect(fetchCalls).toBe(0);
+  });
+
   it.each(INVALID_ACCEPTS)('%s', (_label, accept) => {
     for (const discoverable of [true, false]) {
       expect(() => create({ accepts: [baseAccept(), accept], facilitatorUrl: facilitator.url, discoverable }))
