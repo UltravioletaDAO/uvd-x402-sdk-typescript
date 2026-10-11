@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `discoverable` option of `createHonoMiddleware` and `createFetchPaywall` (`HonoMiddlewareOptions`, `FetchPaywallOptions`) and the `withDiscoverable(accept, discoverable = true)` helper (exported from the root and from `uvd-x402-sdk/backend`): they write `extra.discoverable` as a JSON boolean on the accepts, which the Ultravioleta facilitator reads in the settled requirements to list the resource in its Bazaar. It reaches the 402 body, the `PAYMENT-REQUIRED` header and the requirements of `/verify` and `/settle`, in v1 and v2. The other `extra` fields are kept, and the caller's options, accepts and `extra` are not modified. `true` / `false` override an `extra.discoverable` already in an accept; without the option nothing changes. Native Hedera accepts go out as given with the option (the facilitator allows only `feePayer` in their `extra`, so a Hedera settle is never listed); `withDiscoverable` throws for one. A non-boolean `discoverable` and an `extra` that is not a plain object throw when the paywall is created, with no request made.
+
+### Tests
+
+- `src/backend/discoverable.test.ts`: Hono (a real `Hono` app) and `createFetchPaywall`, with `discoverable` true, false and omitted, one accept and three: the 402 body, the `PAYMENT-REQUIRED` header and the requirements the facilitator double receives on `/verify` and `/settle`; other extras kept; deep-frozen options and accepts unchanged; invalid flags and accepts refused with no `fetch` call; a mixed Hedera + EVM list flags only the EVM accept; `withDiscoverable` with `create402Response`; the public types checked by the compiler with the repo's tsconfig.
+
 ## [2.104.2] - unreleased (dated the day it is published)
 
 ### Fixed
