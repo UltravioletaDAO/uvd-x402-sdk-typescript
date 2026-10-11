@@ -209,6 +209,18 @@ describe.each(FRAMEWORKS)('%s paywall: discoverable', (_name, serve) => {
     });
   });
 
+  it.each([true, false])('discoverable %s leaves every native Hedera accept as given and flags the others', async (flag) => {
+    const accepts = deepFreeze([...HEDERA_ACCEPTS.map(([, accept]) => accept), baseAccept()]);
+    const request = serve({ accepts, facilitatorUrl: facilitator.url, retries: 0, x402Version: 2, discoverable: flag });
+    const challenge = await request();
+    expect(challenge.status).toBe(402);
+    const expected = [...HEDERA_ACCEPTS.map(() => ({ feePayer: '0.0.5678' })), { ...BASE_EXTRA, discoverable: flag }];
+    expect(challenge.paymentRequired.accepts.map((a: any) => a.extra)).toStrictEqual(expected);
+    expect(accepts.map((a) => a.extra)).toStrictEqual(expected.map((extra, i) => (i < HEDERA_ACCEPTS.length ? extra : BASE_EXTRA)));
+    expect(fetchCalls).toBe(0);
+    expect(facilitator.calls).toEqual([]);
+  });
+
   it('true overrides an extra.discoverable: false in an accept, false overrides a true', async () => {
     const flagged = (value: boolean): PaymentAcceptance => ({ ...baseAccept(), extra: { ...BASE_EXTRA, discoverable: value } });
     const on = await serve({ accepts: [flagged(false)], facilitatorUrl: facilitator.url, discoverable: true })();
@@ -233,9 +245,13 @@ const INVALID_ACCEPTS: Array<[string, PaymentAcceptance]> = [
   ['extra is a string', { ...baseAccept(), extra: 'USD Coin' }],
   ['extra is null', { ...baseAccept(), extra: null }],
   ['extra is a class instance', { ...baseAccept(), extra: new Map([['name', 'USD Coin']]) }],
-  ['native Hedera, CAIP-2', hedera()],
-  ['native Hedera, by alias', { ...hedera(), network: 'hedera-testnet' }],
-  ['native Hedera, upper case alias', { ...hedera(), network: 'HEDERA' }],
+];
+const HEDERA_ACCEPTS: Array<[string, PaymentAcceptance]> = [
+  ['CAIP-2', hedera()],
+  ['upper case CAIP-2', { ...hedera(), network: 'HEDERA:MAINNET' }],
+  ['mixed case CAIP-2', { ...hedera(), network: 'Hedera:Testnet' }],
+  ['by alias', { ...hedera(), network: 'hedera-testnet' }],
+  ['upper case alias', { ...hedera(), network: 'HEDERA' }],
 ];
 
 describe.each([
@@ -265,7 +281,7 @@ describe.each([
   });
 
   it('without the option, the same accepts build as before (nothing is checked or added)', () => {
-    for (const [, accept] of INVALID_ACCEPTS.filter(([label]) => !label.startsWith('native Hedera'))) {
+    for (const [, accept] of INVALID_ACCEPTS) {
       expect(() => create({ accepts: [accept], facilitatorUrl: facilitator.url })).not.toThrow();
     }
     expect(() => create({ accepts: [hedera()], facilitatorUrl: facilitator.url, x402Version: 2 })).not.toThrow();
@@ -311,6 +327,11 @@ describe('withDiscoverable', () => {
 
   it.each(INVALID_ACCEPTS)('refuses an accept where %s', (_label, accept) => {
     expect(() => withDiscoverable(accept)).toThrow(/discoverable/);
+  });
+
+  it.each(HEDERA_ACCEPTS)('refuses a native Hedera accept, %s', (_label, accept) => {
+    expect(() => withDiscoverable(accept)).toThrow(/native Hedera/);
+    expect(() => withDiscoverable(accept, false)).toThrow(/native Hedera/);
   });
 
   it('refuses something that is not an accept', () => {

@@ -2498,9 +2498,11 @@ export interface HonoMiddlewareOptions extends PaymentMiddlewareOptions {
    * Bazaar after a settle whose requirements carry `discoverable: true`.
    *
    * `true` or `false` overrides an `extra.discoverable` already in an accept;
-   * omitted, the accepts go out as given. Anything else, or an accept whose
-   * `extra` is not a plain object or whose network is native Hedera, throws
-   * when the middleware is created.
+   * omitted, the accepts go out as given. A native Hedera accept goes out as
+   * given too (the facilitator allows only `feePayer` in its `extra`, so a
+   * Hedera settle is never listed). Anything else than a boolean, or an
+   * accept whose `extra` is not a plain object, throws when the middleware is
+   * created.
    */
   discoverable?: boolean;
 }
@@ -2758,7 +2760,8 @@ function isLiteralObject(value: unknown): value is Record<string, unknown> {
  *
  * Pass the result in the `accepts` of {@link createHonoMiddleware},
  * {@link createFetchPaywall} or {@link create402Response}, or set
- * `discoverable` in the options of the first two to flag every accept.
+ * `discoverable` in the options of the first two to flag every accept but
+ * the native Hedera ones.
  *
  * @throws Error when `discoverable` is not a boolean, when `accept.extra` is
  *   neither absent nor a plain object, or for a native Hedera accept, whose
@@ -2782,7 +2785,7 @@ export function withDiscoverable(accept: PaymentAcceptance, discoverable: boolea
   if (typeof accept.network !== 'string') {
     throw new Error(`discoverable: the accept has no network, got ${describeValue(accept.network)}`);
   }
-  if (getChainByName(parseNetworkIdentifier(accept.network))?.networkType === 'hedera') {
+  if (isNativeHedera(accept.network)) {
     throw new Error(`discoverable: a native Hedera accept (${accept.network}) carries only feePayer in extra`);
   }
   if (accept.extra !== undefined && !isLiteralObject(accept.extra)) {
@@ -2799,12 +2802,22 @@ function describeValue(value: unknown): string {
   return `${typeof value} ${String(value)}`;
 }
 
+function isNativeHedera(network: string): boolean {
+  return getChainByName(parseNetworkIdentifier(network))?.networkType === 'hedera';
+}
+
+// Native Hedera accepts go out as given: the facilitator refuses any key but
+// feePayer in their extra, so a Hedera settle is never listed.
 function discoverableAccepts(accepts: PaymentAcceptance[], discoverable: unknown): PaymentAcceptance[] {
   if (typeof discoverable !== 'boolean') {
     throw new Error(`discoverable must be true or false, got ${describeValue(discoverable)}`);
   }
   if (!Array.isArray(accepts)) return accepts;
-  return accepts.map((accept) => withDiscoverable(accept, discoverable));
+  return accepts.map((accept) => (
+    isLiteralObject(accept) && typeof accept.network === 'string' && isNativeHedera(accept.network)
+      ? accept
+      : withDiscoverable(accept, discoverable)
+  ));
 }
 
 export function createHonoMiddleware(options: HonoMiddlewareOptions) {

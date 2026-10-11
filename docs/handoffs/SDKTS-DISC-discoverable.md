@@ -10,6 +10,8 @@
   `npm pack --dry-run`, `derive-erc8128-f3-3 --check` y conformidad cruzada TS <-> PY
   en verde. Mutaciones M1..M15 en rojo y revertidas (M12 sobrevivia: se agrego el
   caso `accepts: []` con flag invalido, que la mata).
+- Ronda 1 (REF-SDKTS-52): Hedera nativo queda como viene con la opcion; tests de
+  lista mixta y de `HEDERA:MAINNET` / `Hedera:Testnet` en `withDiscoverable`.
 - Falta: CI del PR y la revision de c0der. Sin merge, deploy ni publish.
 - Proximo paso: mirar el CI del PR.
 
@@ -39,6 +41,11 @@
 
 - Omitido: las accepts salen tal cual, sin validar ni agregar nada (compatibilidad).
 - `true`/`false` explicitos pisan un `extra.discoverable` previo.
-- Hedera nativo se rechaza con la opcion: su `extra` solo admite `feePayer`.
+- Hedera nativo (ronda 1, REF-SDKTS-52 P2-1, paridad con uvd-x402-sdk-python#70): la
+  opcion del paywall deja esas accepts como vienen y marca las demas; `withDiscoverable`
+  sobre una accept Hedera sigue lanzando. El facilitador solo admite `feePayer` en su
+  `extra`, asi que un settle de Hedera no se lista.
+- `false` escribe `discoverable: false` (en Python `False` no escribe nada); para el
+  facilitador ambos significan no listar. Documentado en el README.
 - `extra` que no es objeto plano (array, string, null, instancia de clase) se rechaza
   al crear el paywall, antes de cualquier I/O.
