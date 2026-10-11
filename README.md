@@ -2127,7 +2127,10 @@ In Express, the answer is held from the handler's `end()` until the anchor
 returns (at most `timeoutMs`). In that window `res.headersSent` and
 `res.writableEnded` are `true`, a further `write()` is refused as a write after
 end, a further `end()` only queues its callback, and headers can no longer be
-set: the paid answer goes out as the handler ended it.
+set: the paid answer goes out as the handler ended it. A close the server asks
+for in that window without an error (`res.destroy()` or `req.socket.destroy()`,
+which is what Express's final handler does on an error once headers are sent)
+runs after the body is written.
 
 **It never throws.** Every failure resolves to `result.skipped`, because
 evidence is an addition to the payment path and must never be a gate in front of

@@ -809,7 +809,7 @@ describe('createPaymentMiddleware (Express) with durable', () => {
         seen.lateRemove = (error as { code?: string }).code;
       }
       try {
-        res.writeHead(500, { 'X-Late': '1' });
+        res.writeHead(500);
       } catch (error) {
         seen.lateWriteHead = (error as { code?: string }).code;
       }

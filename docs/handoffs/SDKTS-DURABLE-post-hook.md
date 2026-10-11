@@ -10,6 +10,10 @@
   `pending`/`unknown`/`rejected`), P2-5 (`no_payer_key`, vocabulario documentado), P3 D8/D9/D11 y el
   ejemplo de `payerKey` del README (verificado por test con firma sintetica).
 - Hecho: el archivo de tests pasa 47/47; sobre `78d5923` caen 6 de los nuevos (ver PR).
+- Hecho: ronda VER-SDKTS-53 (head `d3aeb98`): P1-1b, un cierre pedido por el servidor durante la ventana
+  (`res.destroy()` / `socket.destroy()` sin error, el finalhandler de Express tras un error con
+  `headersSent`) se difiere hasta escribir el cuerpo; un cierre con error no se difiere. P3: tests de
+  `removeHeader()` / `writeHead()` tardios. 49/49; los 2 tests de cierre caen en `d3aeb98`.
 - Falta: nueva refutacion de c0der. No mergear, no publicar.
 - Proximo paso: atender lo que devuelva el refutador en la misma rama.
 
