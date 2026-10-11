@@ -7,6 +7,10 @@
   frozen; a chain without a domain row is refused like one without an escrow row;
   a pair that differs is refused before signing. Per-chain tests, a cross-language
   phase 9, version 2.104.2, CHANGELOG, README.
+- Round 1 (review of `f6e32bc`): the pair is pinned as exact strings (a number
+  version, an array name and an object name are refused on every chain), the
+  refusal shows each value with its JSON type, and xlang phase 9 measures the
+  number version as a divergence on Base and Arc. Version stays 2.104.2.
 - Falta: review of the PR; publishing is not part of this task.
 - Proximo paso: review and merge by the maintainers; publish 2.104.2 when they decide.
 
@@ -48,11 +52,11 @@
 | test: install | `npm ci --no-audit --no-fund` | 0 |
 | test: OWS probe | `node -e "...require('@open-wallet-standard/core')..."` (ci.yml) | 0, 1.4.2 |
 | test: typecheck | `npm run typecheck` | 0 |
-| test: tests | `npm run test:run` | 0, 69 files / 1786 tests passed (base 1707) |
+| test: tests | `npm run test:run` | 0, 69 files / 1819 tests passed (base 1707) |
 | test: lint | `npm run lint` | 0 |
 | test: build | `npm run build` | 0 |
 | test: package | `npm pack --dry-run` | 0, uvd-x402-sdk-2.104.2.tgz |
-| cross-language | `UVD_X402_PY_ROOT=... UVD_PYTHON=... node scripts/xlang/cross-language-conformance.mjs` | 0, 501 checks across 9 phases (base 432 / 8) |
+| cross-language | `UVD_X402_PY_ROOT=... UVD_PYTHON=... node scripts/xlang/cross-language-conformance.mjs` | 0, 506 checks across 9 phases (base 432 / 8) |
 | vectors | `node scripts/derive-erc8128-f3-3.mjs --check` | 0 |
 | secrets | `gitleaks detect --log-opts=origin/main..HEAD` | no leaks |
 
@@ -71,5 +75,9 @@
 | M9 | Arc row not frozen | red, 1 | `VERIFIED_USDC_DOMAINS and each of its domains are frozen; ...` |
 | M10 | table not frozen | red, 1 | same |
 | M11 | mismatch guard off, rebuilt, xlang run | red, 44 checks | phase 9 `ethereum/other-name: both SDKs refuse it, ...` |
+| M12 | loose comparison `!=` | red, 33 | `ethereum (chain 1): refuses the version as a number, which is not the string the token signs, ...` |
+| M13 | `String(...)` on both sides of the comparison | red, 33 | `ethereum (chain 1): refuses the name in an array, ...` |
+| M14 | refusal message without JSON types | red, 33 | `ethereum (chain 1): refuses the version as a number, ...` (message) |
+| M15 | M13, rebuilt, xlang run | red, 2 checks | phase 9 `base/number-version: typescript refuses a version written as a JSON number, ...` |
 
 `git status` clean after every mutation.
