@@ -5,9 +5,11 @@
 - Hecho: los cinco arreglos (checksum de Monad, alias `skale` / `skale-testnet`,
   guarda de `payment_info_typehash`, congelado profundo de `VERIFIED_USDC_DOMAINS`
   y `ESCROW_TIER_WINDOWS`, guarda `min_fee_bps <= 1300`), sus tests, version
-  2.104.1 y CHANGELOG. Suite, lint, typecheck y build en verde con Node 20.
-- Falta: mutaciones M1..Mn, conformidad cruzada, merge con origin/main, push, PR.
-- Proximo paso: correr las mutaciones y abrir el PR.
+  2.104.1 y CHANGELOG. Con Node 20: typecheck, 1707 tests, lint, build,
+  `npm pack --dry-run` y la conformidad cruzada TS <-> PY en verde. Mutaciones
+  M1..M15 en rojo y revertidas. Merge con origin/main: ya estaba al dia (158fdfa).
+- Falta: que el CI del PR quede verde y la revision de c0der. Sin merge ni publish.
+- Proximo paso: mirar el CI del PR.
 
 ## Que cambia
 
@@ -30,3 +32,25 @@ Sin cambios: la regla de la decision 224 (`escrowRows`) y los techos de ESC-03
   `0xultravioleta/c0-sdkpy-esc03` (120bdea, 0.97.0), sin mergear. Se porto ese limite.
 - El encabezado de CHANGELOG `[2.104.0] - unreleased` no coincide con npm, que ya
   publica 2.104.0. No se toco.
+
+## Mutaciones (todas en rojo, revertidas con `git checkout -- <archivo>`)
+
+| M | Mutacion | Tests en rojo |
+|---|----------|---------------|
+| M1 | Monad `usdc` con la grafia vieja | 14 (checksum EIP-55 de las tablas, filas de Monad) |
+| M2 | snapshot con la grafia vieja | 1 (`escrow-operator-snapshot.test.ts`) |
+| M3 | sin alias `skale` | 8 |
+| M4 | sin alias `skale-testnet` | 4 |
+| M5 | guarda de typehash eliminada | 19 |
+| M6 | typehash sin `trim` / minusculas | 3 |
+| M7 | nonce con el typehash crudo de la config | 2 |
+| M8 | typehash chequeado despues de la delegacion | 8 |
+| M9 | `ESCROW_TIER_WINDOWS` raiz sin freeze | 1 |
+| M10 | fila `micro` sin freeze | 1 |
+| M11 | `VERIFIED_USDC_DOMAINS` raiz sin freeze | 1 |
+| M12 | filas de `VERIFIED_USDC_DOMAINS` sin freeze | 1 |
+| M13 | guarda `min_fee_bps` eliminada | 16 |
+| M14 | `>=` en vez de `>` | 13 |
+| M15 | techo 1800 en vez de 1300 | 14 |
+
+Los tests nuevos sobre el `src` de main: 52 en rojo de 416 (cada uno de los cinco arreglos).
