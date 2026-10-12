@@ -23,6 +23,7 @@ on:
     #                     cross-language job hash
     #   scripts/derive-erc8128-f3-3.mjs  "Vectors are the same file" step
     #   scripts/xlang/**  the cross-language step and the agents it spawns
+    #   scripts/tag-release.mjs          src/publish-tag.test.ts runs it
     #   .github/workflows/ci.yml         this file
     #   .github/workflows/publish.yml    src/publish-workflow.test.ts reads it
     paths: &ci-paths
@@ -36,6 +37,7 @@ on:
       - '.gitattributes'
       - 'scripts/derive-erc8128-f3-3.mjs'
       - 'scripts/xlang/**'
+      - 'scripts/tag-release.mjs'
       - '.github/workflows/ci.yml'
       - '.github/workflows/publish.yml'
   pull_request:
