@@ -9,9 +9,11 @@ espera la aprobación del dueño:
 > (`gh workflow run publish.yml --ref main -f version=X.Y.Z`) → el dueño aprueba en **Review
 > deployments** (environment `npm`) → el workflow publica por OIDC, con provenance.
 
-La versión tiene que estar ya en `package.json` de `main`: el job `check` falla si no coincide. El
-tag `vX.Y.Z` se sigue creando (con su GitHub Release), pero ya **no dispara nada**: `publish.yml`
-no corre con push, tags, releases ni merges. El paso a paso está en `.claude/commands/publish.md`.
+La versión tiene que estar ya en `package.json` de `main`: el job `check` falla si no coincide.
+Después de publicar, el job `tag` de `publish.yml` crea el tag anotado `vX.Y.Z` en el commit
+publicado (`tag-release.mjs`), una vez que npm muestra la versión con ese commit como `gitHead`:
+si el tag ya está en ese commit pasa, si está en otro falla sin moverlo. El tag **no dispara nada**: `publish.yml` no corre con push, tags, releases ni merges. El
+paso a paso está en `.claude/commands/publish.md`.
 
 ## publish-npm.sh (flujo anterior)
 
@@ -19,6 +21,8 @@ no corre con push, tags, releases ni merges. El paso a paso está en `.claude/co
 > con un token de npm. Sigue subiendo la versión y creando el release, pero el tag ya no dispara
 > nada: la corrida que mira en el paso 8 no es una publicación, y el paso 9 no va a encontrar la
 > versión en npm hasta que se dispare `publish.yml` y el dueño lo apruebe, como se describe arriba.
+> Como crea el tag antes de publicar, si `main` avanza antes de disparar `publish.yml` el job `tag`
+> falla: el tag queda en el commit del bump y la corrida publicó otro.
 
 Script que maneja el flujo anterior de publicación a npm:
 

@@ -1,10 +1,12 @@
 name: Publish to npm
 
 # Manual only: someone runs it from the Actions tab, on main, with the version to publish. It never
-# runs on push, tag, release or merge; the v<version> tag is still created, but it triggers nothing.
+# runs on push, tag, release or merge.
 # Trusted publishing (OIDC): no npm token is stored anywhere. The `publish` job waits in the `npm`
 # environment until the owner approves it under "Review deployments", and only that job gets
-# `id-token`. src/publish-workflow.test.ts fails if any of that stops being true.
+# `id-token`. Once it has published, the `tag` job creates the annotated tag v<version> on the
+# commit it published, the only job that can write to the repository; the tag triggers nothing.
+# src/publish-workflow.test.ts fails if any of that stops being true.
 on:
   workflow_dispatch:
     inputs:
@@ -97,3 +99,35 @@ jobs:
       # There is no token to add here. prepublishOnly re-runs the gates and builds dist/ first.
       - name: Publish
         run: npm publish --provenance --access public
+
+  # Runs only when `publish` succeeded (no `if` of its own). The run's commit is the one `check`
+  # tested and `publish` published (no checkout here names another ref), so that is the commit the
+  # tag goes on, and only once npm shows the version with that commit as its gitHead. If
+  # v<version> is already on it, the job passes; if it is on another commit, the job fails and
+  # moves nothing. npm already has the version by then: what to fix is the tag, not the package.
+  # A failed run of this job can be re-run on its own, without a second approval.
+  tag:
+    name: Tag the published version
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # the tag; no id-token, and no npm install runs in this job
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      # Checks package.json at the run's commit against the input and that npm has that version
+      # from that commit (gitHead), then creates the tag object and refs/tags/v<version> through
+      # the GitHub API with this job's token. Its env is exactly these two.
+      - name: Tag v<version> on the published commit
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/tag-release.mjs

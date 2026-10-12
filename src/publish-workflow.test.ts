@@ -6,6 +6,9 @@ import { describe, expect, it } from 'vitest';
 // only, only from main, and every run waits for the owner's approval in the `npm` environment.
 // Each of those is one YAML line away from being undone (until this test's PR the workflow
 // published with a stored token on every v* tag), so this reads it and names what broke.
+// After publishing, one job tags v<version> on the published commit (scripts/tag-release.mjs,
+// whose behaviour src/publish-tag.test.ts checks): that it runs only after a successful publish,
+// with contents: write and nothing else, is checked here too.
 //
 // The parser below reads only block-style YAML, the subset the workflow is written in. On
 // anything else (flow collections, anchors, tags, stray indentation) it throws, so a rewrite
@@ -170,12 +173,117 @@ function publishWorkflowViolations(source: string): string[] {
     violations.push(`job ${publisher} does not depend on ${MAIN_ONLY}`);
   }
   for (const name of chain) {
-    if (/always\(|cancelled\(/.test(condition(name))) violations.push(`job ${name} runs even when main is not the ref`);
+    if (/\b(always|cancelled)\s*\(/i.test(condition(name))) {
+      violations.push(`job ${name} runs even when main is not the ref`);
+    }
+  }
+
+  // In every job and step: no continue-on-error, which would let a failed npm publish count as
+  // published (and be tagged) or a tag found on another commit end green; no ${{ }} inside a run,
+  // so the version input reaches the shell and the tag only through env; and every checkout is
+  // the run's commit (no ref), the one the tag goes on, without keeping its token on disk.
+  const steps = (job: Yaml) => {
+    const list = at(job, 'steps');
+    return Array.isArray(list) ? list : [];
+  };
+  const continues = (node: Yaml) => {
+    const value = at(node, 'continue-on-error');
+    return value !== undefined && value !== 'false';
+  };
+  for (const [name, job] of Object.entries(jobs)) {
+    if (continues(job) || steps(job).some(continues)) violations.push(`continue-on-error in job ${name}`);
+    for (const step of steps(job)) {
+      if (/\$\{\{/.test(String(at(step, 'run') ?? ''))) violations.push(`expression inside a run in job ${name}`);
+      if (!String(at(step, 'uses') ?? '').startsWith('actions/checkout@')) continue;
+      if (at(step, 'with', 'ref') !== undefined) violations.push(`checkout of another ref in job ${name}`);
+      if (at(step, 'with', 'repository') !== undefined) {
+        violations.push(`checkout of another repository in job ${name}`);
+      }
+      if (at(step, 'with', 'persist-credentials') !== 'false') {
+        violations.push(`checkout keeps its token in job ${name}`);
+      }
+    }
+  }
+
+  // The tag: one job, not the publishing one, that needs it and so runs only after it succeeded,
+  // and the only job that can write to the repository. A job succeeds when its steps exit 0, so
+  // the publish step and the tag step run their command alone: `|| true`, a `shell:` of their own,
+  // `defaults` or an `if:` on the step would let a failure (or a skip) pass for success.
+  const TAG_SCRIPT = /\bnode\s+scripts\/tag-release\.mjs\b/;
+  const taggers = Object.keys(jobs).filter((name) => runs(jobs[name]).some((run) => TAG_SCRIPT.test(run)));
+  if (taggers.length !== 1) return [...violations, `${taggers.length} jobs run scripts/tag-release.mjs, want 1`];
+  const [tagger] = taggers;
+  if (tagger === publisher) violations.push(`job ${publisher} publishes and tags`);
+  const tagNeeds = at(jobs[tagger], 'needs');
+  if (!(Array.isArray(tagNeeds) ? tagNeeds.map(String) : [String(tagNeeds ?? '')]).includes(publisher)) {
+    violations.push(`job ${tagger} does not need ${publisher}`);
+  }
+  // No if at all: a status function would run it after a failed publish, any other condition
+  // could skip it, and a skipped job leaves the run green with no tag.
+  if (at(jobs[tagger], 'if') !== undefined) violations.push(`job ${tagger} has an if`);
+  const PUBLISH_RUN = 'npm publish --provenance --access public';
+  const TAG_RUN = 'node scripts/tag-release.mjs';
+  const publishStep = steps(jobs[publisher]).find((step) => /\bnpm\s+publish\b/.test(String(at(step, 'run') ?? '')));
+  const tagStep = steps(jobs[tagger]).find((step) => TAG_SCRIPT.test(String(at(step, 'run') ?? '')));
+  for (const [what, step, command] of [
+    ['npm publish', publishStep, PUBLISH_RUN],
+    ['tag', tagStep, TAG_RUN],
+  ] as const) {
+    if (at(step, 'run') !== command) violations.push(`the ${what} step runs more than ${command}`);
+    if (at(step, 'shell') !== undefined) violations.push(`the ${what} step has its own shell`);
+    if (at(step, 'if') !== undefined) violations.push(`the ${what} step has an if`);
+  }
+  for (const [where, node] of [
+    ['the workflow', workflow],
+    [`job ${publisher}`, jobs[publisher]],
+    [`job ${tagger}`, jobs[tagger]],
+  ] as const) {
+    if (at(node, 'defaults') !== undefined) violations.push(`defaults in ${where}`);
+  }
+  // The tag step's environment is exactly its two inputs: nothing that changes how node runs
+  // (NODE_OPTIONS) or where the script looks (its test-only registry knobs).
+  for (const [where, node] of [
+    ['the workflow', workflow],
+    [`job ${tagger}`, jobs[tagger]],
+  ] as const) {
+    if (at(node, 'env') !== undefined) violations.push(`env in ${where}`);
+  }
+  // Only checkout, setup-node and the tag step: any other action in this job would get the
+  // contents: write token, and any other step could change what the tag step sees.
+  for (const step of steps(jobs[tagger])) {
+    const uses = String(at(step, 'uses') ?? '');
+    if (step !== tagStep && !uses.startsWith('actions/checkout@') && !uses.startsWith('actions/setup-node@')) {
+      violations.push(`job ${tagger} has a step other than checkout, setup-node and the tag`);
+    }
+    if (at(step, 'if') !== undefined && step !== tagStep) violations.push(`a step in job ${tagger} has an if`);
+  }
+  const tagPermissions = at(jobs[tagger], 'permissions');
+  if (!isMap(tagPermissions) || tagPermissions.contents !== 'write') {
+    violations.push(`job ${tagger} lacks contents: write`);
+  } else if (Object.keys(tagPermissions).length !== 1) {
+    violations.push(`job ${tagger} has more than contents: write`);
+  }
+  const grantsContentsWrite = (permissions: Yaml | undefined) =>
+    permissions === 'write-all' || at(permissions, 'contents') === 'write';
+  if (grantsContentsWrite(workflowPermissions)) violations.push('workflow-level permissions grant contents: write');
+  for (const [name, job] of Object.entries(jobs)) {
+    if (name !== tagger && grantsContentsWrite(at(job, 'permissions'))) {
+      violations.push(`contents: write in job ${name}`);
+    }
+  }
+  const tagEnv = at(tagStep, 'env');
+  if (
+    !isMap(tagEnv) ||
+    Object.keys(tagEnv).sort().join() !== 'GITHUB_TOKEN,INPUT_VERSION' ||
+    tagEnv.INPUT_VERSION !== '${{ inputs.version }}' ||
+    tagEnv.GITHUB_TOKEN !== '${{ github.token }}'
+  ) {
+    violations.push(`the tag step in job ${tagger} does not get exactly INPUT_VERSION and GITHUB_TOKEN`);
   }
   return violations;
 }
 
-describe('publish.yml: trusted publishing, run by hand from main, approved by the owner', () => {
+describe('publish.yml: trusted publishing, run by hand from main, approved by the owner, tagged after', () => {
   const source = readFileSync(resolve(__dirname, '..', '.github', 'workflows', 'publish.yml'), 'utf8').replace(
     /\r\n/g,
     '\n'
@@ -205,6 +313,219 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'grant id-token',
     ],
     ['no main-only check', (s) => s.replace(`    if: ${MAIN_ONLY}\n`, ''), `does not depend on ${MAIN_ONLY}`],
+    // The tag after publishing (SDK-PUBLISH-TAG): each edit undoes one of its rules.
+    ['no tag job', (s) => s.replace(/\n  tag:\n[\s\S]*$/, '\n'), '0 jobs run scripts/tag-release.mjs'],
+    [
+      'the tag step in the publishing job',
+      (s) =>
+        s
+          .replace(/\n  tag:\n[\s\S]*$/, '\n')
+          .replace(
+            'run: npm publish --provenance --access public\n',
+            'run: npm publish --provenance --access public\n\n' +
+              '      - name: Tag\n        run: node scripts/tag-release.mjs\n'
+          ),
+      'job publish publishes and tags',
+    ],
+    [
+      'a tag that does not wait for publish',
+      (s) => s.replace('    needs: publish\n', '    needs: check\n'),
+      'job tag does not need publish',
+    ],
+    [
+      'a tag even when publish failed',
+      (s) => s.replace('    needs: publish\n', '    needs: publish\n    if: ${{ !cancelled() }}\n'),
+      'job tag has an if',
+    ],
+    [
+      'a failed npm publish that passes',
+      (s) =>
+        s.replace(
+          'run: npm publish --provenance --access public\n',
+          'run: npm publish --provenance --access public\n        continue-on-error: true\n'
+        ),
+      'continue-on-error in job publish',
+    ],
+    [
+      'a tag on another commit that passes',
+      (s) =>
+        s.replace(
+          '  tag:\n    name: Tag the published version\n',
+          '  tag:\n    name: Tag the published version\n    continue-on-error: true\n'
+        ),
+      'continue-on-error in job tag',
+    ],
+    [
+      'a tag job that cannot write',
+      (s) => s.replace('      contents: write # the tag;', '      contents: read # the tag;'),
+      'job tag lacks contents: write',
+    ],
+    [
+      'a tag job with more than contents',
+      (s) => s.replace('      contents: write # the tag;', '      actions: write\n      contents: write # the tag;'),
+      'job tag has more than contents: write',
+    ],
+    [
+      'contents: write for the whole workflow',
+      (s) => s.replace(/^permissions:\n  contents: read/m, 'permissions:\n  contents: write'),
+      'workflow-level permissions grant contents: write',
+    ],
+    [
+      'contents: write in the publishing job',
+      (s) => s.replace('      contents: read # checkout\n', '      contents: write # checkout\n'),
+      'contents: write in job publish',
+    ],
+    [
+      'npm in the tag job',
+      (s) =>
+        s.replace(
+          '      - name: Tag v<version> on the published commit\n',
+          '      - run: npm ci\n\n      - name: Tag v<version> on the published commit\n'
+        ),
+      'job tag has a step other than checkout, setup-node and the tag',
+    ],
+    [
+      'the version written into the shell',
+      (s) =>
+        s.replace('run: node scripts/tag-release.mjs', 'run: node scripts/tag-release.mjs "${{ inputs.version }}"'),
+      'expression inside a run in job tag',
+    ],
+    [
+      'the tag step without its token',
+      (s) => s.replace('          GITHUB_TOKEN: ${{ github.token }}\n', ''),
+      'does not get exactly INPUT_VERSION and GITHUB_TOKEN',
+    ],
+    [
+      'npm publish allowed to fail',
+      (s) =>
+        s.replace(
+          'run: npm publish --provenance --access public\n',
+          'run: npm publish --provenance --access public || true\n'
+        ),
+      'the npm publish step runs more than npm publish --provenance --access public',
+    ],
+    [
+      'the tag script allowed to fail',
+      (s) => s.replace('run: node scripts/tag-release.mjs', 'run: node scripts/tag-release.mjs || true'),
+      'the tag step runs more than node scripts/tag-release.mjs',
+    ],
+    [
+      'a shell of its own for npm publish',
+      (s) =>
+        s.replace(
+          'run: npm publish --provenance --access public\n',
+          'run: npm publish --provenance --access public\n        shell: bash --noprofile --norc {0}\n'
+        ),
+      'the npm publish step has its own shell',
+    ],
+    [
+      'a shell of its own for the tag',
+      (s) => s.replace('run: node scripts/tag-release.mjs', 'run: node scripts/tag-release.mjs\n        shell: sh {0}'),
+      'the tag step has its own shell',
+    ],
+    [
+      'npm publish skipped',
+      (s) => s.replace('      - name: Publish\n', '      - name: Publish\n        if: false\n'),
+      'the npm publish step has an if',
+    ],
+    [
+      'the tag step skipped',
+      (s) =>
+        s.replace(
+          '      - name: Tag v<version> on the published commit\n',
+          '      - name: Tag v<version> on the published commit\n        if: false\n'
+        ),
+      'the tag step has an if',
+    ],
+    [
+      'a default shell for the workflow',
+      (s) => s.replace(/^jobs:\n/m, 'defaults:\n  run:\n    shell: sh {0}\n\njobs:\n'),
+      'defaults in the workflow',
+    ],
+    [
+      'a default shell for the tag job',
+      (s) =>
+        s.replace(
+          '    timeout-minutes: 5\n',
+          '    timeout-minutes: 5\n    defaults:\n      run:\n        shell: sh {0}\n'
+        ),
+      'defaults in job tag',
+    ],
+    [
+      'another action in the tag job',
+      (s) =>
+        s.replace(
+          '      - name: Tag v<version> on the published commit\n',
+          '      - uses: example/some-action@v1\n\n      - name: Tag v<version> on the published commit\n'
+        ),
+      'job tag has a step other than checkout, setup-node and the tag',
+    ],
+    [
+      'a checkout skipped in the tag job',
+      (s) =>
+        s.replace(
+          /(\n  tag:\n[\s\S]*?)      - uses: actions\/checkout@/,
+          '$1      - if: false\n        uses: actions/checkout@'
+        ),
+      'a step in job tag has an if',
+    ],
+    [
+      'a tag on Always (), since expressions ignore case',
+      (s) => s.replace('    needs: publish\n', '    needs: publish\n    if: ${{ Always () }}\n'),
+      'job tag has an if',
+    ],
+    [
+      'a tag job skipped',
+      (s) => s.replace('    needs: publish\n', "    needs: publish\n    if: github.ref == 'refs/heads/release'\n"),
+      'job tag has an if',
+    ],
+    [
+      'NODE_OPTIONS on the tag step',
+      (s) =>
+        s.replace(
+          '          GITHUB_TOKEN: ${{ github.token }}\n',
+          '          GITHUB_TOKEN: ${{ github.token }}\n          NODE_OPTIONS: --require ./x.js\n'
+        ),
+      'does not get exactly INPUT_VERSION and GITHUB_TOKEN',
+    ],
+    [
+      'another registry for the tag step',
+      (s) =>
+        s.replace(
+          '          GITHUB_TOKEN: ${{ github.token }}\n',
+          '          GITHUB_TOKEN: ${{ github.token }}\n          NPM_REGISTRY_URL: http://127.0.0.1:1\n'
+        ),
+      'does not get exactly INPUT_VERSION and GITHUB_TOKEN',
+    ],
+    [
+      'env for the whole tag job',
+      (s) =>
+        s.replace(
+          '    timeout-minutes: 5\n',
+          '    timeout-minutes: 5\n    env:\n      NODE_OPTIONS: --require ./x.js\n'
+        ),
+      'env in job tag',
+    ],
+    [
+      'env for the whole workflow',
+      (s) => s.replace(/^jobs:\n/m, 'env:\n  NODE_OPTIONS: --require ./x.js\n\njobs:\n'),
+      'env in the workflow',
+    ],
+    [
+      "a checkout of another repository's script",
+      (s) => s.replace(/(\n  tag:\n[\s\S]*?persist-credentials: false\n)/, '$1          repository: someone/fork\n'),
+      'checkout of another repository in job tag',
+    ],
+    [
+      'a checkout of another ref',
+      (s) => s.replace(/(\n  tag:\n[\s\S]*?persist-credentials: false\n)/, '$1          ref: main\n'),
+      'checkout of another ref in job tag',
+    ],
+    [
+      'a checkout that keeps its token',
+      (s) => s.replace(/(\n  tag:\n[\s\S]*?)          persist-credentials: false\n/, '$1          fetch-depth: 1\n'),
+      'checkout keeps its token in job tag',
+    ],
   ];
 
   it.each(mutations)('catches %s', (_name, mutate, expected) => {
