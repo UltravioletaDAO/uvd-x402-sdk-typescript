@@ -386,6 +386,48 @@ export interface PaymentMiddlewareOptions extends FacilitatorClientOptions {
    * skip notice. Off when absent. See {@link DurableEvidenceOptions}.
    */
   durable?: DurableEvidenceOptions;
+  /**
+   * Networks this server verifies itself, beside the facilitator. Opt-in:
+   * absent, every payment goes to the facilitator exactly as before, and with
+   * it only the payments of the listed networks are taken out of that path.
+   * See {@link LocalVerifiers}.
+   */
+  localVerifiers?: LocalVerifiers;
+}
+
+/**
+ * Local verifiers by network type. Only `nano` today: the facilitator does not
+ * settle Nano, so a Nano payment is a send block already confirmed on the
+ * ledger, read from the merchant's own node. Its "settle" settles nothing more
+ * and answers with the block hash.
+ */
+export interface LocalVerifiers {
+  /** Build it with `createNanoVerifier` from `uvd-x402-sdk/nano`. */
+  nano?: (payment: X402Header) => Promise<VerifyResponse>;
+}
+
+/** `client`, with the payments of the `local` networks verified without the facilitator. */
+function withLocalVerifiers(client: FacilitatorClient, local: LocalVerifiers | undefined): FacilitatorClient {
+  const nano = local?.nano;
+  if (!nano) return client;
+  const isNano = (payment: X402Header) => typeof payment?.network === 'string'
+    && getChainByName(parseNetworkIdentifier(payment.network))?.networkType === 'nano';
+  const verified = new WeakMap<X402Header, VerifyResponse>();
+  const wrapped = Object.create(client) as FacilitatorClient;
+  wrapped.verify = async (payment, requirements, callOptions) => {
+    if (!isNano(payment)) return client.verify(payment, requirements, callOptions);
+    const result = await nano(payment);
+    if (result.isValid) verified.set(payment, result);
+    return result;
+  };
+  wrapped.settle = async (payment, requirements, callOptions) => {
+    if (!isNano(payment)) return client.settle(payment, requirements, callOptions);
+    const result = verified.get(payment);
+    if (!result) return { success: false, errorReason: 'nano_payment_not_verified', network: payment.network };
+    const transactionHash = (payment.payload as { blockHash?: string }).blockHash;
+    return { success: true, transactionHash, network: result.network ?? payment.network, payer: result.payer };
+  };
+  return wrapped;
 }
 
 /** The anchorer of `options.durable`, bound to the paywall's facilitator and stack key. */
@@ -2400,13 +2442,13 @@ export function createPaymentMiddleware(
   res: ExpressLikeResponse,
   next: () => void
 ) => Promise<void> {
-  const client = new FacilitatorClient({
+  const client = withLocalVerifiers(new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
     stackKey: options.stackKey,
     stackKeyHosts: options.stackKeyHosts,
-  });
+  }), options.localVerifiers);
   const settlementStrategy = options.settlementStrategy || 'before-handler';
   const anchorer = durableAnchorerFor(options);
 
@@ -2671,13 +2713,13 @@ function createAcceptsPaymentGate(input: HonoMiddlewareOptions) {
   const options: HonoMiddlewareOptions = input.discoverable === undefined
     ? input
     : { ...input, accepts: discoverableAccepts(input.accepts, input.discoverable) };
-  const client = new FacilitatorClient({
+  const client = withLocalVerifiers(new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
     stackKey: options.stackKey,
     stackKeyHosts: options.stackKeyHosts,
-  });
+  }), options.localVerifiers);
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
   if (!options.accepts[0]) {
