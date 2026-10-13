@@ -22,10 +22,11 @@ import type { AdvertisedQuote, PolicyApproval, PurchasePolicy } from '../policy'
  * - 'algorand': Algorand network (use ASA transfers with atomic transactions)
  * - 'sui': Sui blockchain (use sponsored transactions)
  * - 'xrpl': XRP Ledger (use pre-signed Payment transaction blobs)
+ * - 'nano': Nano (XNO), a confirmed send block verified locally, not by the facilitator
  *
  * @deprecated 'solana' type is deprecated, use 'svm' instead
  */
-export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui' | 'xrpl' | 'hedera';
+export type NetworkType = 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'algorand' | 'sui' | 'xrpl' | 'hedera' | 'nano';
 
 /**
  * Supported x402 payment schemes
@@ -251,6 +252,7 @@ export interface PaymentInfo {
     sui?: string;
     xrpl?: string;
     hedera?: string;
+    nano?: string;
   };
   /** Facilitator address (for Solana fee payer) */
   facilitator?: string;
@@ -622,6 +624,7 @@ export type X402Version = 1 | 2;
 export const CAIP2_IDENTIFIERS: Record<string, string> = {
   'hedera:mainnet': 'hedera:mainnet',
   'hedera:testnet': 'hedera:testnet',
+  'nano:mainnet': 'nano:mainnet',
   // EVM chains
   base: 'eip155:8453',
   ethereum: 'eip155:1',
@@ -835,6 +838,18 @@ export interface X402XRPLPayload {
 }
 
 /**
+ * Nano x402 payload.
+ *
+ * The buyer has already published a send block to the merchant; the payload
+ * names it. The merchant reads the block from its own node (`block_info`), so
+ * nothing in here is trusted beyond the hash.
+ */
+export interface X402NanoPayload {
+  /** 64-hex-character hash of the confirmed send block */
+  blockHash: string;
+}
+
+/**
  * Union of all x402 payload types
  */
 export type X402PayloadData =
@@ -845,7 +860,8 @@ export type X402PayloadData =
   | X402NEARPayload
   | X402AlgorandPayload
   | X402SuiPayload
-  | X402XRPLPayload;
+  | X402XRPLPayload
+  | X402NanoPayload;
 
 // ============================================================================
 // CLIENT CONFIGURATION
