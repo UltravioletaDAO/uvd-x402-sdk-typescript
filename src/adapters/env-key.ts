@@ -83,11 +83,16 @@ export class EnvKeyAdapter implements SigningWalletAdapter {
   /**
    * Sign EIP-712 typed structured data.
    *
+   * The text is read with every digit of an integer written as a JSON number
+   * (a 32-byte salt included), as Python's `json` reads it, not rounded the
+   * way `JSON.parse` rounds it.
+   *
    * @param typedData - JSON string with `domain`, `types`, `primaryType`, and `message` fields
    * @returns Object with signature and v/r/s components
    * @throws {X402Error} `INVALID_CONFIG` when an integer field of `message`
-   *   (or `domain.chainId`) is a JSON number above 2**53 - 1: `JSON.parse`
-   *   rounded it, so it is refused instead of signed. Write uints as strings.
+   *   (or `domain.chainId`) is a JSON number above 2**53 - 1 written with an
+   *   exponent or a fraction (`7.76e+76`): it was rounded before it was
+   *   written, so it is refused instead of signed. Write uints as strings.
    */
   async signTypedData(typedData: string): Promise<{
     signature: string;

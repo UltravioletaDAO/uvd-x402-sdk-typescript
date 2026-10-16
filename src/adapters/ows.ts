@@ -54,7 +54,7 @@
 import { ethers } from 'ethers';
 import { getChainByName } from '../chains';
 import { X402Error } from '../types';
-import { inexactNumberMessage } from '../utils/uint';
+import { inexactNumberMessage, parseJsonExact } from '../utils/uint';
 import type {
   SigningWalletAdapter,
   EIP3009Params,
@@ -608,7 +608,9 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
   }> {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(typedData);
+      // An integer written as a JSON number keeps every digit (a bigint);
+      // JSON.parse would round a 32-byte one.
+      parsed = parseJsonExact(typedData);
     } catch {
       throw refuse('typedData is not a JSON string');
     }

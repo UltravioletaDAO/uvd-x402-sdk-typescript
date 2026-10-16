@@ -1173,6 +1173,93 @@ check(
   pyNumberSalt?.error ?? pyNumberSalt?.signature
 );
 
+// THE SAME DIGITS IN TEXT THE SDK READS ITSELF (2026-10-16). Above, the agent's
+// own `JSON.parse` of the request rounded the salt before the SDK saw it, and
+// refusing is all the SDK can do. A signer handed typed data as a STRING parses
+// it itself: `EnvKeyAdapter.signTypedData` reads an integer written as a JSON
+// number digit for digit (`parseJsonExact`), as Python's `json.loads` does. So
+// the release/real-salt document, written as a number-writing producer writes
+// it -- the salt as 77 bare digits -- must sign the release/real-salt bytes in
+// BOTH runtimes. The document is written out here with the facilitator's
+// struct (lifecycle_auth.rs), not taken from either SDK, around the message
+// both SDKs reported for release/real-salt. The same text with the salt as a
+// decimal string is the control: if it fails too, the document is wrong, not
+// the parser.
+const LIFECYCLE_STRUCT = {
+  LifecycleOrder: [
+    { name: 'action', type: 'string' },
+    { name: 'amount', type: 'uint256' },
+    { name: 'deadline', type: 'uint256' },
+    { name: 'nonce', type: 'bytes32' },
+    { name: 'paymentInfo', type: 'PaymentInfo' },
+  ],
+  PaymentInfo: [
+    { name: 'operator', type: 'address' },
+    { name: 'payer', type: 'address' },
+    { name: 'receiver', type: 'address' },
+    { name: 'token', type: 'address' },
+    { name: 'maxAmount', type: 'uint120' },
+    { name: 'preApprovalExpiry', type: 'uint48' },
+    { name: 'authorizationExpiry', type: 'uint48' },
+    { name: 'refundExpiry', type: 'uint48' },
+    { name: 'minFeeBps', type: 'uint16' },
+    { name: 'maxFeeBps', type: 'uint16' },
+    { name: 'feeReceiver', type: 'address' },
+    { name: 'salt', type: 'uint256' },
+  ],
+};
+const realSaltSignature = pyLcById['release/real-salt']?.signature;
+const realSaltMessage = pyLcById['release/real-salt']?.document?.message;
+const realSaltDigits = BigInt(REAL_SALT_CASE.paymentInfo.salt).toString();
+check(
+  !!realSaltSignature && !!realSaltMessage?.paymentInfo,
+  'python reported the release/real-salt signature and message the text cases are built from',
+  JSON.stringify(pyLcById['release/real-salt'])
+);
+const lifecycleText = (saltLiteral) =>
+  JSON.stringify({
+    domain: { name: 'x402 escrow lifecycle', version: '1', chainId: REAL_SALT_CASE.chainId },
+    types: LIFECYCLE_STRUCT,
+    primaryType: LIFECYCLE_PRIMARY_TYPE,
+    message: { ...realSaltMessage, paymentInfo: { ...realSaltMessage?.paymentInfo, salt: '__SALT__' } },
+  }).replace('"__SALT__"', saltLiteral);
+const TEXT_CASES = [
+  {
+    id: 'release/real-salt-as-json-number-text',
+    typedData: lifecycleText(realSaltDigits),
+    privateKey: REAL_SALT_CASE.privateKey,
+  },
+  {
+    id: 'release/real-salt-as-decimal-string-text',
+    typedData: lifecycleText(JSON.stringify(realSaltDigits)),
+    privateKey: REAL_SALT_CASE.privateKey,
+  },
+];
+check(
+  TEXT_CASES[0].typedData.includes(`"salt":${realSaltDigits}`) &&
+    TEXT_CASES[1].typedData.includes(`"salt":"${realSaltDigits}"`),
+  `the text cases carry the salt as ${realSaltDigits.length} bare digits and as a decimal string`,
+  TEXT_CASES.map((c) => c.typedData).join(' | ')
+);
+const tsText = Object.fromEntries(
+  (await ask(NODE, { op: 'sign_typed_data_text', cases: TEXT_CASES })).results.map((r) => [r.id, r])
+);
+const pyText = Object.fromEntries(
+  (await ask(PY, { op: 'sign_typed_data_text', cases: TEXT_CASES })).results.map((r) => [r.id, r])
+);
+for (const c of TEXT_CASES) {
+  check(
+    !tsText[c.id]?.error && tsText[c.id]?.signature === realSaltSignature,
+    `typescript (EnvKeyAdapter.signTypedData) signs ${c.id} with the release/real-salt bytes`,
+    tsText[c.id]?.error ?? tsText[c.id]?.signature
+  );
+  check(
+    !pyText[c.id]?.error && pyText[c.id]?.signature === realSaltSignature,
+    `python (EnvKeyAdapter.sign_typed_data) signs ${c.id} with the release/real-salt bytes`,
+    pyText[c.id]?.error ?? pyText[c.id]?.signature
+  );
+}
+
 // Every case is a distinct order, so no two may collide. A collision means one
 // of the signed fields is not actually reaching the digest.
 const lifecycleSignatures = LIFECYCLE_CASES.map((c) => tsLcById[c.id]?.signature).filter(Boolean);
@@ -1339,6 +1426,8 @@ console.log(
     `  ${LIFECYCLE_CASES.length} escrow lifecycle orders both SDKs signed, compared signature byte to byte
   AND document to document -- primaryType included, which no signature can prove.
   1 order with a 32-byte salt written as a JSON number: TypeScript refused it, Python signed it exactly.
+  ${TEXT_CASES.length} orders handed to each SDK's signer as JSON text, the salt as bare digits and as a string:
+  both SDKs read every digit and signed the release/real-salt bytes.
   ${DOMAIN_CASES.length} escrow pre-auths over the ${DOMAIN_CHAINS.length} rows of VERIFIED_USDC_DOMAINS: the table's domain
   signed by both, the same domain with its name or version changed refused by both.
   ${NUMBER_VERSION_CASES.length} pre-auths with the version as a JSON number: TypeScript refused them, Python signed "2".

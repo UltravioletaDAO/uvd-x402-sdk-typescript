@@ -569,7 +569,7 @@ describe.skipIf(!real)(
         ['int8 = -129', typed({ Order: [{ name: 'a', type: 'int8' }] }, { a: '-129' }), 'INVALID_AMOUNT'],
         ['int256 = -2**255 - 1', typed(I256, { delta: (-(2n ** 255n) - 1n).toString() }), 'INVALID_AMOUNT'],
         ['uint256 as a float', typed(U256, { amount: 1.5 }), 'INVALID_CONFIG'],
-        ['uint256 as an unsafe number', typed(U256, { amount: 2 ** 60 }), 'INVALID_CONFIG'],
+        ['uint256 as an unsafe number (1e+21)', typed(U256, { amount: 1e21 }), 'INVALID_CONFIG'],
         ['uint256 with spaces', typed(U256, { amount: ' 1' }), 'INVALID_CONFIG'],
         ['uint256 missing', typed(U256, {}), 'INVALID_CONFIG'],
         ['string given a number', typed({ Order: [{ name: 's', type: 'string' }] }, { s: 5 }), 'INVALID_CONFIG'],
@@ -597,10 +597,22 @@ describe.skipIf(!real)(
       // given as 1 (below).
       const LAXER_IN_ETHERS = ['uint256 with spaces', 'primaryType that is not the root'];
 
-      it('an integer past 2**53 - 1 is refused as a value JSON already rounded', async () => {
+      it('an integer past 2**53 - 1 written in digits is read digit for digit: the signature of the same value as a string', async () => {
+        for (const wide of [BigInt(`0x${'ab'.repeat(32)}`), 2n ** 60n + 1n]) {
+          const { a, spy } = spied('signTypedData');
+          const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${wide}`);
+          expect(json).toContain(`"amount":${wide}`);
+          const signed = await a.signTypedData(json);
+          expect(signed.signature, String(wide)).toBe((await env.signTypedData(typed(U256, { amount: wide.toString() }))).signature);
+          expect(spy).toHaveBeenCalledOnce();
+        }
+      });
+
+      it('an integer past 2**53 - 1 written with an exponent is refused as a value already rounded', async () => {
         const { a, spy } = spied('signTypedData');
-        const salt = BigInt(`0x${'ab'.repeat(32)}`).toString();
-        const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${salt}`);
+        const rounded = String(Number(BigInt(`0x${'ab'.repeat(32)}`)));
+        const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${rounded}`);
+        expect(json).toContain(`"amount":${rounded}`);
         const error = await rejection(a.signTypedData(json));
         expect(error.code).toBe('INVALID_CONFIG');
         expect(error.message).toMatch(/^message\.amount is the JSON number 7\.76\d*e\+76.*MAX_SAFE_INTEGER/);
