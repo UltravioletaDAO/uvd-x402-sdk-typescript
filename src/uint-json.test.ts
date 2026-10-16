@@ -9,11 +9,16 @@
  * and walk it through every path of this SDK that reads a uint for a signature
  * or a hash:
  *
- * - as a number past 2**53 - 1 it is refused, with the field named, and the
- *   signer is never called;
+ * - as a number past 2**53 - 1 that `JSON.parse` already rounded it is refused,
+ *   with the field named, and the signer is never called;
  * - as the wire's hex string (or a bigint) it signs the digest the Python SDK
  *   computes for the same order: pinned below, and compared live, process to
- *   process, by `release/real-salt` in `scripts/xlang/cross-language-conformance.mjs`.
+ *   process, by `release/real-salt` in `scripts/xlang/cross-language-conformance.mjs`;
+ * - as a JSON number in TEXT the SDK parses itself (a signer handed typed data
+ *   as a string), its 77 digits are read digit for digit (`parseJsonExact`) and
+ *   sign those same Python bytes: `release/real-salt-as-json-number-text` in
+ *   that script. A number of up to 21 digits in such a text is still refused:
+ *   a JavaScript hop writes a value it rounded back in that many plain digits.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +29,7 @@ import {
   buildLifecycleTypedData,
   lifecycleAuthFromSignature,
   wagmiLifecycleSigner,
+  type WagmiLifecycleWalletClient,
   type LifecyclePaymentInfo,
   type LifecycleSigner,
   type LifecycleTypedData,
@@ -46,6 +52,7 @@ import { decodeBase64Utf8 } from './utils/base64';
 import {
   assertTypedDataIntegersExact,
   findInexactNumber,
+  parseJsonExact,
   parseTypedDataJson,
   toUint,
 } from './utils/uint';
@@ -274,10 +281,26 @@ describe('assertTypedDataIntegersExact', () => {
     expect(error.message.startsWith('typed data message.a.b[1]')).toBe(true);
   });
 
-  it('parseTypedDataJson refuses the text a number-writing producer emits', () => {
+  it('parseTypedDataJson reads the text a number-writing producer emits, every digit kept', () => {
     const text = JSON.stringify(doc(base)).replace('"amount":"1"', `"amount":${REAL_SALT_DIGITS}`);
-    expect(() => parseTypedDataJson(text)).toThrow(/typed data message\.amount .*MAX_SAFE_INTEGER/);
+    expect(text).toContain(`"amount":${REAL_SALT_DIGITS}`);
+    expect(parseTypedDataJson(text)).toEqual(doc({ ...base, amount: REAL_SALT }));
     expect(parseTypedDataJson(JSON.stringify(doc(base)))).toEqual(doc(base));
+  });
+
+  it.each<[string, string]>([
+    ['with an exponent, as JSON.stringify writes a rounded salt', String(REAL_SALT_PARSED)],
+    ['with a fraction', '9007199254740993.0'],
+    ['in 79 digits, wider than any EIP-712 integer', '1'.repeat(79)],
+    ['in 19 digits, as a JavaScript hop writes a rounded amount', JSON.stringify(JSON.parse('1234567890123456789'))],
+    ['in 21 digits, the widest JavaScript writes plain', String(1e21 - 2 ** 17)],
+    ['in 16 digits, past 2**53 - 1', '9007199254740993'],
+  ])('parseTypedDataJson still refuses an integer field written %s', (_label, literal) => {
+    const text = JSON.stringify(doc(base)).replace('"amount":"1"', `"amount":${literal}`);
+    expect(text).toContain(`"amount":${literal}`);
+    const error = caught(() => parseTypedDataJson(text));
+    expect(error).toBeInstanceOf(X402Error);
+    expect(error.message).toMatch(/^typed data message\.amount is the JSON number .*MAX_SAFE_INTEGER/);
   });
 
   it('findInexactNumber walks arrays and objects', () => {
@@ -445,10 +468,24 @@ describe('the lifecycle order in the browser (split flow and wagmi)', () => {
     return { text, doc: JSON.parse(text) as LifecycleTypedData };
   }
 
-  it('wagmiLifecycleSigner refuses the text, and the wallet client is never called', async () => {
+  it('wagmiLifecycleSigner reads the salt as written: the wallet client gets it whole and signs the Python bytes', async () => {
+    const wallet = new ethers.Wallet(vectors.privateKey);
+    const signTypedData = vi.fn(async (args: Parameters<WagmiLifecycleWalletClient['signTypedData']>[0]) =>
+      wallet.signTypedData(args.domain, args.types, args.message)
+    );
+    const signer = wagmiLifecycleSigner({ account: { address: vectors.payer }, signTypedData });
+    const { signature } = await signer.signTypedData(shippedWithNumberSalt().text);
+    expect(signTypedData).toHaveBeenCalledOnce();
+    expect(signTypedData.mock.calls[0][0]).toMatchObject({ message: { paymentInfo: { salt: REAL_SALT } } });
+    expect(signature).toBe(PY_REAL_SALT_SIGNATURE);
+  });
+
+  it('wagmiLifecycleSigner refuses a salt written with an exponent (rounded before it was written), and the wallet client is never called', async () => {
     const signTypedData = vi.fn(async () => `0x${'11'.repeat(65)}`);
     const signer = wagmiLifecycleSigner({ account: { address: vectors.payer }, signTypedData });
-    const error = await rejected(signer.signTypedData(shippedWithNumberSalt().text));
+    const text = shippedWithNumberSalt().text.replace(`"salt":${REAL_SALT_DIGITS}`, `"salt":${REAL_SALT_PARSED}`);
+    expect(text).toContain(`"salt":${String(REAL_SALT_PARSED)}`);
+    const error = await rejected(signer.signTypedData(text));
     expect(error.code).toBe('INVALID_CONFIG');
     expect(error.message.startsWith('typed data message.paymentInfo.salt is the JSON number')).toBe(true);
     expect(signTypedData).not.toHaveBeenCalled();
@@ -460,7 +497,7 @@ describe('the lifecycle order in the browser (split flow and wagmi)', () => {
     const { doc } = shippedWithNumberSalt();
     const text = JSON.stringify({ ...doc, primaryType: 'PaymentInfo', message: { ...PI, salt: 0 } }).replace(
       '"salt":0',
-      `"salt":${REAL_SALT_DIGITS}`
+      `"salt":${REAL_SALT_PARSED}`
     );
     const error = await rejected(signer.signTypedData(text));
     expect(error.message.startsWith('typed data message.salt is the JSON number')).toBe(true);
@@ -503,9 +540,43 @@ describe('EnvKeyAdapter.signTypedData', () => {
     expect((await adapter.signTypedData(JSON.stringify(doc))).signature).toBe(PY_REAL_SALT_SIGNATURE);
   });
 
-  it('refuses it with the salt as a JSON number, with an error that names the salt', async () => {
+  it('reads the salt as a JSON number digit for digit: the same Python signature', async () => {
     const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
     const text = JSON.stringify(doc).replace(`"salt":"${REAL_SALT_DIGITS}"`, `"salt":${REAL_SALT_DIGITS}`);
+    expect(text).toContain(`"salt":${REAL_SALT_DIGITS}`);
+    expect((await adapter.signTypedData(text)).signature).toBe(PY_REAL_SALT_SIGNATURE);
+  });
+
+  it('refuses an amount a JavaScript hop rounded and wrote back in plain digits, naming the amount', async () => {
+    const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
+    const hopped = JSON.stringify(JSON.parse('1234567890123456789'));
+    expect(hopped).toBe('1234567890123456800');
+    const text = JSON.stringify(doc).replace(`"amount":"${doc.message.amount}"`, `"amount":${hopped}`);
+    expect(text).toContain(`"amount":${hopped}`);
+    const error = await rejected(adapter.signTypedData(text));
+    expect(error).toBeInstanceOf(X402Error);
+    expect(error.code).toBe('INVALID_CONFIG');
+    expect(error.message.startsWith('typed data message.amount is the JSON number 1234567890123456800')).toBe(true);
+  });
+
+  it.each<[string, string]>([
+    ['BigInt(n).toString() (also Python int(f))', BigInt(REAL_SALT_PARSED).toString()],
+    ['toLocaleString without grouping', REAL_SALT_PARSED.toLocaleString('en-US', { useGrouping: false })],
+  ])('refuses a salt rounded to a double and written out in full by %s, naming the salt', async (_label, literal) => {
+    expect(literal).toHaveLength(REAL_SALT_DIGITS.length);
+    expect(literal).not.toBe(REAL_SALT_DIGITS);
+    const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
+    const text = JSON.stringify(doc).replace(`"salt":"${REAL_SALT_DIGITS}"`, `"salt":${literal}`);
+    expect(text).toContain(`"salt":${literal}`);
+    const error = await rejected(adapter.signTypedData(text));
+    expect(error).toBeInstanceOf(X402Error);
+    expect(error.message.startsWith('typed data message.paymentInfo.salt is the JSON number')).toBe(true);
+  });
+
+  it('refuses the salt written with an exponent, with an error that names the salt', async () => {
+    const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
+    const text = JSON.stringify(doc).replace(`"salt":"${REAL_SALT_DIGITS}"`, `"salt":${REAL_SALT_PARSED}`);
+    expect(text).toContain(`"salt":${String(REAL_SALT_PARSED)}`);
     const error = await rejected(adapter.signTypedData(text));
     expect(error).toBeInstanceOf(X402Error);
     expect(error.code).toBe('INVALID_CONFIG');

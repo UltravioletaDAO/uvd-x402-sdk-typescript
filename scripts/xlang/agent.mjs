@@ -26,6 +26,7 @@
  *           {"op":"price_network","cases":[{id,network,amount,payTo}]}
  *           {"op":"sign_lifecycle","cases":[{id,action,paymentInfo,payer,amount,
  *                                            chainId,deadline,nonce,privateKey}]}
+ *           {"op":"sign_typed_data_text","cases":[{id,typedData,privateKey}]}
  *           {"op":"usdc_domains"}
  *           {"op":"escrow_pre_auth","cases":[{id,network,networkConfig,receiver,
  *                                             amountAtomic,privateKey}]}
@@ -356,6 +357,25 @@ async function signLifecycle(cases) {
 }
 
 /**
+ * Sign EIP-712 typed data handed over as JSON TEXT, through the SDK's own
+ * `EnvKeyAdapter.signTypedData(string)`. The SDK parses that text itself, the
+ * one place it can read an integer written as a JSON number exactly; the
+ * agent never parses `typedData`.
+ */
+async function signTypedDataText(cases) {
+  const results = [];
+  for (const c of cases) {
+    try {
+      const { signature } = await new root.EnvKeyAdapter(c.privateKey).signTypedData(c.typedData);
+      results.push({ id: c.id, signature });
+    } catch (error) {
+      results.push({ id: c.id, error: String(error?.message ?? error) });
+    }
+  }
+  return { runtime: 'typescript', results };
+}
+
+/**
  * The USDC domain table, and one network block per escrow chain built from the
  * SDK's own escrow tables (domain fields left to the driver).
  */
@@ -425,6 +445,7 @@ try {
   else if (request.op === 'build_envelope') response = await buildEnvelope(request.cases);
   else if (request.op === 'price_network') response = await priceNetwork(request.cases);
   else if (request.op === 'sign_lifecycle') response = await signLifecycle(request.cases);
+  else if (request.op === 'sign_typed_data_text') response = await signTypedDataText(request.cases);
   else if (request.op === 'usdc_domains') response = await usdcDomains();
   else if (request.op === 'escrow_pre_auth') response = await escrowPreAuth(request.cases);
   else die(`unknown op: ${JSON.stringify(request.op)}`);

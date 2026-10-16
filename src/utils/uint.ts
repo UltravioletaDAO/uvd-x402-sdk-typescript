@@ -16,6 +16,14 @@
  * for a signature or a hash goes through here, and a number that is not a safe
  * integer is refused with an error that names the field. Strings (decimal or
  * 0x-hex) and bigints carry any width exactly and are accepted.
+ *
+ * Where the SDK reads the JSON TEXT itself (a signer handed typed data as a
+ * string), a 32-byte salt has nothing to undo: {@link parseJsonExact} reads an
+ * integer of 22 to 78 digits as a bigint, digit for digit, as Python's `json`
+ * does, and the document is signed with the integer that was written. One a
+ * double may have been written as is refused as before: JavaScript writes a
+ * rounded number in up to 21 plain digits, and other writers print a rounded
+ * double in full, so those digits may not be the ones the producer meant.
  */
 
 import { ethers } from 'ethers';
@@ -238,15 +246,215 @@ export function assertTypedDataIntegersExact(
 }
 
 /**
- * `JSON.parse` of an EIP-712 document, refusing one whose integers did not
- * survive the parse ({@link assertTypedDataIntegersExact}).
+ * Fewest digits of an integer literal read as a bigint. JavaScript writes a
+ * number below 1e21 in plain digits, 21 at most, and from 1e21 up with an
+ * exponent, so a literal of 22 digits or more never came out of
+ * `JSON.stringify`. One of 21 digits or fewer may be a value a JavaScript hop
+ * already rounded and wrote back in digits:
+ * `JSON.stringify(JSON.parse('1234567890123456789'))` is `1234567890123456800`.
+ * Such a literal stays the number `JSON.parse` reads, and an integer field
+ * refuses it, as before.
+ */
+const MIN_EXACT_DIGITS = 22;
+
+/**
+ * The widest EIP-712 integer, 2**256 - 1, has 78 decimal digits. A longer
+ * literal cannot be one, and `BigInt()` of a long run of digits costs time
+ * that grows faster than its length, while `JSON.parse` reads it at once.
+ */
+const MAX_EXACT_DIGITS = 78;
+
+/** A double's shortest decimal form has at most 17 significant digits. */
+const MAX_DOUBLE_DIGITS = 17;
+
+/**
+ * Whether an integer literal may be a double written out in full: the exact
+ * value of a double (`BigInt(n).toString()`, Python's `int(f)` and `'%.0f'`,
+ * Java's `new BigDecimal(d)`), or at most 17 significant digits followed by
+ * zeros (`n.toLocaleString()`, `Intl.NumberFormat`, Java's `toPlainString()`,
+ * a 15-digit writer). Such a literal may be a value that was rounded to a
+ * double before it was written, so it is not read as more exact than one. A
+ * random 32-byte salt is neither, but with odds of about 1 in 10**60.
+ */
+function doubleShaped(literal: string): boolean {
+  const significant = literal.replace(/^-/, '').replace(/0+$/, '');
+  return significant.length <= MAX_DOUBLE_DIGITS || BigInt(literal) === BigInt(Number(literal));
+}
+
+/** A JSON number (RFC 8259): groups 1 and 2 are the fraction and the exponent. */
+const JSON_NUMBER = /-?(?:0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/y;
+
+/** The four characters JSON allows between tokens. */
+const JSON_SPACE = /[ \t\n\r]*/y;
+
+type Frame =
+  | { kind: 'array'; items: unknown[] }
+  | { kind: 'object'; object: Record<string, unknown>; key: string };
+
+/**
+ * A data descriptor with no prototype: `Object.defineProperty` reads `get`
+ * and `set` through the prototype chain, and `JSON.parse` reads nothing a
+ * polluted `Object.prototype` adds.
+ */
+function dataDescriptor(value: unknown): PropertyDescriptor {
+  const descriptor = Object.create(null) as PropertyDescriptor;
+  descriptor.value = value;
+  descriptor.writable = true;
+  descriptor.enumerable = true;
+  descriptor.configurable = true;
+  return descriptor;
+}
+
+/**
+ * `JSON.parse(text)`, except that an integer literal of 22 to 78 digits, with
+ * no fraction or exponent, that no double could have been written as comes
+ * back as a bigint with the exact value written. Python's `json` reads those
+ * digits exactly; `JSON.parse` turns a 32-byte salt (77 digits) into
+ * 7.76e+76. 22 is where JavaScript stops writing plain digits
+ * ({@link MIN_EXACT_DIGITS}), 78 the width of 2**256 - 1
+ * ({@link MAX_EXACT_DIGITS}), and a literal a double may have been written as
+ * is left out ({@link doubleShaped}). Any other literal is the number
+ * `JSON.parse` reads: one of 21 digits or fewer, longer than 78, shaped like a
+ * double, or with a fraction or an exponent (`7.76e+76`).
+ *
+ * A text with no such literal is returned by `JSON.parse` itself, so for it
+ * nothing changes. Otherwise the value is built the way `JSON.parse` builds
+ * it: the last of two equal keys wins in the place of the first, `__proto__`
+ * is an own key, strings are decoded by `JSON.parse`, and a plain property
+ * added to `Object.prototype` is never read into the value (an accessor or a
+ * read-only index there makes it throw, never return another value). Anything
+ * that is not JSON throws a `SyntaxError`, as `JSON.parse` does, and a value
+ * that is not a string is read as `String(value)`, as `JSON.parse` reads it.
+ */
+export function parseJsonExact(input: string): unknown {
+  const text = String(input);
+  let pos = 0;
+  let wide = false;
+
+  const fail = (what: string): never => {
+    throw new SyntaxError(`${what} in JSON at position ${pos}`);
+  };
+  const space = (): void => {
+    JSON_SPACE.lastIndex = pos;
+    // A failed sticky match resets lastIndex to 0: never read it then, or a
+    // position past the end would send the parse back to the start.
+    if (JSON_SPACE.exec(text)) pos = JSON_SPACE.lastIndex;
+  };
+  const string = (): string => {
+    if (text[pos] !== '"') fail('Expected a string');
+    let end = pos + 1;
+    while (end < text.length && text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+    if (end >= text.length) fail('Unterminated string');
+    const value = JSON.parse(text.slice(pos, end + 1)) as string;
+    pos = end + 1;
+    return value;
+  };
+  const key = (): string => {
+    const name = string();
+    space();
+    if (text[pos] !== ':') fail("Expected ':'");
+    pos += 1;
+    space();
+    return name;
+  };
+  const scalar = (): unknown => {
+    if (text[pos] === '"') return string();
+    for (const [word, value] of [['true', true], ['false', false], ['null', null]] as const) {
+      if (text.startsWith(word, pos)) {
+        pos += word.length;
+        return value;
+      }
+    }
+    JSON_NUMBER.lastIndex = pos;
+    const match = JSON_NUMBER.exec(text);
+    if (!match) return fail('Unexpected token');
+    pos = JSON_NUMBER.lastIndex;
+    const literal = match[0];
+    const digits = literal.length - (literal.startsWith('-') ? 1 : 0);
+    if (
+      match[1] === undefined &&
+      match[2] === undefined &&
+      digits >= MIN_EXACT_DIGITS &&
+      digits <= MAX_EXACT_DIGITS &&
+      !doubleShaped(literal)
+    ) {
+      wide = true;
+      return BigInt(literal);
+    }
+    return Number(literal);
+  };
+
+  // A loop with its own stack, not recursion: JSON.parse reads nesting as
+  // deep as the text has, and so does this.
+  const stack: Frame[] = [];
+  space();
+  for (;;) {
+    let value: unknown;
+    if (text[pos] === '[') {
+      pos += 1;
+      space();
+      if (text[pos] !== ']') {
+        stack.push({ kind: 'array', items: [] });
+        continue;
+      }
+      pos += 1;
+      value = [];
+    } else if (text[pos] === '{') {
+      pos += 1;
+      space();
+      if (text[pos] !== '}') {
+        stack.push({ kind: 'object', object: {}, key: key() });
+        continue;
+      }
+      pos += 1;
+      value = {};
+    } else {
+      value = scalar();
+    }
+
+    // The value is complete: hand it to its container, and close every
+    // container that ends right after it.
+    for (;;) {
+      space();
+      const top = stack[stack.length - 1];
+      if (top === undefined) {
+        if (pos !== text.length) fail('Unexpected non-whitespace character after JSON');
+        return wide ? value : JSON.parse(text);
+      }
+      const close = top.kind === 'array' ? ']' : '}';
+      if (top.kind === 'array') {
+        top.items.push(value);
+      } else {
+        Object.defineProperty(top.object, top.key, dataDescriptor(value));
+      }
+      if (text[pos] === ',') {
+        pos += 1;
+        space();
+        if (top.kind === 'object') top.key = key();
+        break;
+      }
+      if (text[pos] !== close) fail(`Expected ',' or '${close}'`);
+      pos += 1;
+      stack.pop();
+      value = top.kind === 'array' ? top.items : top.object;
+    }
+  }
+}
+
+/**
+ * An EIP-712 document read from JSON text with {@link parseJsonExact}, so an
+ * integer of 22 to 78 digits written as a number keeps every digit; then
+ * refused if an integer field still holds a number that is not a safe
+ * integer: one of up to 21 digits (a JavaScript hop may have rounded it), one
+ * a double may have been written as, or one written with an exponent or a
+ * fraction ({@link assertTypedDataIntegersExact}).
  */
 export function parseTypedDataJson(
   text: string,
   where = 'typed data',
   code: X402ErrorCode = 'INVALID_CONFIG'
 ): unknown {
-  const doc: unknown = JSON.parse(text);
+  const doc: unknown = parseJsonExact(text);
   assertTypedDataIntegersExact(doc, where, code);
   return doc;
 }

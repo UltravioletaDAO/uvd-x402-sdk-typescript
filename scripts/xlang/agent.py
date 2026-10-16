@@ -28,6 +28,7 @@ Protocol
             {"op":"price_network","cases":[{id,network,amount,payTo}]}
             {"op":"sign_lifecycle","cases":[{id,action,paymentInfo,payer,amount,
                                              chainId,deadline,nonce,privateKey}]}
+            {"op":"sign_typed_data_text","cases":[{id,typedData,privateKey}]}
             {"op":"usdc_domains"}
             {"op":"escrow_pre_auth","cases":[{id,network,networkConfig,receiver,
                                               amountAtomic,privateKey}]}
@@ -375,6 +376,25 @@ def sign_lifecycle(cases):
     return {"runtime": "python", "results": results}
 
 
+def sign_typed_data_text(cases):
+    """Sign EIP-712 typed data handed over as JSON TEXT.
+
+    The mirror of the TypeScript agent's ``signTypedDataText``, which hands the
+    text to ``EnvKeyAdapter.signTypedData``. Here ``json.loads`` reads it, and
+    it keeps every digit of an integer written as a JSON number; then
+    ``EnvKeyAdapter.sign_typed_data`` signs the document.
+    """
+    results = []
+    for case in cases:
+        try:
+            documento = json.loads(case["typedData"])
+            signed = EnvKeyAdapter(case["privateKey"]).sign_typed_data(documento)
+            results.append({"id": case["id"], "signature": signed["signature"]})
+        except Exception as exc:  # noqa: BLE001 - a refusal is a comparable result
+            results.append({"id": case["id"], "error": f"{exc}"})
+    return {"runtime": "python", "results": results}
+
+
 def usdc_domains():
     """``escrow_signing.VERIFIED_USDC_DOMAINS``, keyed as JSON keys it."""
     from uvd_x402_sdk.escrow_signing import VERIFIED_USDC_DOMAINS
@@ -443,6 +463,8 @@ def main() -> None:
             response = price_network(request["cases"])
         elif op == "sign_lifecycle":
             response = sign_lifecycle(request["cases"])
+        elif op == "sign_typed_data_text":
+            response = sign_typed_data_text(request["cases"])
         elif op == "usdc_domains":
             response = usdc_domains()
         elif op == "escrow_pre_auth":

@@ -54,7 +54,7 @@
 import { ethers } from 'ethers';
 import { getChainByName } from '../chains';
 import { X402Error } from '../types';
-import { inexactNumberMessage } from '../utils/uint';
+import { inexactNumberMessage, parseJsonExact } from '../utils/uint';
 import type {
   SigningWalletAdapter,
   EIP3009Params,
@@ -414,7 +414,14 @@ function prepareTypedData(input: unknown): PreparedTypedData {
     EIP712Domain: EIP712_DOMAIN_FIELDS.filter(([name]) => domain[name] != null).map(
       ([name, type]) => ({ name, type })
     ),
-    ...structs,
+    // Each field as ethers hashes it, name and type: any other key (a wide
+    // number in it is a bigint) never reaches OWS or JSON.stringify.
+    ...Object.fromEntries(
+      Object.entries(structs).map(([struct, fields]) => [
+        struct,
+        fields.map(({ name, type }) => ({ name, type })),
+      ])
+    ),
   };
   const owsDomain = owsValue('EIP712Domain', domain, all, 'domain') as Record<string, unknown>;
   const owsMessage = owsValue(root, message, all, 'message');
@@ -608,7 +615,9 @@ export class OWSWalletAdapter implements SigningWalletAdapter {
   }> {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(typedData);
+      // An integer written as a JSON number keeps every digit (a bigint);
+      // JSON.parse would round a 32-byte one.
+      parsed = parseJsonExact(typedData);
     } catch {
       throw refuse('typedData is not a JSON string');
     }
