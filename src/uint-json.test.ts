@@ -559,6 +559,20 @@ describe('EnvKeyAdapter.signTypedData', () => {
     expect(error.message.startsWith('typed data message.amount is the JSON number 1234567890123456800')).toBe(true);
   });
 
+  it.each<[string, string]>([
+    ['BigInt(n).toString() (also Python int(f))', BigInt(REAL_SALT_PARSED).toString()],
+    ['toLocaleString without grouping', REAL_SALT_PARSED.toLocaleString('en-US', { useGrouping: false })],
+  ])('refuses a salt rounded to a double and written out in full by %s, naming the salt', async (_label, literal) => {
+    expect(literal).toHaveLength(REAL_SALT_DIGITS.length);
+    expect(literal).not.toBe(REAL_SALT_DIGITS);
+    const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
+    const text = JSON.stringify(doc).replace(`"salt":"${REAL_SALT_DIGITS}"`, `"salt":${literal}`);
+    expect(text).toContain(`"salt":${literal}`);
+    const error = await rejected(adapter.signTypedData(text));
+    expect(error).toBeInstanceOf(X402Error);
+    expect(error.message.startsWith('typed data message.paymentInfo.salt is the JSON number')).toBe(true);
+  });
+
   it('refuses the salt written with an exponent, with an error that names the salt', async () => {
     const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
     const text = JSON.stringify(doc).replace(`"salt":"${REAL_SALT_DIGITS}"`, `"salt":${REAL_SALT_PARSED}`);

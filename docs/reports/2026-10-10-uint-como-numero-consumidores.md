@@ -206,10 +206,19 @@ Agregado por SDKTS-UINT-SALT32 (2026-10-16): los tres firmantes que reciben el t
 TEXTO (`EnvKeyAdapter.signTypedData`, `wagmiLifecycleSigner` y `OWSWalletAdapter.signTypedData`)
 leen exacto un entero de 22 a 78 dígitos escrito como número, como lo lee el `json` de Python, y
 firman ese entero: un salt de 32 bytes escrito como número ya no se rechaza, se firma con la firma
-que da Python. Uno de hasta 21 dígitos se sigue rechazando con el campo nombrado: JavaScript escribe
-en hasta 21 dígitos planos un valor que ya redondeó (`1234567890123456789` pasa por un
-`JSON.parse` + `JSON.stringify` y sale como `1234567890123456800`), así que esos dígitos pueden no
-ser los que escribió el productor. Tampoco en esos tres firmantes hay un `bad_signature` mudo.
+que da Python. Se sigue rechazando, con el campo nombrado:
+
+- uno de hasta 21 dígitos: JavaScript escribe en hasta 21 dígitos planos un valor que ya redondeó
+  (`1234567890123456789` pasa por un `JSON.parse` + `JSON.stringify` y sale como
+  `1234567890123456800`);
+- uno con forma de double, aunque tenga 22 dígitos o más: el valor exacto de un double
+  (`BigInt(n).toString()`, `int(f)` de Python, `new BigDecimal(d)` de Java) o hasta 17 cifras
+  significativas seguidas de ceros (`toLocaleString`, `Intl.NumberFormat`, `toPlainString()`).
+
+En los dos casos los dígitos pueden no ser los que quiso el productor. Lo que queda fuera de esa red
+es un escritor que imprima un double redondeado con más de 17 cifras significativas que no sean su
+valor exacto. [HIPÓTESIS: no conocemos ninguno. Se midió en JavaScript (Node 20) y en Python; las
+dos formas de Java se suponen iguales a esas, no se corrieron.]
 
 ## Patrones usados
 

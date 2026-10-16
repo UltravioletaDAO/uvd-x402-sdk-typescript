@@ -1,8 +1,10 @@
 /**
  * `parseJsonExact`: `JSON.parse`, except that an integer literal of 22 to 78
- * digits comes back as the bigint that was written. 22 because JavaScript
- * writes a number it already rounded in up to 21 plain digits: those digits
- * are read as `JSON.parse` reads them, and an integer field refuses them.
+ * digits comes back as the bigint that was written, unless a double could have
+ * been written as it. 22 because JavaScript writes a number it already rounded
+ * in up to 21 plain digits; other writers print a rounded double in full
+ * (`BigInt(n)`, `toLocaleString`, Python's `int(f)`). Those digits are read as
+ * `JSON.parse` reads them, and an integer field refuses them.
  *
  * It is what a signer handed typed data as TEXT reads it with, so for
  * everything but those integers it must build exactly what `JSON.parse` builds:
@@ -54,6 +56,13 @@ function rounded(value: unknown): unknown {
   return value;
 }
 
+/** A double written out in plain digits: its shortest digits, or `precision` of them, then zeros. */
+function writtenOut(n: number, precision?: number): string {
+  const [mantissa, exponent] = (precision ? n.toExponential(precision - 1) : n.toExponential()).split('e+');
+  const digits = mantissa.replace('.', '');
+  return digits + '0'.repeat(Number(exponent) + 1 - digits.length);
+}
+
 function attempt(fn: () => unknown): { value?: unknown; error?: unknown } {
   try {
     return { value: fn() };
@@ -83,11 +92,13 @@ describe('parseJsonExact keeps every digit of an integer of 22 to 78 digits', ()
 
   it.each<[string, string, bigint]>([
     ['a 32-byte salt', SALT_DIGITS, SALT],
-    ['10**21, the smallest 22-digit integer', (10n ** 21n).toString(), 10n ** 21n],
+    ['10**21 + 1, 22 digits', (10n ** 21n + 1n).toString(), 10n ** 21n + 1n],
     ['-(10**21 + 1), 22 digits after the sign', (-(10n ** 21n) - 1n).toString(), -(10n ** 21n) - 1n],
     ['2**256 - 1, 78 digits', MAX_UINT256.toString(), MAX_UINT256],
     ['-(2**256 - 1), 78 digits after the sign', (-MAX_UINT256).toString(), -MAX_UINT256],
-    ['-(2**255), the smallest int256', MIN_INT256.toString(), MIN_INT256],
+    ['-(2**255) + 1', (MIN_INT256 + 1n).toString(), MIN_INT256 + 1n],
+    ['18 significant digits and ten zeros', `123456789012345678${'0'.repeat(10)}`, 123456789012345678n * 10n ** 10n],
+    ['the salt with its last ten digits zero', `${SALT_DIGITS.slice(0, -10)}${'0'.repeat(10)}`, BigInt(`${SALT_DIGITS.slice(0, -10)}${'0'.repeat(10)}`)],
   ])('%s', (_label, literal, expected) => {
     expect(parseJsonExact(literal)).toBe(expected);
     expect(parseJsonExact(`{"salt":${literal}}`)).toEqual({ salt: expected });
@@ -114,6 +125,17 @@ describe('parseJsonExact reads every other number as JSON.parse does', () => {
     ['10**18, exact in a double and still up to 21 digits', '1000000000000000000'],
     ['21 nines, the widest JavaScript could have written in digits', '9'.repeat(21)],
     ['21 nines, negative', `-${'9'.repeat(21)}`],
+    // A double written out in full, 22 digits or more: it may be a value
+    // rounded before it was written, so it is not read as more than that.
+    ['10**21, exactly a double', (10n ** 21n).toString()],
+    ['5 * 10**21', `5${'0'.repeat(21)}`],
+    ['-(2**255), exactly a double', MIN_INT256.toString()],
+    ['the rounded salt as BigInt(n).toString(), Python int(f), Java new BigDecimal(d)', BigInt(Number(SALT)).toString()],
+    ['the rounded salt as toLocaleString without grouping', Number(SALT).toLocaleString('en-US', { useGrouping: false })],
+    ['the rounded salt as Intl.NumberFormat without grouping', new Intl.NumberFormat('en-US', { useGrouping: false }).format(Number(SALT))],
+    ['the rounded salt as its shortest digits and zeros (Java toPlainString)', writtenOut(Number(SALT))],
+    ['the rounded salt as 15 digits and zeros', writtenOut(Number(SALT), 15)],
+    ['a 30-digit double as its 17 shortest digits and zeros', writtenOut(Number('123456789012345678901234567890'))],
     ['zero', '0'],
     ['negative zero', '-0'],
     ['1e21', '1e21'],
@@ -289,8 +311,9 @@ function document(random: () => number): { text: string; value: unknown } {
       case 3:
       case 4: {
         // 16 to 78 digits, either sign: exact from 22 digits, as JSON.parse reads it below.
+        // The last digit is odd, so no literal of 22 digits or more is shaped like a double.
         const width = 16 + Math.floor(random() * 63);
-        const literal = `${random() < 0.3 ? '-' : ''}${digits(width)}`;
+        const literal = `${random() < 0.3 ? '-' : ''}${digits(width - 1)}${pick(['1', '3', '5', '7', '9'])}`;
         return { text: literal, value: width >= 22 ? BigInt(literal) : Number(literal) };
       }
       case 5: {

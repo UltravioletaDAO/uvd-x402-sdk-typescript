@@ -20,9 +20,10 @@
  * Where the SDK reads the JSON TEXT itself (a signer handed typed data as a
  * string), a 32-byte salt has nothing to undo: {@link parseJsonExact} reads an
  * integer of 22 to 78 digits as a bigint, digit for digit, as Python's `json`
- * does, and the document is signed with the integer that was written. A
- * shorter one is refused as before: JavaScript writes a rounded number in up
- * to 21 plain digits, so those digits may not be the ones the producer wrote.
+ * does, and the document is signed with the integer that was written. One a
+ * double may have been written as is refused as before: JavaScript writes a
+ * rounded number in up to 21 plain digits, and other writers print a rounded
+ * double in full, so those digits may not be the ones the producer meant.
  */
 
 import { ethers } from 'ethers';
@@ -263,6 +264,23 @@ const MIN_EXACT_DIGITS = 22;
  */
 const MAX_EXACT_DIGITS = 78;
 
+/** A double's shortest decimal form has at most 17 significant digits. */
+const MAX_DOUBLE_DIGITS = 17;
+
+/**
+ * Whether an integer literal may be a double written out in full: the exact
+ * value of a double (`BigInt(n).toString()`, Python's `int(f)` and `'%.0f'`,
+ * Java's `new BigDecimal(d)`), or at most 17 significant digits followed by
+ * zeros (`n.toLocaleString()`, `Intl.NumberFormat`, Java's `toPlainString()`,
+ * a 15-digit writer). Such a literal may be a value that was rounded to a
+ * double before it was written, so it is not read as more exact than one. A
+ * random 32-byte salt is neither, but with odds of about 1 in 10**60.
+ */
+function doubleShaped(literal: string): boolean {
+  const significant = literal.replace(/^-/, '').replace(/0+$/, '');
+  return significant.length <= MAX_DOUBLE_DIGITS || BigInt(literal) === BigInt(Number(literal));
+}
+
 /** A JSON number (RFC 8259): groups 1 and 2 are the fraction and the exponent. */
 const JSON_NUMBER = /-?(?:0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?/y;
 
@@ -289,21 +307,24 @@ function dataDescriptor(value: unknown): PropertyDescriptor {
 
 /**
  * `JSON.parse(text)`, except that an integer literal of 22 to 78 digits, with
- * no fraction or exponent, comes back as a bigint with the exact value
- * written. Python's `json` reads those digits exactly; `JSON.parse` turns a
- * 32-byte salt (77 digits) into 7.76e+76. 22 is where JavaScript stops writing
- * plain digits ({@link MIN_EXACT_DIGITS}) and 78 the width of 2**256 - 1
- * ({@link MAX_EXACT_DIGITS}). Any other literal is the number `JSON.parse`
- * reads: one of 21 digits or fewer, longer than 78, or with a fraction or an
- * exponent (`7.76e+76`, rounded where it was written).
+ * no fraction or exponent, that no double could have been written as comes
+ * back as a bigint with the exact value written. Python's `json` reads those
+ * digits exactly; `JSON.parse` turns a 32-byte salt (77 digits) into
+ * 7.76e+76. 22 is where JavaScript stops writing plain digits
+ * ({@link MIN_EXACT_DIGITS}), 78 the width of 2**256 - 1
+ * ({@link MAX_EXACT_DIGITS}), and a literal a double may have been written as
+ * is left out ({@link doubleShaped}). Any other literal is the number
+ * `JSON.parse` reads: one of 21 digits or fewer, longer than 78, shaped like a
+ * double, or with a fraction or an exponent (`7.76e+76`).
  *
  * A text with no such literal is returned by `JSON.parse` itself, so for it
  * nothing changes. Otherwise the value is built the way `JSON.parse` builds
  * it: the last of two equal keys wins in the place of the first, `__proto__`
- * is an own key, strings are decoded by `JSON.parse`, and nothing inherited
- * from `Object.prototype` is read. Anything that is not JSON throws a
- * `SyntaxError`, as `JSON.parse` does, and a value that is not a string is
- * read as `String(value)`, as `JSON.parse` reads it.
+ * is an own key, strings are decoded by `JSON.parse`, and a plain property
+ * added to `Object.prototype` is never read into the value (an accessor or a
+ * read-only index there makes it throw, never return another value). Anything
+ * that is not JSON throws a `SyntaxError`, as `JSON.parse` does, and a value
+ * that is not a string is read as `String(value)`, as `JSON.parse` reads it.
  */
 export function parseJsonExact(input: string): unknown {
   const text = String(input);
@@ -354,7 +375,8 @@ export function parseJsonExact(input: string): unknown {
       match[1] === undefined &&
       match[2] === undefined &&
       digits >= MIN_EXACT_DIGITS &&
-      digits <= MAX_EXACT_DIGITS
+      digits <= MAX_EXACT_DIGITS &&
+      !doubleShaped(literal)
     ) {
       wide = true;
       return BigInt(literal);
@@ -423,8 +445,9 @@ export function parseJsonExact(input: string): unknown {
  * An EIP-712 document read from JSON text with {@link parseJsonExact}, so an
  * integer of 22 to 78 digits written as a number keeps every digit; then
  * refused if an integer field still holds a number that is not a safe
- * integer: one of up to 21 digits (a JavaScript hop may have rounded it), or
- * written with an exponent or a fraction ({@link assertTypedDataIntegersExact}).
+ * integer: one of up to 21 digits (a JavaScript hop may have rounded it), one
+ * a double may have been written as, or one written with an exponent or a
+ * fraction ({@link assertTypedDataIntegersExact}).
  */
 export function parseTypedDataJson(
   text: string,
