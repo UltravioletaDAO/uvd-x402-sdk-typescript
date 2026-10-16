@@ -280,8 +280,9 @@ export function parseJsonExact(text: string): unknown {
   };
   const space = (): void => {
     JSON_SPACE.lastIndex = pos;
-    JSON_SPACE.exec(text);
-    pos = JSON_SPACE.lastIndex;
+    // A failed sticky match resets lastIndex to 0: never read it then, or a
+    // position past the end would send the parse back to the start.
+    if (JSON_SPACE.exec(text)) pos = JSON_SPACE.lastIndex;
   };
   const string = (): string => {
     if (text[pos] !== '"') fail('Expected a string');
