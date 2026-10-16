@@ -452,6 +452,15 @@ describe.skipIf(!real)(
         expect(auth.signature).toMatch(/^0x[0-9a-f]{130}$/);
       });
 
+      it('an integer past 2**53 - 1 written in digits is read digit for digit: the signature of the same value as a string', async () => {
+        for (const wide of [BigInt(`0x${'ab'.repeat(32)}`), 2n ** 60n + 1n]) {
+          const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${wide}`);
+          expect(json).toContain(`"amount":${wide}`);
+          const asString = typed(U256, { amount: wide.toString() });
+          expect((await adapter.signTypedData(json)).signature, String(wide)).toBe((await env.signTypedData(asString)).signature);
+        }
+      });
+
       const base = { to: `0x${'11'.repeat(20)}`, nonce: 7, gasLimit: 90_000n, value: 10n ** 15n, data: '0xa9059cbb' };
       const transactions: Array<[string, ethers.TransactionLike<string>]> = [
         ['EIP-1559 on Base', { ...base, type: 2, chainId: 8453, maxFeePerGas: 2n * 10n ** 9n, maxPriorityFeePerGas: 10n ** 8n }],
@@ -596,17 +605,6 @@ describe.skipIf(!real)(
       // the root (ethers ignores primaryType and signs the root), and a bool
       // given as 1 (below).
       const LAXER_IN_ETHERS = ['uint256 with spaces', 'primaryType that is not the root'];
-
-      it('an integer past 2**53 - 1 written in digits is read digit for digit: the signature of the same value as a string', async () => {
-        for (const wide of [BigInt(`0x${'ab'.repeat(32)}`), 2n ** 60n + 1n]) {
-          const { a, spy } = spied('signTypedData');
-          const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${wide}`);
-          expect(json).toContain(`"amount":${wide}`);
-          const signed = await a.signTypedData(json);
-          expect(signed.signature, String(wide)).toBe((await env.signTypedData(typed(U256, { amount: wide.toString() }))).signature);
-          expect(spy).toHaveBeenCalledOnce();
-        }
-      });
 
       it('an integer past 2**53 - 1 written with an exponent is refused as a value already rounded', async () => {
         const { a, spy } = spied('signTypedData');
