@@ -414,7 +414,14 @@ function prepareTypedData(input: unknown): PreparedTypedData {
     EIP712Domain: EIP712_DOMAIN_FIELDS.filter(([name]) => domain[name] != null).map(
       ([name, type]) => ({ name, type })
     ),
-    ...structs,
+    // Each field as ethers hashes it, name and type: any other key (a wide
+    // number in it is a bigint) never reaches OWS or JSON.stringify.
+    ...Object.fromEntries(
+      Object.entries(structs).map(([struct, fields]) => [
+        struct,
+        fields.map(({ name, type }) => ({ name, type })),
+      ])
+    ),
   };
   const owsDomain = owsValue('EIP712Domain', domain, all, 'domain') as Record<string, unknown>;
   const owsMessage = owsValue(root, message, all, 'message');

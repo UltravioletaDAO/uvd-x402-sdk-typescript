@@ -202,6 +202,15 @@ en todos los caminos que leen uints para firmar o hashear (ver CHANGELOG 2.102.0
 consumidor que en el futuro mande un uint como número va a ver un error y no un `bad_signature`
 mudo. El SDK sigue emitiendo cada uint ancho como string.
 
+Agregado por SDKTS-UINT-SALT32 (2026-10-16): los tres firmantes que reciben el typed data como
+TEXTO (`EnvKeyAdapter.signTypedData`, `wagmiLifecycleSigner` y `OWSWalletAdapter.signTypedData`)
+leen exacto un entero de 22 a 78 dígitos escrito como número, como lo lee el `json` de Python, y
+firman ese entero: un salt de 32 bytes escrito como número ya no se rechaza, se firma con la firma
+que da Python. Uno de hasta 21 dígitos se sigue rechazando con el campo nombrado: JavaScript escribe
+en hasta 21 dígitos planos un valor que ya redondeó (`1234567890123456789` pasa por un
+`JSON.parse` + `JSON.stringify` y sale como `1234567890123456800`), así que esos dígitos pueden no
+ser los que escribió el productor. Tampoco en esos tres firmantes hay un `bad_signature` mudo.
+
 ## Patrones usados
 
 Todos con `git -C <repo> grep -n -I ... origin/<rama> -- . ':!**/node_modules/**' ':!**/dist/**'

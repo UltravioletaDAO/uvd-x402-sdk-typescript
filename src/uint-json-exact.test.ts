@@ -1,6 +1,8 @@
 /**
- * `parseJsonExact`: `JSON.parse`, except that an integer literal it would round
- * comes back as the bigint that was written.
+ * `parseJsonExact`: `JSON.parse`, except that an integer literal of 22 to 78
+ * digits comes back as the bigint that was written. 22 because JavaScript
+ * writes a number it already rounded in up to 21 plain digits: those digits
+ * are read as `JSON.parse` reads them, and an integer field refuses them.
  *
  * It is what a signer handed typed data as TEXT reads it with, so for
  * everything but those integers it must build exactly what `JSON.parse` builds:
@@ -64,16 +66,25 @@ function attempt(fn: () => unknown): { value?: unknown; error?: unknown } {
 // What changes: the integers JSON.parse rounds
 // ============================================================================
 
-describe('parseJsonExact keeps every digit of an integer JSON.parse would round', () => {
+describe('parseJsonExact keeps every digit of an integer of 22 to 78 digits', () => {
   it('the premise: JSON.parse turns a 32-byte salt into another integer', () => {
     expect(BigInt(JSON.parse(SALT_DIGITS) as number)).not.toBe(SALT);
   });
 
+  it('why 22: JavaScript writes a rounded number in up to 21 plain digits, and from 1e21 up with an exponent', () => {
+    // A 19-digit amount through one JavaScript hop: other digits, no exponent.
+    const hopped = JSON.stringify(JSON.parse('{"amount":1234567890123456789}'));
+    expect(hopped).toBe('{"amount":1234567890123456800}');
+    expect(parseJsonExact(hopped)).toEqual({ amount: 1234567890123456800 });
+    // The largest double below 1e21 is written in 21 plain digits; 1e21 is not.
+    expect(String(1e21 - 2 ** 17)).toMatch(/^[0-9]{21}$/);
+    expect(JSON.stringify(1e21)).toBe('1e+21');
+  });
+
   it.each<[string, string, bigint]>([
     ['a 32-byte salt', SALT_DIGITS, SALT],
-    ['2**53, the first integer that is not safe', '9007199254740992', 2n ** 53n],
-    ['2**53 + 1, which JSON.parse reads as 2**53', '9007199254740993', 2n ** 53n + 1n],
-    ['a negative past -(2**53 - 1)', '-9007199254740993', -(2n ** 53n) - 1n],
+    ['10**21, the smallest 22-digit integer', (10n ** 21n).toString(), 10n ** 21n],
+    ['-(10**21 + 1), 22 digits after the sign', (-(10n ** 21n) - 1n).toString(), -(10n ** 21n) - 1n],
     ['2**256 - 1, 78 digits', MAX_UINT256.toString(), MAX_UINT256],
     ['-(2**256 - 1), 78 digits after the sign', (-MAX_UINT256).toString(), -MAX_UINT256],
     ['-(2**255), the smallest int256', MIN_INT256.toString(), MIN_INT256],
@@ -96,6 +107,13 @@ describe('parseJsonExact reads every other number as JSON.parse does', () => {
   it.each<[string, string]>([
     ['2**53 - 1', '9007199254740991'],
     ['-(2**53 - 1)', '-9007199254740991'],
+    ['2**53', '9007199254740992'],
+    ['2**53 + 1, which JSON.parse reads as 2**53', '9007199254740993'],
+    ['a negative past -(2**53 - 1)', '-9007199254740993'],
+    ['2**60 + 1 as JSON.stringify writes it', JSON.stringify(2 ** 60 + 1)],
+    ['10**18, exact in a double and still up to 21 digits', '1000000000000000000'],
+    ['21 nines, the widest JavaScript could have written in digits', '9'.repeat(21)],
+    ['21 nines, negative', `-${'9'.repeat(21)}`],
     ['zero', '0'],
     ['negative zero', '-0'],
     ['1e21', '1e21'],
@@ -159,6 +177,34 @@ describe('parseJsonExact builds the value JSON.parse builds', () => {
     const ws = ' \t\n\r';
     const text = `${ws}{${ws}"a"${ws}:${ws}[${ws}${SALT_DIGITS}${ws},${ws}1${ws}]${ws},${ws}"b"${ws}:${ws}{${ws}}${ws}}${ws}`;
     expect(parseJsonExact(text)).toEqual({ a: [SALT, 1], b: {} });
+  });
+
+  it('reads nothing a polluted Object.prototype adds', () => {
+    const proto = Object.prototype as Record<string, unknown>;
+    let read: ReturnType<typeof attempt>;
+    let invalid: ReturnType<typeof attempt>;
+    try {
+      // `get` would turn every descriptor into an accessor; the others would
+      // make an object look like an array to a parser that asked with `in`.
+      proto.get = () => 'polluted';
+      for (const key of ['array', 'items', 'object']) proto[key] = [];
+      proto.kind = 'array';
+      read = attempt(() => parseJsonExact(`{"a":1,"s":${SALT_DIGITS}}`));
+      invalid = attempt(() => parseJsonExact(`{"a":1,"s":${SALT_DIGITS}]`));
+    } finally {
+      for (const key of ['get', 'array', 'items', 'object', 'kind']) delete proto[key];
+    }
+    expect(read.error).toBeUndefined();
+    expect(read.value).toEqual({ a: 1, s: SALT });
+    expect(invalid.error).toBeInstanceOf(SyntaxError);
+  });
+
+  it('a value that is not a string is read as String(value), as JSON.parse reads it', () => {
+    const buffer = Buffer.from(`{"salt":${SALT_DIGITS}}`);
+    expect(parseJsonExact(buffer as unknown as string)).toEqual({ salt: SALT });
+    expect(parseJsonExact(12 as unknown as string)).toBe(12);
+    expect(() => JSON.parse(undefined as unknown as string)).toThrow(SyntaxError);
+    expect(() => parseJsonExact(undefined as unknown as string)).toThrow(SyntaxError);
   });
 
   it('nesting as deep as JSON.parse reads it', () => {
@@ -242,11 +288,10 @@ function document(random: () => number): { text: string; value: unknown } {
       }
       case 3:
       case 4: {
-        // An integer JSON.parse would round, 16 to 78 digits, either sign.
-        let literal = digits(16 + Math.floor(random() * 63));
-        if (!Number.isSafeInteger(Number(literal)) && random() < 0.3) literal = `-${literal}`;
-        if (Number.isSafeInteger(Number(literal))) return { text: literal, value: Number(literal) };
-        return { text: literal, value: BigInt(literal) };
+        // 16 to 78 digits, either sign: exact from 22 digits, as JSON.parse reads it below.
+        const width = 16 + Math.floor(random() * 63);
+        const literal = `${random() < 0.3 ? '-' : ''}${digits(width)}`;
+        return { text: literal, value: width >= 22 ? BigInt(literal) : Number(literal) };
       }
       case 5: {
         // Wider than any EIP-712 integer: the double JSON.parse reads.
@@ -310,6 +355,7 @@ describe('parseJsonExact against JSON.parse, seeded random texts', () => {
     }
     expect(failures).toEqual([]);
     expect(docs.filter(({ text }) => /[0-9]{16}/.test(text)).length).toBeGreaterThan(100);
+    expect(docs.filter(({ text }) => /[0-9]{22}/.test(text)).length).toBeGreaterThan(50);
   });
 
   it('every one-character edit: both parse it the same, or both refuse it', () => {

@@ -452,13 +452,23 @@ describe.skipIf(!real)(
         expect(auth.signature).toMatch(/^0x[0-9a-f]{130}$/);
       });
 
-      it('an integer past 2**53 - 1 written in digits is read digit for digit: the signature of the same value as a string', async () => {
-        for (const wide of [BigInt(`0x${'ab'.repeat(32)}`), 2n ** 60n + 1n]) {
+      it('an integer of 22 to 78 digits written as a JSON number is read digit for digit: the signature of the same value as a string', async () => {
+        for (const wide of [BigInt(`0x${'ab'.repeat(32)}`), 10n ** 21n + 1n]) {
           const json = typed(U256, { amount: '0' }).replace('"amount":"0"', `"amount":${wide}`);
           expect(json).toContain(`"amount":${wide}`);
           const asString = typed(U256, { amount: wide.toString() });
           expect((await adapter.signTypedData(json)).signature, String(wide)).toBe((await env.signTypedData(asString)).signature);
         }
+      });
+
+      it('a key of a types field that ethers does not read, holding a 22-digit number, signs as without it', async () => {
+        const plain = typed(U256, { amount: '5' });
+        const json = plain.replace(
+          '{"name":"amount","type":"uint256"}',
+          `{"name":"amount","type":"uint256","note":${10n ** 21n + 1n}}`
+        );
+        expect(json).not.toBe(plain);
+        expect((await adapter.signTypedData(json)).signature).toBe((await adapter.signTypedData(plain)).signature);
       });
 
       const base = { to: `0x${'11'.repeat(20)}`, nonce: 7, gasLimit: 90_000n, value: 10n ** 15n, data: '0xa9059cbb' };
@@ -578,7 +588,7 @@ describe.skipIf(!real)(
         ['int8 = -129', typed({ Order: [{ name: 'a', type: 'int8' }] }, { a: '-129' }), 'INVALID_AMOUNT'],
         ['int256 = -2**255 - 1', typed(I256, { delta: (-(2n ** 255n) - 1n).toString() }), 'INVALID_AMOUNT'],
         ['uint256 as a float', typed(U256, { amount: 1.5 }), 'INVALID_CONFIG'],
-        ['uint256 as an unsafe number (1e+21)', typed(U256, { amount: 1e21 }), 'INVALID_CONFIG'],
+        ['uint256 as an unsafe number', typed(U256, { amount: 2 ** 60 }), 'INVALID_CONFIG'],
         ['uint256 with spaces', typed(U256, { amount: ' 1' }), 'INVALID_CONFIG'],
         ['uint256 missing', typed(U256, {}), 'INVALID_CONFIG'],
         ['string given a number', typed({ Order: [{ name: 's', type: 'string' }] }, { s: 5 }), 'INVALID_CONFIG'],

@@ -15,8 +15,10 @@
  *   computes for the same order: pinned below, and compared live, process to
  *   process, by `release/real-salt` in `scripts/xlang/cross-language-conformance.mjs`;
  * - as a JSON number in TEXT the SDK parses itself (a signer handed typed data
- *   as a string), it is read digit for digit (`parseJsonExact`) and signs those
- *   same Python bytes: `release/real-salt-as-json-number-text` in that script.
+ *   as a string), its 77 digits are read digit for digit (`parseJsonExact`) and
+ *   sign those same Python bytes: `release/real-salt-as-json-number-text` in
+ *   that script. A number of up to 21 digits in such a text is still refused:
+ *   a JavaScript hop writes a value it rounded back in that many plain digits.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -290,6 +292,9 @@ describe('assertTypedDataIntegersExact', () => {
     ['with an exponent, as JSON.stringify writes a rounded salt', String(REAL_SALT_PARSED)],
     ['with a fraction', '9007199254740993.0'],
     ['in 79 digits, wider than any EIP-712 integer', '1'.repeat(79)],
+    ['in 19 digits, as a JavaScript hop writes a rounded amount', JSON.stringify(JSON.parse('1234567890123456789'))],
+    ['in 21 digits, the widest JavaScript writes plain', String(1e21 - 2 ** 17)],
+    ['in 16 digits, past 2**53 - 1', '9007199254740993'],
   ])('parseTypedDataJson still refuses an integer field written %s', (_label, literal) => {
     const text = JSON.stringify(doc(base)).replace('"amount":"1"', `"amount":${literal}`);
     expect(text).toContain(`"amount":${literal}`);
@@ -540,6 +545,18 @@ describe('EnvKeyAdapter.signTypedData', () => {
     const text = JSON.stringify(doc).replace(`"salt":"${REAL_SALT_DIGITS}"`, `"salt":${REAL_SALT_DIGITS}`);
     expect(text).toContain(`"salt":${REAL_SALT_DIGITS}`);
     expect((await adapter.signTypedData(text)).signature).toBe(PY_REAL_SALT_SIGNATURE);
+  });
+
+  it('refuses an amount a JavaScript hop rounded and wrote back in plain digits, naming the amount', async () => {
+    const doc = buildLifecycleTypedData({ ...ORDER, paymentInfo: { ...PI, salt: REAL_SALT_HEX } });
+    const hopped = JSON.stringify(JSON.parse('1234567890123456789'));
+    expect(hopped).toBe('1234567890123456800');
+    const text = JSON.stringify(doc).replace(`"amount":"${doc.message.amount}"`, `"amount":${hopped}`);
+    expect(text).toContain(`"amount":${hopped}`);
+    const error = await rejected(adapter.signTypedData(text));
+    expect(error).toBeInstanceOf(X402Error);
+    expect(error.code).toBe('INVALID_CONFIG');
+    expect(error.message.startsWith('typed data message.amount is the JSON number 1234567890123456800')).toBe(true);
   });
 
   it('refuses the salt written with an exponent, with an error that names the salt', async () => {
