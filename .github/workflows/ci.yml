@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
     # Runs only when a file the jobs below read changes. A change to nothing
-    # on this list (docs/, CHANGELOG.md, the scripts CI never runs) cannot
-    # change the result, so it does not spend a run. When a job starts reading
-    # a new file, add it here in the same PR. Why each entry:
+    # on this list (docs/, the scripts CI never runs) cannot change the
+    # result, so it does not spend a run. When a job starts reading a new
+    # file, add it here in the same PR. Why each entry:
     #   src/**            code, tests, fixtures and vectors: typecheck, test,
     #                     lint and build read them, and both conformance
     #                     scripts load their vectors from src/
@@ -14,7 +14,10 @@ on:
     #                     and `npm pack` ships it
     #   LICENSE           `npm pack` ships it
     #   package.json      `npm ci`, every `npm run`, and `files` for `npm pack`
-    #   package-lock.json `npm ci` installs exactly this tree
+    #   package-lock.json `npm ci` installs exactly this tree, and
+    #                     src/release-version.test.ts reads its version
+    #   CHANGELOG.md      src/release-version.test.ts reads its first two
+    #                     sections: [Unreleased], then package.json's version
     #   tsconfig*.json    typecheck (tsconfig.json), lint (tsconfig.eslint.json)
     #   *.config.*        lint (eslint.config.mjs), build (tsup.config.ts);
     #                     vitest also picks up a vitest/vite config from here
@@ -32,6 +35,7 @@ on:
       - 'LICENSE'
       - 'package.json'
       - 'package-lock.json'
+      - 'CHANGELOG.md'
       - 'tsconfig*.json'
       - '*.config.*'
       - '.gitattributes'
