@@ -54,6 +54,13 @@
 
 import { ethers } from 'ethers';
 import { encodeBase64Utf8 } from './utils/base64';
+import {
+  needsAccountWrap,
+  replaySafeTypedData,
+  resolveDelegation,
+  wrapSignature,
+  type DelegationResolver,
+} from './erc7702.js';
 
 export const SCHEME = 'batch-settlement';
 
@@ -404,6 +411,62 @@ export interface BuildDepositOptions {
   depositSalt?: string;
   /** Unix seconds; `validBefore = now + maxTimeoutSeconds`. The clock when omitted. */
   now?: number;
+  /**
+   * `(address, network) -> target | true | false | null`: pass it when the payer
+   * may be an EIP-7702 delegated account (a Paybox wallet), so the deposit
+   * authorization is wrapped for ERC-1271 when needed. See
+   * {@link signDepositAuthorization}.
+   */
+  delegationResolver?: DelegationResolver;
+}
+
+/**
+ * Sign the ERC-3009 `ReceiveWithAuthorization`, wrapping it for a delegated (EIP-7702) payer.
+ *
+ * The token contract verifies this signature against the PAYER. A payer whose
+ * EOA carries EIP-7702 code (every Paybox wallet after its first money
+ * operation) is checked through ERC-1271, so a raw ECDSA signature from it is
+ * unsettleable. With a `delegationResolver` the signature goes through the same
+ * wrap the SDK already uses for the escrow authorization ({@link replaySafeTypedData}
+ * + {@link wrapSignature}, `src/erc7702.ts`), and only for the delegate targets
+ * that need it: `true` with an unknown target, or a target in `SMA_WRAP_TARGETS`.
+ * `false` or any other target signs plain. `null` or a throwing resolver (the
+ * chain could not be read) is NOT "plain": it throws. Without a resolver the
+ * payer is taken as a plain EOA; a caller whose wallet may be delegated must
+ * pass one. Vouchers never need the wrap (the channel's `payerAuthorizer` is
+ * verified by ECDSA).
+ */
+async function signDepositAuthorization(
+  wallet: BatchSettlementSigner,
+  domain: Record<string, unknown>,
+  message: Record<string, unknown>,
+  network: string,
+  payer: string,
+  delegationResolver: DelegationResolver | undefined
+): Promise<string> {
+  if (!delegationResolver) {
+    return sign(wallet, domain, RECEIVE_AUTHORIZATION_TYPES, 'ReceiveWithAuthorization', message);
+  }
+  const { delegated, target } = await resolveDelegation(payer, network, delegationResolver);
+  if (delegated === null) {
+    throw new BatchSettlementError(
+      'cannot tell whether the payer is EIP-7702 delegated (the chain could not be read): ' +
+        'refusing to sign a deposit authorization that may be unsettleable'
+    );
+  }
+  if (delegated && (target === null || needsAccountWrap(target))) {
+    const digest = ethers.TypedDataEncoder.hash(domain, RECEIVE_AUTHORIZATION_TYPES, message);
+    const replaySafe = replaySafeTypedData(digest, chainIdOf(network), checksum(payer, 'payer'));
+    const inner = await sign(
+      wallet,
+      replaySafe.domain,
+      replaySafe.types as TypedFields,
+      'ReplaySafeHash',
+      replaySafe.message
+    );
+    return wrapSignature(inner);
+  }
+  return sign(wallet, domain, RECEIVE_AUTHORIZATION_TYPES, 'ReceiveWithAuthorization', message);
 }
 
 /** The inner `payload` of a `deposit`: an ERC-3009 authorization to the collector plus the first voucher. */
@@ -442,7 +505,14 @@ export async function buildDepositPayload(
     validBefore: validBefore.toString(),
     nonce: toBytes32(erc3009DepositNonce(channelId, salt), 'nonce'),
   };
-  const authSignature = await sign(wallet, domain, RECEIVE_AUTHORIZATION_TYPES, 'ReceiveWithAuthorization', message);
+  const authSignature = await signDepositAuthorization(
+    wallet,
+    domain,
+    message,
+    network,
+    channelConfig.payer,
+    options.delegationResolver
+  );
   const voucher = await signVoucher(options.voucherWallet ?? wallet, channelId, maxClaimableAmount, network);
   return {
     type: 'deposit',
@@ -620,6 +690,12 @@ export interface BatchSettlementClientOptions {
   maxDeposit?: bigint | number | string;
   /** Deposit target in requests when the seller announces no `minDeposit`. Default {@link DEFAULT_DEPOSIT_MULTIPLIER}. */
   depositMultiplier?: bigint | number | string;
+  /**
+   * `(address, network) -> target | true | false | null`: pass it when the payer
+   * may be an EIP-7702 delegated account (a Paybox wallet), so the deposit
+   * authorization is wrapped for ERC-1271 when needed. Vouchers are never wrapped.
+   */
+  delegationResolver?: DelegationResolver;
 }
 
 /** The response fields {@link BatchSettlementClient.confirm} reads: the settle response's `extra`. */
@@ -644,6 +720,7 @@ export class BatchSettlementClient {
   readonly voucherWallet: BatchSettlementSigner | undefined;
   readonly maxDeposit: bigint;
   readonly depositMultiplier: bigint;
+  readonly delegationResolver: DelegationResolver | undefined;
 
   constructor(wallet: BatchSettlementSigner, options: BatchSettlementClientOptions = {}) {
     this.wallet = wallet;
@@ -652,6 +729,7 @@ export class BatchSettlementClient {
     this.voucherWallet = options.voucherWallet;
     this.maxDeposit = toInt(options.maxDeposit ?? DEFAULT_MAX_DEPOSIT, 'maxDeposit');
     this.depositMultiplier = toInt(options.depositMultiplier ?? DEFAULT_DEPOSIT_MULTIPLIER, 'depositMultiplier');
+    this.delegationResolver = options.delegationResolver;
   }
 
   channelConfig(requirements: BatchSettlementRequirements): ChannelConfig {
@@ -743,6 +821,7 @@ export class BatchSettlementClient {
       inner = await buildDepositPayload(this.wallet, requirements, config, deposit, maxClaimable, {
         voucherWallet: this.voucherWallet,
         now: options.now,
+        delegationResolver: this.delegationResolver,
       });
     } else {
       inner = await buildVoucherPayload(this.voucherWallet ?? this.wallet, config, network, maxClaimable);

@@ -705,7 +705,7 @@ const res = await fetch(url, { headers: { 'PAYMENT-SIGNATURE': prepared.header()
 if (res.ok) await client.confirm(prepared, settleResponse.extra); // from the PAYMENT-RESPONSE header
 ```
 
-A deposit is never above `maxDeposit`: the seller's `extra.minDeposit` is a target, and a deposit the next voucher needs above the cap throws `BatchSettlementError` with nothing signed. Only `eip155:*` networks and the ERC-3009 deposit are signed (`assetTransferMethod: 'permit2'` throws). `confirm` records previous cumulative + `chargedAmount` and never copies the seller's `channelState`; a mismatch leaves the local state untouched and resolves to `false`. Not included: Permit2 deposits, the cooperative refund and the corrective-402 resync.
+A deposit is never above `maxDeposit`: the seller's `extra.minDeposit` is a target, and a deposit the next voucher needs above the cap throws `BatchSettlementError` with nothing signed. Only `eip155:*` networks and the ERC-3009 deposit are signed (`assetTransferMethod: 'permit2'` throws). `confirm` records previous cumulative + `chargedAmount` and never copies the seller's `channelState`; a mismatch leaves the local state untouched and resolves to `false`. If the payer may be an EIP-7702 delegated account (a Paybox wallet), pass `delegationResolver` (e.g. `rpcDelegationResolver(rpcUrl)`): the deposit authorization is then wrapped for ERC-1271 when the delegate needs it, and an unreadable chain refuses instead of signing plain. Not included: Permit2 deposits, the cooperative refund and the corrective-402 resync.
 
 ## Multi-Stablecoin (EVM)
 
