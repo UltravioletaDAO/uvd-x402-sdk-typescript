@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { TypedDataEncoder } from 'ethers';
 import { describe, expect, it } from 'vitest';
 
 import { EnvKeyAdapter } from './adapters/env-key';
@@ -26,7 +27,9 @@ import {
   BatchSettlementClient,
   BatchSettlementError,
   ChannelConfig,
+  ERC3009_DEPOSIT_COLLECTOR_ADDRESS,
   FileChannelStorage,
+  RECEIVE_AUTHORIZATION_TYPES,
   buildDepositPayload,
   computeChannelId,
   erc3009DepositNonce,
@@ -35,6 +38,7 @@ import {
   type DepositPayload,
   type PreparedPayment,
 } from './batch-settlement';
+import { replaySafeTypedData, wrapSignature, type DelegationResolver } from './erc7702';
 
 const sha256Hex = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -182,6 +186,70 @@ describe('batch-settlement buyer (parity with uvd_x402_sdk.batch_settlement)', (
     expect(p.payload.accepted.scheme).toBe('batch-settlement');
     expect(p.payload.resource).toEqual({ url: 'https://x.test/r' });
     expect(JSON.parse(atob(p.header())).payload.type).toBe('deposit');
+  });
+
+  // Alchemy SemiModularAccount7702: the delegate target that needs the wrap.
+  const SMA = '0x69007702764179f14f51cdce752f4f775d74e139';
+
+  const depositSignature = async (resolver: DelegationResolver) => {
+    const dep = await buildDepositPayload(WALLET, requirements(), CONFIG, 30000, 3000, {
+      depositSalt: SALT,
+      now: 1_800_000_000,
+      delegationResolver: resolver,
+    });
+    return dep.deposit.authorization.erc3009Authorization.signature;
+  };
+
+  it('a delegated payer gets the ERC-1271 wrapped authorization', async () => {
+    const domain = { name: 'USD Coin', version: '2', chainId: 8453, verifyingContract: ASSET };
+    const message = {
+      from: ADDRESS,
+      to: ERC3009_DEPOSIT_COLLECTOR_ADDRESS,
+      value: 30000,
+      validAfter: 0,
+      validBefore: 1_800_000_000 + 15,
+      nonce: erc3009DepositNonce(GOLDEN_CHANNEL_ID, SALT),
+    };
+    const digest = TypedDataEncoder.hash(domain, RECEIVE_AUTHORIZATION_TYPES, message);
+    const replaySafe = replaySafeTypedData(digest, 8453, ADDRESS);
+    const inner = await WALLET.signTypedData(JSON.stringify({ ...replaySafe, primaryType: 'ReplaySafeHash' }));
+    const expected = wrapSignature(inner.signature);
+    const got = await depositSignature(() => SMA);
+    // a wrapped signature is NOT the plain one
+    expect(got).toBe(expected);
+    expect(got).not.toBe(GOLDEN_DEPOSIT_SIG);
+    // an async resolver is awaited, not read as a truthy promise
+    expect(await depositSignature(async () => SMA)).toBe(expected);
+  });
+
+  it('a plain or non-wrapping delegate signs plain', async () => {
+    expect(await depositSignature(() => false)).toBe(GOLDEN_DEPOSIT_SIG);
+    // a plain-ECDSA 1271 delegate (Execution Market's FeedbackDelegate style) takes the ordinary signature
+    expect(await depositSignature(() => '0x' + '11'.repeat(20))).toBe(GOLDEN_DEPOSIT_SIG);
+  });
+
+  it('an unreadable chain is not plain and refuses', async () => {
+    await expect(depositSignature(() => null)).rejects.toThrow(BatchSettlementError);
+    const boom: DelegationResolver = () => {
+      throw new Error('rpc down');
+    };
+    await expect(depositSignature(boom)).rejects.toThrow(BatchSettlementError);
+  });
+
+  it('the client passes its resolver to the deposit', async () => {
+    const wrapped = await new BatchSettlementClient(WALLET, { delegationResolver: () => SMA }).createPayment(
+      requirements(),
+      undefined,
+      { now: 1_800_000_000 }
+    );
+    const plain = await new BatchSettlementClient(WALLET).createPayment(requirements(), undefined, {
+      now: 1_800_000_000,
+    });
+    const sig = (p: PreparedPayment) => inner(p).deposit.authorization.erc3009Authorization.signature;
+    // the ERC-1271 envelope is longer than a 65-byte ECDSA signature
+    expect(sig(wrapped).length).toBeGreaterThan(sig(plain).length);
+    // vouchers are never wrapped: the same voucher either way
+    expect(inner(wrapped).voucher.signature).toBe(inner(plain).voucher.signature);
   });
 
   it('file storage survives a new process', async () => {

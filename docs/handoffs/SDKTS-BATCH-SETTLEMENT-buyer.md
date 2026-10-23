@@ -32,6 +32,20 @@ inflar el acumulado del comprador. Ambos casos tienen test.
   `dist` CJS da el id de canal de oro y `FileChannelStorage` escribe y relee el archivo desde CJS (donde
   `import('node:fs/promises')` se transforma en `require`), sin dejar temporales.
 
+## Pagadores delegados (EIP-7702), port del PR #74 de Python
+
+- `delegationResolver` opcional en `BatchSettlementClient` y en `buildDepositPayload`. Reusa
+  `resolveDelegation`, `needsAccountWrap`, `replaySafeTypedData` y `wrapSignature` de `src/erc7702.ts` (lo
+  mismo que `buildEscrowPreAuth`); no hay wrap nuevo. Reglas de Python: sin resolver, firma plana; `false` u
+  otro target, plana; `true` sin target o target SMA, wrap; `null` o resolver que lanza, `BatchSettlementError`.
+  Los vouchers nunca llevan wrap.
+- Tests: los 4 casos de Python (14/14 en el archivo). Suite completa: 75 archivos, 2234 pasan, 75 omitidos.
+- Paridad medida fuera de la suite: con la misma entrada, las firmas del depósito para SMA, `true`, `false` y
+  otro target son idénticas byte a byte entre el código del PR #74 (Python 3.11 del sistema) y el `dist` TS.
+- Decisión: el resolver puede ser async (el `DelegationResolver` del SDK TS ya lo admite); un test lo cubre.
+- Decisión: el resolver recibe `config.payer` tal cual, como Python; el dominio del wrap usa la misma
+  dirección en EIP-55 (el hash no depende de la mayúscula).
+
 ## Decisiones
 
 - Sólo por subruta, no desde la raíz: `FileChannelStorage` usa `node:fs` y la raíz la empaquetan
