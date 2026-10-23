@@ -17,6 +17,7 @@ export default defineConfig({
     'adapters/index': 'src/adapters/index.ts',
     'backend/index': 'src/backend/index.ts',
     'erc8128/index': 'src/erc8128/index.ts',
+    'batch-settlement/index': 'src/batch-settlement.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,
