@@ -23,6 +23,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
 - **Escrow Pre-Auth**: Sign-on-assignment `X-Payment-Auth` builder (`buildEscrowPreAuth`) — vector-pinned parity with the Python SDK and Execution Market
+- **Batch Settlement (buyer)**: `uvd-x402-sdk/batch-settlement` — one ERC-3009 deposit opens a channel, each later request pays with a cumulative voucher; capped deposits, vector-pinned parity with the Python SDK
 - **Commerce Scheme**: `'commerce'` scheme alias for marketplace integrations (identical to `'escrow'` on-chain)
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
 - **Bazaar Discovery**: Register and discover paid resources across the x402 network
@@ -685,6 +686,26 @@ const paymentAuth = await buildEscrowPreAuth(new EnvKeyAdapter(), {
 ```
 
 Any `SigningWalletAdapter` works as the signer (only `signTypedData` is used); browser wallets can pass a minimal `{ signTypedData }` wrapper. Validation fails loud instead of falling back: incomplete network config, unknown tier, bounty outside the on-chain deposit limit ($100), or a `maxFeeBps` below the operator's 1300 bps all throw before anything is signed. What the config asserts is also checked against the SDK's own tables before signing, as in the Python SDK: the `chain_id` against the `network` you name (a registry name or `eip155:<id>`), the escrow, token collector and USDC against `ESCROW_CONTRACTS`, the operator against `ESCROW_OPERATORS`, `maxFeeBps` against the chain's ceiling in `ESCROW_MAX_FEE_BPS`, and the USDC EIP-712 domain (`usdc_domain_name` / `usdc_domain_version`) against the token's on-chain domain in `VERIFIED_USDC_DOMAINS`. A contradiction throws `INVALID_CONFIG`, and so do a `network` the SDK does not register and a chain without a row in each of the four tables, with or without `network`; name the network you expect to pay on, from your own code, never one read from the config. A server-published tier window must be an integer from 0 to its `ESCROW_TIER_WINDOW_MAX`, and `authorizationExpiry` at most `ESCROW_MAX_AUTHORIZATION_SEC` after now: past either, the SDK refuses, it never clamps. `computeEscrowNonce` is exported to reproduce `AuthCaptureEscrow.getHash` externally.
+
+## Batch Settlement (buyer)
+
+The buyer side of the x402 `batch-settlement` scheme on EVM ([spec](https://github.com/coinbase/x402/tree/main/specs/schemes/batch-settlement)): the first paid request signs an ERC-3009 deposit into a payment channel plus a voucher, and every later request on that channel signs only the next cumulative voucher. Same API and the same golden vectors as the Python SDK's `uvd_x402_sdk.batch_settlement`.
+
+```typescript
+import { EnvKeyAdapter } from 'uvd-x402-sdk';
+import { BatchSettlementClient, FileChannelStorage } from 'uvd-x402-sdk/batch-settlement';
+
+const client = new BatchSettlementClient(new EnvKeyAdapter(), {
+  storage: new FileChannelStorage('./channels.json'), // Node; MemoryChannelStorage by default
+  maxDeposit: 1_000_000n,                             // the default: 1 USDC in atomic units
+});
+
+const prepared = await client.createPayment(accepted, { url }); // accepted = the 402's batch-settlement accept
+const res = await fetch(url, { headers: { 'PAYMENT-SIGNATURE': prepared.header() } });
+if (res.ok) await client.confirm(prepared, settleResponse.extra); // from the PAYMENT-RESPONSE header
+```
+
+A deposit is never above `maxDeposit`: the seller's `extra.minDeposit` is a target, and a deposit the next voucher needs above the cap throws `BatchSettlementError` with nothing signed. Only `eip155:*` networks and the ERC-3009 deposit are signed (`assetTransferMethod: 'permit2'` throws). `confirm` records previous cumulative + `chargedAmount` and never copies the seller's `channelState`; a mismatch leaves the local state untouched and resolves to `false`. Not included: Permit2 deposits, the cooperative refund and the corrective-402 resync.
 
 ## Multi-Stablecoin (EVM)
 

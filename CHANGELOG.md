@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [2.105.0] - 2026-10-23
+
+### Added
+
+- `uvd-x402-sdk/batch-settlement` (new subpath, `src/batch-settlement.ts`): the BUYER side of the x402 `batch-settlement` scheme on EVM (coinbase/x402 `specs/schemes/batch-settlement/scheme_batch_settlement_evm.md`), ported from the Python SDK's `uvd_x402_sdk.batch_settlement`. `computeChannelId` (the chain-bound EIP-712 hash of a `ChannelConfig`), `signVoucher` (the cumulative `Voucher`), `erc3009DepositNonce` (`keccak256(abi.encode(bytes32 channelId, uint256 salt))`), `buildDepositPayload` (ERC-3009 `ReceiveWithAuthorization` to the deposit collector `0x4020806089470a89826cB9fB1f4059150b550004` plus the first voucher), `buildVoucherPayload`, `paymentPayload` (the x402 v2 envelope), `paymentHeader` (the `PAYMENT-SIGNATURE` value) and `BatchSettlementClient` (`createPayment` decides deposit or voucher; `confirm` records a paid response). It signs through anything with `signTypedData(typedDataJson)`, so `EnvKeyAdapter`, `OWSWalletAdapter` and a remote wallet all work; no key is loaded by the module. Channel state lives in a `ChannelStorage` whose `get`/`set` may return promises: `MemoryChannelStorage`, or `FileChannelStorage` (one JSON file, written to a temporary file beside it and renamed over it; `node:fs` is loaded on its first use, not when the module is imported). It is not exported from the root entry, which browser bundles import.
+- Money rules, the Python SDK's: one deposit is capped by `maxDeposit` (default `DEFAULT_MAX_DEPOSIT`, `1_000_000` atomic units); the seller's `extra.minDeposit` is a target and is ignored below `amount`; a deposit the next voucher needs above the cap throws `BatchSettlementError` with nothing signed; only `scheme: 'batch-settlement'`, only `eip155:*` networks and only `assetTransferMethod` absent or `'eip3009'` are signed (`'permit2'` throws); `extra.receiverAuthorizer` must be a non-zero address and `extra.withdrawDelay` within 900..2592000. `confirm` writes previous cumulative + `chargedAmount` and never copies the seller's `channelState`: a `chargedAmount` above the request's `amount`, or a `channelState.chargedCumulativeAmount` other than the buyer's own sum, leaves the state as it was and resolves to `false`. Amounts are bigints.
+- `paymentHeader` gives the Python SDK's bytes: compact JSON with every character above `~` written as a JSON escape (`json.dumps` with `ensure_ascii`), so a token named `USD₮0` produces the same header in both SDKs.
+
+### Not in this release
+
+- The Permit2 deposit path, the cooperative refund, the corrective-402 resync and on-chain channel recovery, as in the Python SDK. The module does not consult `PurchasePolicy`.
+
+### Tests
+
+- `src/batch-settlement.test.ts`: the Python suite's nine cases with its golden vectors (channel id, voucher signature, ERC-3009 deposit nonce and deposit authorization signature, which the Python SDK compared byte for byte with the reference `x402` 2.25.0), reached here from the same inputs with a key derived at run time from a seed; deposit then voucher; top-up; `minDeposit` capped and a need above the cap refused; scheme, network, `permit2` and missing `receiverAuthorizer` refused; `confirm` against a seller's inflated `channelState` and an over-charge, and dynamic pricing (700 charged, next voucher 3700); the envelope and header; `FileChannelStorage` read by a second client with no temporary file left beside it. A tenth case pins the header bytes for a non-ASCII token name.
+
 ## [2.104.3] - 2026-10-18
 
 ### Changed
