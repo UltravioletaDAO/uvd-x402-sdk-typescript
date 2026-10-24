@@ -136,6 +136,11 @@
       "types": "./dist/providers/hedera/index.d.ts",
       "import": "./dist/providers/hedera/index.mjs",
       "require": "./dist/providers/hedera/index.js"
+    },
+    "./nano": {
+      "types": "./dist/providers/nano/index.d.ts",
+      "import": "./dist/providers/nano/index.mjs",
+      "require": "./dist/providers/nano/index.js"
     }
   },
   "typesVersions": {
@@ -184,6 +189,9 @@
       ],
       "hedera": [
         "./dist/providers/hedera/index.d.ts"
+      ],
+      "nano": [
+        "./dist/providers/nano/index.d.ts"
       ]
     }
   },

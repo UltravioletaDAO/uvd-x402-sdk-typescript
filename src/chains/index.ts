@@ -1118,6 +1118,40 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       enabled: true,
     },
   },
+
+  // ============================================================================
+  // NANO (1 network) - native XNO, verified locally from a confirmed send block
+  // ============================================================================
+
+  // Not settled by the facilitator: `enabled: false` keeps it out of the
+  // facilitator flows and the network counts. A server accepts it only through
+  // `localVerifiers.nano` (see `uvd-x402-sdk/nano`).
+  'nano:mainnet': {
+    chainId: 0, // Non-EVM
+    chainIdHex: '0x0',
+    name: 'nano:mainnet',
+    displayName: 'Nano',
+    networkType: 'nano',
+    rpcUrl: 'https://rpc.nano.to',
+    explorerUrl: 'https://nanolooker.com',
+    nativeCurrency: {
+      name: 'Nano',
+      symbol: 'XNO',
+      decimals: 30, // 1 XNO = 10^30 raw
+    },
+    // Native XNO, no token. Not a dollar: prices are set in raw by the operator.
+    usdc: {
+      address: 'XNO',
+      decimals: 30,
+      name: 'XNO',
+      version: '1',
+      usdPegged: false,
+    },
+    x402: {
+      facilitatorUrl: DEFAULT_FACILITATOR_URL,
+      enabled: false,
+    },
+  },
 };
 
 /**
@@ -1262,6 +1296,8 @@ export function getExplorerTxUrl(chainName: string, txHash: string): string | nu
       return `${chain.explorerUrl}/transaction/${txHash.replace(/^(0\.0\.\d+)@(\d+)\.(\d+)$/, '$1-$2-$3')}`;
     case 'xrpl':
       return `${chain.explorerUrl}/transactions/${txHash}`;
+    case 'nano':
+      return `${chain.explorerUrl}/block/${txHash}`;
     default:
       return null;
   }
@@ -1292,6 +1328,8 @@ export function getExplorerAddressUrl(chainName: string, address: string): strin
       return `${chain.explorerUrl}/account/${address}`;
     case 'xrpl':
       return `${chain.explorerUrl}/accounts/${address}`;
+    case 'nano':
+      return `${chain.explorerUrl}/account/${address}`;
     default:
       return null;
   }

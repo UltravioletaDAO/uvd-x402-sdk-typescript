@@ -11,6 +11,7 @@ export default defineConfig({
     'providers/sui/index': 'src/providers/sui/index.ts',
     'providers/hedera/index': 'src/providers/hedera/index.ts',
     'providers/xrpl/index': 'src/providers/xrpl/index.ts',
+    'providers/nano/index': 'src/providers/nano/index.ts',
     'utils/index': 'src/utils/index.ts',
     'react/index': 'src/react/index.tsx',
     'react/picker/index': 'src/react/picker.ts',

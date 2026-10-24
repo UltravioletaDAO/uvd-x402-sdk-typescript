@@ -5,6 +5,7 @@
  * payment headers for HTTP requests.
  */
 
+import { blake2b } from '@noble/hashes/blake2b';
 import type { X402HeaderName, PaymentHeaders } from '../types';
 import { X402Error } from '../types';
 
@@ -33,6 +34,51 @@ const NEAR_ADDRESS_REGEX = /^[a-z0-9._-]+$/;
  */
 const XRPL_ADDRESS_REGEX = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
 
+/** Nano's base32 alphabet (no 0, 2, l, v). */
+const NANO_ALPHABET = '13456789abcdefghijkmnopqrstuwxyz';
+const NANO_ADDRESS_REGEX = /^(nano|xrb)_[13][13456789abcdefghijkmnopqrstuwxyz]{59}$/;
+
+function nanoBase32(bytes: Uint8Array, bits: number): string {
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  let out = '';
+  for (let shift = bits - 5; shift >= 0; shift -= 5) out += NANO_ALPHABET[Number((value >> BigInt(shift)) & 31n)];
+  return out;
+}
+
+/** The 5-byte Blake2b checksum of a public key, as it is written in an address (bytes reversed). */
+function nanoChecksum(publicKey: Uint8Array): Uint8Array {
+  return blake2b(publicKey, { dkLen: 5 }).reverse();
+}
+
+/**
+ * Encode a 32-byte Ed25519 public key as a `nano_` account address:
+ * 52 characters of key (4 zero bits + 256 bits) and 8 of checksum.
+ */
+export function encodeNanoAddress(publicKey: Uint8Array, prefix: 'nano' | 'xrb' = 'nano'): string {
+  if (publicKey.length !== 32) throw new Error('A Nano public key is 32 bytes');
+  return `${prefix}_${nanoBase32(publicKey, 260)}${nanoBase32(nanoChecksum(publicKey), 40)}`;
+}
+
+/**
+ * The 32-byte public key of a `nano_` or `xrb_` address, or null when the
+ * address is malformed or its Blake2b checksum does not match.
+ */
+export function decodeNanoAddress(address: string): Uint8Array | null {
+  if (typeof address !== 'string' || !NANO_ADDRESS_REGEX.test(address)) return null;
+  const body = address.slice(address.indexOf('_') + 1);
+  let value = 0n;
+  for (const char of body.slice(0, 52)) value = (value << 5n) | BigInt(NANO_ALPHABET.indexOf(char));
+  const publicKey = new Uint8Array(32);
+  for (let i = 31; i >= 0; i--) { publicKey[i] = Number(value & 0xffn); value >>= 8n; }
+  return nanoBase32(nanoChecksum(publicKey), 40) === body.slice(52) ? publicKey : null;
+}
+
+/** Whether `address` is a well-formed `nano_`/`xrb_` address with a valid checksum. */
+export function isValidNanoAddress(address: string): boolean {
+  return decodeNanoAddress(address) !== null;
+}
+
 /**
  * Validate that a recipient address is present and valid
  *
@@ -47,7 +93,7 @@ const XRPL_ADDRESS_REGEX = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
  */
 export function validateRecipient(
   recipient: string | undefined | null,
-  networkType?: 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'xrpl' | 'hedera'
+  networkType?: 'evm' | 'svm' | 'solana' | 'stellar' | 'near' | 'xrpl' | 'hedera' | 'nano'
 ): asserts recipient is string {
   // Check for null, undefined, or empty
   if (!recipient) {
@@ -115,6 +161,16 @@ export function validateRecipient(
       case 'hedera':
         if (!/^0\.0\.[1-9][0-9]*$/.test(trimmed)) {
           throw new X402Error('Hedera recipient must be a native numeric account ID', 'INVALID_RECIPIENT');
+        }
+        break;
+
+      case 'nano':
+        if (!isValidNanoAddress(trimmed)) {
+          throw new X402Error(
+            `Invalid Nano recipient address: "${trimmed}". ` +
+            'Expected a nano_ (or xrb_) address with a valid checksum.',
+            'INVALID_RECIPIENT'
+          );
         }
         break;
 
