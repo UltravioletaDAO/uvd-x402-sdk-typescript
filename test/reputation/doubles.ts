@@ -36,6 +36,16 @@ import {
   type ReputationSigner,
 } from '../../src/reputation';
 
+/**
+ * `usedNonce[nonce]` of the v4 FeedbackDelegate, computed here and not
+ * imported, so the module's own formula is checked against something else
+ * (and pinned against Base in `submit.test.ts`).
+ */
+export function delegateNonceSlot(nonce: string): string {
+  const layout = '0x516978a8649c68efcdb528ed7ae5a061ff0ca5a183b9df4fd233934a8da02a00';
+  return ethers.keccak256(ethers.concat([ethers.zeroPadValue(nonce, 32), layout])).toLowerCase();
+}
+
 export const BASE_CHAIN_ID = 8453;
 export const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 export const REGISTRY = '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63';
@@ -115,8 +125,12 @@ export class FakeChain implements EvmRpc {
   readonly owners = new Map<string, string>();
   /** Account code: an EIP-7702 delegation is `0xef0100` + the delegate. */
   readonly code = new Map<string, string>();
-  /** The delegate's spent-nonce map, per account (under 7702 it lives in the rater's storage). */
-  readonly spentNonces = new Map<string, Set<string>>();
+  /**
+   * Account storage, `account -> slot -> 32-byte value`. Under EIP-7702 the
+   * delegate writes the rater's own storage, and it stays when the delegation
+   * is removed.
+   */
+  readonly storage = new Map<string, Map<string, string>>();
   readonly logs: Log[] = [];
   autoMine = true;
   baseFee = 5_000_000n;
@@ -163,12 +177,16 @@ export class FakeChain implements EvmRpc {
     this.minedNonce.set(address.toLowerCase(), this.nonceOf(address) + 1);
   }
 
-  /** A relay ran on `rater`'s account: delegated to `DELEGATE`, `nonce` spent. */
+  /** A relay ran on `rater`'s account: delegated to `DELEGATE`, `usedNonce[nonce]` set in its storage. */
   spend(rater: string, nonce: string): void {
     this.code.set(rater.toLowerCase(), '0xef0100' + DELEGATE.slice(2).toLowerCase());
-    const set = this.spentNonces.get(rater.toLowerCase()) ?? new Set<string>();
-    set.add(nonce.toLowerCase());
-    this.spentNonces.set(rater.toLowerCase(), set);
+    this.setStorage(rater, delegateNonceSlot(nonce), pad(1n));
+  }
+
+  setStorage(account: string, slot: string, value: string): void {
+    const cells = this.storage.get(account.toLowerCase()) ?? new Map<string, string>();
+    cells.set(slot.toLowerCase(), value);
+    this.storage.set(account.toLowerCase(), cells);
   }
 
   /** Mine `blocks` blocks; pending transactions go in the first. */
@@ -313,6 +331,8 @@ export class FakeChain implements EvmRpc {
       }
       case 'eth_getCode':
         return this.code.get(String(p[0]).toLowerCase()) ?? '0x';
+      case 'eth_getStorageAt':
+        return this.storage.get(String(p[0]).toLowerCase())?.get(String(p[1]).toLowerCase()) ?? pad(0n);
       case 'eth_getLogs': {
         const f = p[0] as { address: string; fromBlock: string; toBlock: string; topics: Array<string | null> };
         const from = Number(BigInt(f.fromBlock));
@@ -333,11 +353,6 @@ export class FakeChain implements EvmRpc {
         if (to === USDC.toLowerCase() && call.data.startsWith(ethers.id('balanceOf(address)').slice(0, 10))) {
           const owner = '0x' + call.data.slice(-40);
           return pad(this.usdcBalances.get(owner) ?? 10n ** 12n);
-        }
-        if (call.data.startsWith(ethers.id('nonceUsed(bytes32)').slice(0, 10))) {
-          if (!this.code.has(to)) return '0x';
-          const nonce = '0x' + call.data.slice(10).toLowerCase();
-          return pad(this.spentNonces.get(to)?.has(nonce) ? 1n : 0n);
         }
         if (to === IDENTITY.toLowerCase() && call.data.startsWith(ethers.id('ownerOf(uint256)').slice(0, 10))) {
           const agentId = BigInt('0x' + call.data.slice(10)).toString();

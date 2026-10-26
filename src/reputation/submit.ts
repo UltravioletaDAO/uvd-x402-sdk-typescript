@@ -15,11 +15,12 @@
  *
  * "Holds no matching rating" is not taken from the logs alone: a node behind
  * a balancer can answer `eth_getLogs` with a partial range and no error. Before
- * a row goes back to `paid`, the delegate's own spent-nonce map is read on the
- * rater's account (`nonceUsed(nonce)`) at a block past the deadline, where the
- * contract refuses the signature (`block.timestamp > deadline`). Spent: the
- * rating landed and the scan starts over from its first block. Unreadable:
- * the row waits. Only an unspent nonce sends the row back.
+ * a row goes back to `paid`, the delegate's `usedNonce[nonce]` cell is read
+ * from the rater's storage (`usedNonceSlot`) at a block past the deadline,
+ * where the contract refuses the signature (`block.timestamp > deadline`).
+ * Spent: the rating landed and the scan starts over from its first block (a
+ * day later, still unseen, the row goes to a human). Unreadable: the row
+ * waits. Only an unspent nonce sends the row back.
  *
  * One process never works on one row twice at once (a lock per outbox and
  * ref), and across processes the compare-and-sets decide.
@@ -330,26 +331,49 @@ async function tellBreaker(ctx: Context, resp: unknown): Promise<void> {
   if (failure && ctx.deps.governor) await ctx.deps.governor.recordFailure(failure);
 }
 
-const NONCE_USED = ethers.id('nonceUsed(bytes32)').slice(0, 10);
+/**
+ * The v4 FeedbackDelegate keeps its state in one ERC-7201 slot
+ * (`FeedbackDelegate.sol` `LAYOUT_SLOT`), and `usedNonce` is the first member
+ * of that struct.
+ */
+export const FEEDBACK_DELEGATE_LAYOUT_SLOT = '0x516978a8649c68efcdb528ed7ae5a061ff0ca5a183b9df4fd233934a8da02a00';
+
+/**
+ * The storage cell of `usedNonce[nonce]` on a rater's account:
+ * `keccak256(abi.encode(nonce, LAYOUT_SLOT))`. Checked against Base mainnet
+ * (`submit.test.ts`): it holds 1 exactly where the deployed delegate's
+ * `nonceUsed(nonce)` answers true.
+ */
+export function usedNonceSlot(nonce: string): string {
+  return ethers
+    .keccak256(ethers.AbiCoder.defaultAbiCoder().encode(['bytes32', 'uint256'], [nonce, FEEDBACK_DELEGATE_LAYOUT_SLOT]))
+    .toLowerCase();
+}
 
 /**
  * Was `nonce` spent on the rater's account, as of `block`? Read from the
- * delegate's storage, which under EIP-7702 is the rater's own (x402-rs
- * `relay.rs::nonce_already_used`). `false` also when the account has no code
- * at all: no relay can have run on it. `null` when it cannot be told (the
- * account runs some other code).
+ * STORAGE cell, not through `nonceUsed()`: under EIP-7702 the delegate's
+ * storage is the rater's own, and it outlives the delegation. A rater whose
+ * delegation was revoked (the emergency exit) has no code to call, yet the
+ * spent nonce is still there. `null` when the cell holds anything but 0 or 1.
  */
 async function nonceSpent(ctx: Context, rater: string, nonce: string, block: number): Promise<boolean | null> {
-  const tag = '0x' + block.toString(16);
-  const code = await rpcCall(ctx.deps.rpc, 'eth_getCode', [rater, tag]);
-  if (typeof code !== 'string') throw new ReputationError('rpc_failed', 'eth_getCode answered no code');
-  const lower = code.toLowerCase();
-  if (lower === '0x') return false;
-  if (lower !== '0xef0100' + ctx.chain.delegate.slice(2).toLowerCase()) return null;
-  const raw = await rpcCall(ctx.deps.rpc, 'eth_call', [{ to: rater, data: NONCE_USED + nonce.slice(2) }, tag]);
-  if (raw === '0x' + '0'.repeat(64)) return false;
-  if (raw === '0x' + '0'.repeat(63) + '1') return true;
+  const raw = await rpcCall(ctx.deps.rpc, 'eth_getStorageAt', [rater, usedNonceSlot(nonce), '0x' + block.toString(16)]);
+  const value = quantityOf(raw);
+  if (value === 0n) return false;
+  if (value === 1n) return true;
   return null;
+}
+
+/**
+ * A spent nonce whose rating the logs still do not show a day after the send
+ * goes to a human: the nonce may have been cancelled (`cancelNonce`), or the
+ * provider may not serve logs that old. It is never prepared again either way.
+ */
+export const LANDED_UNSEEN_LIMIT_SECS = 86_400;
+
+function unseenTooLong(ctx: Context, s: Submission, step: Scan): boolean {
+  return step.note === 'relay_landed_unseen' && ctx.now - s.submittedAt > LANDED_UNSEEN_LIMIT_SECS;
 }
 
 interface Scan {
@@ -432,6 +456,9 @@ async function reconcileSubmitted(ctx: Context, row: RatingRow): Promise<RatingR
             error: 'relay_expired',
             nextAttemptAt: ctx.now,
           });
+    }
+    if (unseenTooLong(ctx, s, step)) {
+      return move(ctx, row, 'submitted', { status: 'failed', error: 'relay_landed_unseen' });
     }
     return move(ctx, row, 'submitted', {
       submission: { ...s, scanCursor: step.cursor },
@@ -535,6 +562,9 @@ async function reconcileSubmitting(ctx: Context, row: RatingRow, mayResend: bool
     });
   }
   if (step.note) log(ctx.deps.logger, 'warn', `reputation: ${step.note}`, { ref: row.ref });
+  if (unseenTooLong(ctx, s, step)) {
+    return move(ctx, row, 'submitting', { status: 'failed', error: 'relay_landed_unseen' });
+  }
   const updated = await move(ctx, row, 'submitting', {
     submission: { ...s, scanCursor: step.cursor },
     ...(step.note ? { error: step.note } : {}),
@@ -581,6 +611,11 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
 
   const until = await blocked(ctx);
   if (until !== null) return move(ctx, current, 'paid', { error: 'breaker_open', nextAttemptAt: until });
+  // The other side of `authorization_in_flight`: a first rating's authorization
+  // is signed over the account nonce, which a payment still in flight will use.
+  if ((await deps.outbox.count({ statuses: ['paying'] })) > 0 && !(await raterDelegated(ctx))) {
+    return move(ctx, current, 'paid', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
+  }
 
   const params = paramsOf(current, feedback);
   const prepRequest: PrepareRelayFeedbackRequest = {
@@ -721,7 +756,6 @@ export interface ProcessDeps extends SubmitDeps {
 /** Payment errors that are final for the payment they were read about. */
 const PAYMENT_DEFINITIVE: ReadonlySet<string> = new Set([
   'payment_reverted',
-  'payment_nonce_consumed',
   'payment_transfer_missing',
   'payment_mismatch',
   'proof_expired',
@@ -847,16 +881,27 @@ async function tick(ref: string, deps: ProcessDeps): Promise<RatingRow | null> {
     if (!current) return null;
     log(deps.logger, 'warn', 'reputation: tick failed', { ref, status: current.status, code });
     // Only what the chain said about the payment THIS tick signed or resumed
-    // fails the row; a nonce that looks used by another transaction only after
-    // an hour of looking so (a lagging node answers that way too).
-    const definitive =
+    // fails the row.
+    const ours =
       current.status === 'paying' &&
       error instanceof ReputationError &&
-      PAYMENT_DEFINITIVE.has(error.code) &&
       mine.tx !== null &&
-      current.payment?.transactionHash === mine.tx &&
-      (error.code !== 'payment_nonce_consumed' || ctx.now - (current.startedAt ?? ctx.now) >= NONCE_CONSUMED_GRACE_SECS);
-    if (definitive) return move(ctx, current, 'paying', { status: 'failed', error: code });
+      current.payment?.transactionHash === mine.tx;
+    if (ours && code === 'payment_nonce_consumed') {
+      // A lagging node answers this way too: fail only after an hour of it,
+      // counted from the first time it was seen, not from the signature.
+      const since = current.consumedSince ?? ctx.now;
+      if (ctx.now - since >= NONCE_CONSUMED_GRACE_SECS) {
+        return move(ctx, current, 'paying', { status: 'failed', error: code });
+      }
+      return move(ctx, current, 'paying', {
+        consumedSince: since,
+        error: code,
+        attempts: current.attempts + 1,
+        nextAttemptAt: ctx.now + retryDelay(current.attempts + 1),
+      });
+    }
+    if (ours && PAYMENT_DEFINITIVE.has(code)) return move(ctx, current, 'paying', { status: 'failed', error: code });
     if (current.status === 'confirmed' || current.status === 'failed' || current.status === 'local_only') return current;
     return later(ctx, current, code);
   }

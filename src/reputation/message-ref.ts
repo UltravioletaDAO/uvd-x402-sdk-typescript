@@ -12,8 +12,8 @@
  *
  * Refused rather than guessed, because a collision here is a rating that
  * silently never happens: a `|` inside the namespace or a part (`("a|b", "c")`
- * and `("a", "b|c")` would be one ref), an empty part (a missing stream id
- * would merge every moment of every stream), a non-integer number, and a
+ * and `("a", "b|c")` would be one ref), an empty or blank part (a missing
+ * stream id would merge every moment of every stream), a non-integer number, and a
  * string with an unpaired surrogate (it has no UTF-8 encoding; Python refuses
  * to encode it, and `TextEncoder` would quietly turn it into U+FFFD).
  */
@@ -38,7 +38,7 @@ function partText(part: MessageRefPart, index: number): string {
       `messageRef part ${index} must be a string, a bigint or a safe integer`
     );
   }
-  if (text === '') throw new ReputationError('invalid_input', `messageRef part ${index} is empty`);
+  if (text.trim() === '') throw new ReputationError('invalid_input', `messageRef part ${index} is empty or blank`);
   if (text.includes(SEPARATOR)) {
     throw new ReputationError('invalid_input', `messageRef part ${index} contains "|"`);
   }
@@ -49,7 +49,7 @@ function partText(part: MessageRefPart, index: number): string {
 }
 
 export function messageRef(namespace: string, ...parts: MessageRefPart[]): string {
-  if (typeof namespace !== 'string' || namespace === '') {
+  if (typeof namespace !== 'string' || namespace.trim() === '') {
     throw new ReputationError('invalid_input', 'messageRef needs a non-empty namespace');
   }
   if (namespace.includes(SEPARATOR) || LONE_SURROGATE.test(namespace)) {

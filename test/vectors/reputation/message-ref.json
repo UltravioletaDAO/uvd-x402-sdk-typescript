@@ -72,6 +72,20 @@
       ]
     },
     {
+      "name": "a blank part",
+      "namespace": "ns",
+      "parts": [
+        "   "
+      ]
+    },
+    {
+      "name": "a blank namespace",
+      "namespace": "  ",
+      "parts": [
+        "a"
+      ]
+    },
+    {
       "name": "a fractional part",
       "namespace": "ns",
       "parts": [

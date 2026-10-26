@@ -26,7 +26,7 @@ const deps = {
   buildFeedback: (row) => publishEvidence(row),               // feedbackUri/feedbackHash, see below
 };
 await outbox.enqueue({ ref: messageRef('my-app:v1', streamId, messageId), network: 'base', subject: wallet, streamId, value: 90, amount: 1000, viewerId });
-for (;;) { for (const r of await outbox.due(Math.floor(Date.now() / 1000), 1)) await processRating(r.ref, deps); await sleep(5000); }
+for (;;) { for (const r of await outbox.due(Math.floor(Date.now() / 1000), 1)) await processRating(r.ref, deps); await new Promise((ok) => setTimeout(ok, 5000)); }
 ```
 
 `enqueue` only writes a row: whatever produced the moment never waits for the chain. One worker (one rater, one
@@ -75,16 +75,21 @@ async function publishEvidence(row) {
   `ownerOf(agentId)` must be the rated wallet. The owner is checked again before the prepare.
 - **One payment per rating, signed once, one at a time.** The signed transfer is stored (`paying`) before it is
   broadcast; a retry re-broadcasts the same bytes. No second payment starts while one is in flight, nor while a first
-  rating's EIP-7702 authorization (signed over the account nonce) has not landed. A transfer whose nonce another
-  transaction took (the node does not know ours, and the account nonce moved past it) fails the row for a human only
-  after an hour of looking that way; a node that serves the nonce before the receipt makes it look so for a while.
+  rating's EIP-7702 authorization (signed over the account nonce) has not landed; and a first rating is not prepared
+  while a payment is in flight. A transfer whose nonce another transaction took (the node does not know ours, and the
+  account nonce moved past it) fails the row for a human only after an hour of looking that way, counted from the
+  first time it was seen; a node that serves the nonce before the receipt makes it look so for a while.
 - **One prepare per signed rating.** Once a row is `submitting`, a failed send, a timeout, a 503 or a 200 without a
   transaction hash are all answered by reading `NewFeedback` from the registry. Within the deadline the same signed
   submission may be re-sent (same nonce: at most one lands). The logs are not the last word, because a lagging node
-  can answer them partially without an error: past the deadline, the delegate's spent-nonce map is read on the
-  rater's account (`nonceUsed(nonce)`, at a block where the contract refuses the signature). Unspent: the row goes
-  back to `paid` for a new prepare. Spent: the rating landed, and the logs are read again from the first block.
-  Unreadable: the row waits. The stored feedback is never replaced, so what is signed is what is sent and looked for.
+  can answer them partially without an error: past the deadline, the delegate's `usedNonce[nonce]` cell is read
+  straight from the rater's storage (`eth_getStorageAt`, at a block where the contract refuses the signature; the
+  cell is checked against Base mainnet). Storage, not a call to `nonceUsed`, because under EIP-7702 it outlives the
+  delegation: a rater whose delegation was revoked still shows its spent nonces. 0: the row goes back to `paid` for a
+  new prepare. 1: the rating landed and the logs are read again from the first block; if they still do not show it a
+  day after the send (a nonce cancelled by hand, a provider without old logs), the row fails for a human, never to a
+  new prepare. Anything else: the row waits. The stored feedback is never replaced, so what is signed is what is sent
+  and looked for.
 - **Caps are parameters.** `ReputationCaps` has eight, and the module has no default for any of them. The six counts
   are per rated WALLET (two logins sharing a wallet share its caps), over admitted rows:
 

@@ -13,8 +13,9 @@
  *   Persist it there. A retry re-broadcasts the SAME bytes and never signs a
  *   second transfer; if `onSigned` throws, nothing is sent.
  * - A transaction that never mines is not replaced here. When the account's
- *   nonce moves past it with no receipt, it is `payment_nonce_consumed`, for
- *   a human, not a retry.
+ *   nonce moves past it and the node does not know it, it is
+ *   `payment_nonce_consumed`; `processRating` fails the row for a human only
+ *   after an hour of seeing that (a lagging node shows it for a while too).
  * - Gas has a ceiling (`maxFeePerGasWei`, `maxGasLimit`), the wallet's ETH a
  *   floor (`minNativeBalanceWei`), and its USDC must cover the payment: past
  *   any of them, nothing is signed.

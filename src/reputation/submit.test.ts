@@ -6,6 +6,7 @@
  */
 import { ethers } from 'ethers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FEEDBACK_DELEGATE_LAYOUT_SLOT, usedNonceSlot } from './submit';
 import {
   NEW_FEEDBACK_TOPIC,
   REPUTATION_CHAINS,
@@ -17,7 +18,7 @@ import {
   submitWithReconcile,
   type RatingRow,
 } from './index';
-import { REGISTRY, seededSigner, world, type World } from '../../test/reputation/doubles';
+import { REGISTRY, delegateNonceSlot, seededSigner, world, type World } from '../../test/reputation/doubles';
 
 const BASE = REPUTATION_CHAINS[0];
 const RATER = '0x' + '12'.repeat(20);
@@ -85,6 +86,23 @@ describe('matchFeedbackLog', () => {
     ['another hash', {}, [4, 90, 0, 't1', 't2', 'e', 'u', '0x' + '44'.repeat(32)]],
   ])('ignores %s', (_name, overrides, data) => {
     expect(matchFeedbackLog(log(overrides, data), BASE, RATER, PARAMS)).toBeNull();
+  });
+});
+
+describe('usedNonceSlot', () => {
+  // Read from Base mainnet on 2026-10-26 (eth_getStorageAt / eth_call at the head, publicnode):
+  // the FeedbackRelayed of tx 0x7b5dc7bd…eebc055 in block 52997505, on an account delegated to
+  // the v4 delegate 0x260D3D02…6163. The cell computed here held 1, the delegate's own
+  // nonceUsed(nonce) answered true, and the cell of an unused nonce held 0.
+  it('is the cell the deployed v4 delegate keeps usedNonce[nonce] in', () => {
+    const nonce = '0xa24a973ac6aa860378b9f6b1144d2f357f84e3bb49363e48deee6d5c816893bf';
+    expect(usedNonceSlot(nonce)).toBe('0x3a289601629aa716405ad8bb5e5d34209aec021fd115e38e74435062d96872ac');
+    expect(usedNonceSlot(nonce)).toBe(delegateNonceSlot(nonce));
+    // ERC-7201, as FeedbackDelegate.sol derives it:
+    // keccak256(abi.encode(uint256(keccak256("execution.market.storage.FeedbackDelegate")) - 1)) & ~0xff
+    const inner = BigInt(ethers.id('execution.market.storage.FeedbackDelegate')) - 1n;
+    const outer = BigInt(ethers.keccak256(ethers.toBeHex(inner, 32))) & ~0xffn;
+    expect(ethers.toBeHex(outer, 32)).toBe(FEEDBACK_DELEGATE_LAYOUT_SLOT);
   });
 });
 

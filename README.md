@@ -723,7 +723,7 @@ await outbox.enqueue({ ref, network: 'base', subject: wallet, streamId, value: 9
 await processRating(ref, { outbox, governor, client: new Erc8004Client(), rpc, signer, resolveAgent, buildFeedback });
 ```
 
-The module never reads a key (it signs through the `signer` you pass), never pays a wallet whose agent it has not resolved and checked, refuses to sign any prepare that is not the exact rating asked for, stores the signed payment before broadcasting it and the signed rating before sending it, and once a rating is signed it only reads the chain until the deadline, and the delegate's own spent-nonce record, prove it did not land.
+The module never reads a key (it signs through the `signer` you pass), never pays a wallet whose agent it has not resolved and checked, refuses to sign any prepare that is not the exact rating asked for, stores the signed payment before broadcasting it and the signed rating before sending it, and once a rating is signed it only reads the chain until the deadline, and the delegate's own spent-nonce cell in the rater's storage, prove it did not land.
 
 ## Multi-Stablecoin (EVM)
 

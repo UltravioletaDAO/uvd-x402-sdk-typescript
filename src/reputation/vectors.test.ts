@@ -34,7 +34,7 @@ import {
 const DIR = resolve(__dirname, '..', '..', 'test', 'vectors', 'reputation');
 
 const VECTOR_SHA256: Record<string, string> = {
-  'message-ref.json': 'f76b8820253dc3a472738e21a7bbebf3c392ee23db6a7725a0da2e0398474305',
+  'message-ref.json': '80f09add2b007d44f9e3624e7e33f282478d822b01cffa775ef40d337dea619b',
   'relayed-feedback.json': '78c598b39fa48033ac8b0dcd071b3c73f09da3afd4f47688237f47d9ad439d13',
   'payment-hash.json': 'd4f4d0f980aad0d60172a0f4352c01f77b4b3079394e71c70a0b19db1e5176d7',
   'evidence.json': '51dc5a6c102f767819de7eb46acb7dfcb5c35f87ba86a7ea33a5cfe1ad51fab2',

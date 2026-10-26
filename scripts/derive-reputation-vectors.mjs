@@ -283,6 +283,8 @@ function messageRefs() {
       { name: '| in the namespace', namespace: 'a|b', parts: ['c'] },
       { name: '| in a part', namespace: 'ns', parts: ['a|b'] },
       { name: 'an empty part', namespace: 'ns', parts: ['s', ''] },
+      { name: 'a blank part', namespace: 'ns', parts: ['   '] },
+      { name: 'a blank namespace', namespace: '  ', parts: ['a'] },
       { name: 'a fractional part', namespace: 'ns', parts: [1.5] },
     ],
   };

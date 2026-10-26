@@ -106,6 +106,8 @@ export interface RatingRow {
   /** Last error code, never a message. */
   error: string | null;
   payment: SignedPayment | null;
+  /** First time the payment's nonce looked taken by another transaction (unix seconds). */
+  consumedSince: number | null;
   proof: ProofOfPayment | null;
   feedback: FeedbackInput | null;
   submission: Submission | null;
@@ -142,6 +144,7 @@ export type RatingPatch = Partial<
     | 'startedAt'
     | 'error'
     | 'payment'
+    | 'consumedSince'
     | 'proof'
     | 'feedback'
     | 'submission'
@@ -211,6 +214,7 @@ const PATCH_KEYS = new Set<string>([
   'startedAt',
   'error',
   'payment',
+  'consumedSince',
   'proof',
   'feedback',
   'submission',
@@ -281,6 +285,7 @@ export function newRow(rating: NewRating, now: number): RatingRow {
     updatedAt: now,
     error: null,
     payment: null,
+    consumedSince: null,
     proof: null,
     feedback: null,
     submission: null,
