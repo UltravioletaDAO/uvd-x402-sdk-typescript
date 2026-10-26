@@ -198,6 +198,39 @@ describe('processRating: idempotency', () => {
     expect(w.facilitator.prepares).toBe(2);
     expect(row.submission?.nonce).toBe(b?.submission?.nonce);
   });
+
+  it('a worker whose paid row was written while it prepared sends nothing: the version moved', async () => {
+    const ref = await enqueue(1);
+    // Hold the row at `paid`: the first prepare answers 503.
+    w.facilitator.queue({ route: 'prepare', status: 503, body: { success: false, error: 'busy', reason: 'lease_busy' } });
+    await processRating(ref, w.deps);
+    expect((await w.outbox.get(ref))?.status).toBe('paid');
+    w.chain.advanceTime(200);
+    let written = false;
+    const otherProcess: RatingOutbox = {
+      enqueue: (r) => w.outbox.enqueue(r),
+      get: (r) => w.outbox.get(r),
+      due: (now, limit) => w.outbox.due(now, limit),
+      count: (filter) => w.outbox.count(filter),
+      forget: (viewer) => w.outbox.forget(viewer),
+      getState: (key) => w.outbox.getState(key),
+      setState: (key, value) => w.outbox.setState(key, value),
+      async transition(r, from, patch, ...rest) {
+        if (!written && from === 'paid' && patch.status === 'submitting') {
+          written = true;
+          // Another worker writes the row (same status) between the read and this write.
+          await w.outbox.transition(r, 'paid', { error: 'other_worker' });
+        }
+        return w.outbox.transition(r, from, patch, ...rest);
+      },
+    };
+    const after = await processRating(ref, { ...w.deps, outbox: otherProcess });
+    expect(written).toBe(true);
+    expect(after?.status).toBe('paid');
+    expect(w.facilitator.submits).toBe(0);
+    expect((await drive(ref)).status).toBe('confirmed');
+    expect(w.facilitator.landed).toHaveLength(1);
+  });
 });
 
 describe('processRating: a restart in the middle', () => {
