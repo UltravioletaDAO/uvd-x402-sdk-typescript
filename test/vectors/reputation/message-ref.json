@@ -1,0 +1,82 @@
+{
+  "schema": "uvd-x402.reputation.vectors.message-ref/v1",
+  "rule": "sha256(utf8(namespace + \"|\" + \"|\".join(parts))) as 64 lowercase hex digits; an integer part is written in decimal",
+  "cases": [
+    {
+      "namespace": "credits-roll:v1",
+      "parts": [
+        "stream-42",
+        "msg-0001"
+      ],
+      "ref": "33c09cd5fe7c9d70f12d98e7b21969da762a5d5e8b89ddf974006ecb4506f851"
+    },
+    {
+      "namespace": "karma-hello:v1",
+      "parts": [
+        "0xultravioleta",
+        "some_viewer",
+        "2026-10-26T18:00:00Z",
+        "msg"
+      ],
+      "ref": "57d33aba0d805ef92043a10b6808de0a19994eb24cd78cd9c64b0aee8c0baa75"
+    },
+    {
+      "namespace": "ns",
+      "parts": [
+        42,
+        "x"
+      ],
+      "ref": "71e3995e469862ed84b0e7d2eff54abeaa70791fbe21ad093f95aabffbf6e81d"
+    },
+    {
+      "namespace": "ns",
+      "parts": [
+        "créditos 🎬"
+      ],
+      "ref": "1712bf29f506d4961bdbc8b92274f0ac366c2854f8628c78e060e5771005c936"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty namespace",
+      "namespace": "",
+      "parts": [
+        "a"
+      ]
+    },
+    {
+      "name": "no parts",
+      "namespace": "ns",
+      "parts": []
+    },
+    {
+      "name": "| in the namespace",
+      "namespace": "a|b",
+      "parts": [
+        "c"
+      ]
+    },
+    {
+      "name": "| in a part",
+      "namespace": "ns",
+      "parts": [
+        "a|b"
+      ]
+    },
+    {
+      "name": "an empty part",
+      "namespace": "ns",
+      "parts": [
+        "s",
+        ""
+      ]
+    },
+    {
+      "name": "a fractional part",
+      "namespace": "ns",
+      "parts": [
+        1.5
+      ]
+    }
+  ]
+}

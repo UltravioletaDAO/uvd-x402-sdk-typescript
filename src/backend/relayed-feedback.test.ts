@@ -409,3 +409,35 @@ describe('submitRelayedFeedback', () => {
     expect(result.error).toContain('400');
   });
 });
+
+describe('a prepare refusal says whether to wait', () => {
+  const request = {
+    x402Version: 1 as const,
+    network: 'base' as const,
+    feedback: { agentId: 1, value: 1, rater: '0x0000000000000000000000000000000000000001' },
+  };
+
+  it('a 429 carries its status, retryable and the clamped Retry-After; the error text is unchanged', async () => {
+    const body = { success: false, error: 'slow down', code: 'erc8004_daily_write_limit' };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(body), { status: 429, headers: { 'Retry-After': '3600' } }))
+    );
+    const result = await new Erc8004Client().prepareRelayedFeedback(request);
+    expect(result).toMatchObject({ success: false, status: 429, retryable: true, safeToReplay: true, retryAfterSeconds: 15 });
+    expect(result.error).toBe(`Facilitator error: 429 - ${JSON.stringify(body)}`);
+  });
+
+  it('a 400 is not retryable', async () => {
+    respondWith(400, { success: false, error: 'no FeedbackDelegate is deployed there yet' });
+    const result = await new Erc8004Client().prepareRelayedFeedback(request);
+    expect(result).toMatchObject({ success: false, status: 400, retryable: false, safeToReplay: false });
+  });
+
+  it('no answer at all may be asked again: a prepare writes nothing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('fetch failed'))));
+    const result = await new Erc8004Client().prepareRelayedFeedback(request);
+    expect(result).toMatchObject({ success: false, retryable: true, error: 'fetch failed' });
+    expect(result.status).toBeUndefined();
+  });
+});

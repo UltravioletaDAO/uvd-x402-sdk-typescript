@@ -5225,7 +5225,7 @@ export interface PrepareRelayFeedbackRequest {
  * Everything the rater has to sign so the CHAIN records them as the author
  * while the facilitator pays the gas.
  */
-export interface PrepareRelayFeedbackResponse {
+export interface PrepareRelayFeedbackResponse extends FacilitatorFailureFields {
   success: boolean;
   /** The `FeedbackDelegate` the rater's EOA must be delegated to */
   delegate?: string;
@@ -6403,25 +6403,30 @@ export class Erc8004Client {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        const errorText = await response.text();
+        // `error` keeps its historical text; the fields beside it let a
+        // caller tell a 429 or a 503 (wait) from a 400 (this rating is wrong).
+        const info = await readFacilitatorError(response);
         return {
           success: false,
           delegated: false,
           chainId: 0,
-          error: `Facilitator error: ${response.status} - ${errorText}`,
+          error: info.error,
           network: request.network,
+          ...failureFields(info),
         };
       }
 
       return refuseInexactRelayTypedData(await response.json(), request.network);
     } catch (error) {
       clearTimeout(timeoutId);
+      // A prepare writes nothing, so one that never answered may be asked again.
       return {
         success: false,
         delegated: false,
         chainId: 0,
         error: error instanceof Error ? error.message : 'Unknown error',
         network: request.network,
+        retryable: true,
       };
     }
   }
