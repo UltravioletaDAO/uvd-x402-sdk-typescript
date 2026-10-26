@@ -117,6 +117,12 @@ export interface RatingRow {
   forgotten: boolean;
   /** The program's own local data for the row (JSON). Dropped by `forget`. */
   payload: Record<string, unknown> | null;
+  /**
+   * Bumped by every write. A compare-and-set on the status alone is open to
+   * ABA (`submitted(n1) -> paid -> submitted(n2)` looks unchanged to a worker
+   * that read `n1`); on the version it is not.
+   */
+  version: number;
 }
 
 export interface NewRating {
@@ -182,11 +188,12 @@ export interface RatingOutbox {
   /** Active rows due at `now`: in-flight payments first, then submissions, then new work. */
   due(now: number, limit: number): Promise<RatingRow[]>;
   /**
-   * Compare-and-set: apply `patch` only if the row is in `from`. Returns the
-   * new row, or `null` when it was not (another worker moved it). Throws
-   * `invalid_transition` for a move the state machine forbids.
+   * Compare-and-set: apply `patch` only if the row is in `from` and, when
+   * `expectVersion` is given, still at that version (nobody wrote it since it
+   * was read). Returns the new row, or `null` when it was not (another worker
+   * moved it). Throws `invalid_transition` for a move the state machine forbids.
    */
-  transition(ref: string, from: RatingStatus, patch: RatingPatch): Promise<RatingRow | null>;
+  transition(ref: string, from: RatingStatus, patch: RatingPatch, expectVersion?: number): Promise<RatingRow | null>;
   count(filter: CountFilter): Promise<number>;
   /** `!forgetme`: drop everything local about `viewerId`. See {@link forgetRow}. */
   forget(viewerId: string): Promise<ForgetReport>;
@@ -294,20 +301,25 @@ export function newRow(rating: NewRating, now: number): RatingRow {
     confirmedAt: null,
     forgotten: false,
     payload,
+    version: 0,
   };
 }
 
 /**
- * The state machine. `null` when `row` is not in `from` (the compare-and-set
- * lost); throws `invalid_transition` for a move that is never allowed.
+ * The state machine. `null` when `row` is not in `from`, or not at
+ * `expectVersion` when one is given (the compare-and-set lost); throws
+ * `invalid_transition` for a move that is never allowed. Every write bumps
+ * the version.
  */
 export function applyTransition(
   row: RatingRow,
   from: RatingStatus,
   patch: RatingPatch,
-  now: number
+  now: number,
+  expectVersion?: number
 ): RatingRow | null {
   if (row.status !== from) return null;
+  if (expectVersion !== undefined && row.version !== expectVersion) return null;
   if (!isRecord(patch)) invalid('a patch must be an object');
   for (const key of Object.keys(patch)) {
     if (!PATCH_KEYS.has(key)) invalid(`a transition cannot write ${key}`);
@@ -315,7 +327,7 @@ export function applyTransition(
   const to = patch.status ?? from;
   if (!ALLOWED[from].includes(to)) invalid(`${from} -> ${to} is not allowed`);
 
-  const next: RatingRow = { ...row, ...patch, status: to, updatedAt: now };
+  const next: RatingRow = { ...row, ...patch, status: to, updatedAt: now, version: row.version + 1 };
 
   if (row.payment !== null && 'payment' in patch && !samePayment(row.payment, patch.payment)) {
     invalid('a signed payment is never replaced');
@@ -382,7 +394,7 @@ export function applyTransition(
  */
 export function forgetRow(row: RatingRow, now: number): 'delete' | RatingRow {
   if (row.status === 'queued') return 'delete';
-  const scrubbed: RatingRow = { ...row, viewerId: null, payload: null, forgotten: true, updatedAt: now };
+  const scrubbed: RatingRow = { ...row, viewerId: null, payload: null, forgotten: true, updatedAt: now, version: row.version + 1 };
   if (row.status === 'paid') {
     scrubbed.status = 'local_only';
     scrubbed.error = 'forgotten';
@@ -454,10 +466,10 @@ export class MemoryRatingOutbox implements RatingOutbox {
       .map(clone);
   }
 
-  async transition(ref: string, from: RatingStatus, patch: RatingPatch): Promise<RatingRow | null> {
+  async transition(ref: string, from: RatingStatus, patch: RatingPatch, expectVersion?: number): Promise<RatingRow | null> {
     const row = this.rows.get(ref);
     if (!row) throw new ReputationError('row_missing', 'no outbox row has this ref');
-    const next = applyTransition(row, from, clone(patch), this.now());
+    const next = applyTransition(row, from, clone(patch), this.now(), expectVersion);
     if (next === null) return null;
     this.rows.set(ref, next);
     return clone(next);

@@ -166,11 +166,13 @@ export class SqliteRatingOutbox implements RatingOutbox {
     return rows.map((r) => JSON.parse(r.row) as RatingRow);
   }
 
-  async transition(ref: string, from: RatingStatus, patch: RatingPatch): Promise<RatingRow | null> {
+  async transition(ref: string, from: RatingStatus, patch: RatingPatch, expectVersion?: number): Promise<RatingRow | null> {
+    // BEGIN IMMEDIATE: the row read here is the latest, so the status and
+    // version applyTransition compares are the compare-and-set itself.
     const run = this.db.transaction((): RatingRow | null => {
       const row = this.read(ref);
       if (!row) throw new ReputationError('row_missing', 'no outbox row has this ref');
-      const next = applyTransition(row, from, JSON.parse(JSON.stringify(patch)) as RatingPatch, this.now());
+      const next = applyTransition(row, from, JSON.parse(JSON.stringify(patch)) as RatingPatch, this.now(), expectVersion);
       if (next === null) return null;
       return this.write(next, from) ? next : null;
     });

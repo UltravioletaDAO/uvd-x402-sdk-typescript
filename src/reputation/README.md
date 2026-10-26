@@ -96,8 +96,8 @@ committed to; it is then searched for everywhere else.
   delegation: a rater whose delegation was revoked still shows its spent nonces. 0: the row goes back to `paid` for a
   new prepare. 1: the rating landed and the logs are read again from the first block; if they still do not show it a
   day after the send (a nonce cancelled by hand, a provider without old logs), the row fails for a human, never to a
-  new prepare. Anything else: the row waits. The stored feedback is never replaced, so what is signed is what is sent
-  and looked for.
+  new prepare. Anything else: the row waits, and a day after the send it too fails for a human. The stored feedback is
+  never replaced, so what is signed is what is sent and looked for.
 - **Caps are parameters.** `ReputationCaps` has eight, and the module has no default for any of them. The six counts
   are per rated WALLET (two logins sharing a wallet share its caps), over admitted rows:
 
@@ -127,9 +127,11 @@ queued -> paying(signed tx) -> paid(proof) -> submitting(nonce, deadline, signat
 any active state -> failed(reason)      queued | paid -> local_only(reason)
 ```
 
-Every write is a compare-and-set on the status; the rules live in `applyTransition`, which both adapters call. Two
-workers racing on one row: the second loses the compare-and-set and sends nothing. Another store (Mongo, Postgres)
-implements `RatingOutbox` and calls `applyTransition` and `forgetRow` the same way.
+Every write is a compare-and-set on the status and on the row's `version` the worker read (every write bumps it): a
+row that went `submitted -> paid -> submitted` meanwhile has the same status but is not the same row. The rules live
+in `applyTransition`, which both adapters call. Two workers racing on one row: the second loses the compare-and-set and
+sends nothing. Another store (Mongo, Postgres) implements `RatingOutbox` and calls `applyTransition` and `forgetRow`
+the same way, reading the row and writing it back atomically.
 
 `outbox.forget(viewerId)` (`!forgetme`): a `queued` row is deleted; a `paid` one ends `local_only` and is never
 submitted; a row still settling (`paying`, `submitting`, `submitted`) finishes without the viewer's data; every

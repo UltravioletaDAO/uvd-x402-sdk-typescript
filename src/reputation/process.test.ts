@@ -12,7 +12,7 @@
 import { ethers } from 'ethers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Erc8004Client } from '../backend';
-import { Governor, messageRef, processRating, type RatingRow } from './index';
+import { Governor, messageRef, processRating, type RatingOutbox, type RatingRow } from './index';
 import {
   FACILITATOR,
   OPEN_CAPS,
@@ -156,6 +156,47 @@ describe('processRating: idempotency', () => {
     expect(w.facilitator.submits).toBe(1);
     expect((await drive(ref)).status).toBe('confirmed');
     expect(w.facilitator.landed).toHaveLength(1);
+  });
+
+  it('a stale worker never clears a newer submission: submitted(n1) -> paid -> submitted(n2) is not the row it read (ABA)', async () => {
+    const ref = await enqueue(1);
+    w.facilitator.queue({ route: 'submit', phantom: true });
+    await processRating(ref, w.deps);
+    expect((await w.outbox.get(ref))?.status).toBe('submitted');
+    w.chain.advanceTime(1200);
+    // Worker A, another process on the same store, read submitted(n1) and proved
+    // n1 absent. Before its write lands, worker B does the same, prepares n2,
+    // and n2 lands: the row is `submitted` again, with another submission.
+    let interleaved = false;
+    let b: RatingRow | null = null;
+    const otherProcess: RatingOutbox = {
+      enqueue: (r) => w.outbox.enqueue(r),
+      get: (r) => w.outbox.get(r),
+      due: (now, limit) => w.outbox.due(now, limit),
+      count: (filter) => w.outbox.count(filter),
+      forget: (viewer) => w.outbox.forget(viewer),
+      getState: (key) => w.outbox.getState(key),
+      setState: (key, value) => w.outbox.setState(key, value),
+      async transition(r, from, patch, ...rest) {
+        if (!interleaved && from === 'submitted' && patch.status === 'paid') {
+          interleaved = true;
+          for (let i = 0; i < 10 && b?.status !== 'submitted'; i++) {
+            b = await processRating(r, w.deps);
+            w.chain.advanceTime(16);
+          }
+        }
+        return w.outbox.transition(r, from, patch, ...rest);
+      },
+    };
+    await processRating(ref, { ...w.deps, outbox: otherProcess });
+    expect(interleaved).toBe(true);
+    expect(b?.status).toBe('submitted');
+    expect(w.facilitator.landed).toHaveLength(1);
+    const row = await drive(ref);
+    expect(row.status).toBe('confirmed');
+    expect(w.facilitator.landed).toHaveLength(1);
+    expect(w.facilitator.prepares).toBe(2);
+    expect(row.submission?.nonce).toBe(b?.submission?.nonce);
   });
 });
 
@@ -346,7 +387,7 @@ describe('processRating: the logs are not the only witness', () => {
     expect(w.facilitator.landed).toHaveLength(1);
   });
 
-  it('a nonce cell holding neither 0 nor 1: the row waits, it is never prepared again', async () => {
+  it('a nonce cell holding neither 0 nor 1: the row waits, then goes to a human after a day, never to a new prepare', async () => {
     const ref = await enqueue(1);
     w.facilitator.queue({ route: 'submit', phantom: true });
     await processRating(ref, w.deps);
@@ -359,6 +400,10 @@ describe('processRating: the logs are not the only witness', () => {
     }
     const row = await w.outbox.get(ref);
     expect(row).toMatchObject({ status: 'submitted', error: 'relay_outcome_unknown' });
+    expect(w.facilitator.prepares).toBe(1);
+    // Waiting for ever would also hold every payment behind authorization_in_flight.
+    w.chain.advanceTime(86_400);
+    expect(await drive(ref)).toMatchObject({ status: 'failed', error: 'relay_outcome_unknown' });
     expect(w.facilitator.prepares).toBe(1);
   });
 

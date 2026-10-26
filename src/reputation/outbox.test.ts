@@ -154,6 +154,27 @@ describe.each(adapters)('%s', (_name, make) => {
     expect((await o.get(rating(1).ref))?.payment?.nonce).toBe(0);
   });
 
+  it('bumps the version on every write, and a compare-and-set on a version since written loses (ABA)', async () => {
+    const o = make();
+    await o.enqueue(rating(1));
+    const ref = rating(1).ref;
+    expect((await o.get(ref))?.version).toBe(0);
+    const read = await walk(o, ref, 'submitting');
+    // Another worker takes the row back to paid and signs again: `submitting` once more.
+    await o.transition(ref, 'submitting', { status: 'paid', submission: null, transaction: null }, read.version);
+    const again = await o.transition(ref, 'paid', { status: 'submitting', submission: { ...SUBMISSION, nonce: '0x' + '77'.repeat(32) } });
+    expect(again?.version).toBe(read.version + 2);
+    // The first worker's write, made on what it read: same status, another row.
+    expect(await o.transition(ref, 'submitting', { status: 'paid', submission: null, transaction: null }, read.version)).toBeNull();
+    expect((await o.get(ref))?.submission?.nonce).toBe('0x' + '77'.repeat(32));
+    // On the current version it applies, and without one only the status is compared.
+    expect((await o.transition(ref, 'submitting', { error: 'x' }, again!.version))?.version).toBe(again!.version + 1);
+    expect((await o.transition(ref, 'submitting', { error: 'y' }))?.version).toBe(again!.version + 2);
+    // A forget is a write too.
+    await o.forget('viewer-1');
+    expect((await o.get(ref))?.version).toBe(again!.version + 3);
+  });
+
   it.each<[string, RatingRow['status'], RatingRow['status'], Record<string, unknown>]>([
     ['back to queued from paying', 'paying', 'paying', { status: 'queued' }],
     ['paying without a payment', 'queued', 'queued', { status: 'paying' }],

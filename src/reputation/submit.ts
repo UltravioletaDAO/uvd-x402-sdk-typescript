@@ -306,7 +306,9 @@ async function move(
   from: RatingStatus,
   patch: Parameters<RatingOutbox['transition']>[2]
 ): Promise<RatingRow> {
-  const next = await ctx.deps.outbox.transition(row.ref, from, patch);
+  // On the version this worker read: a row that went elsewhere and came back
+  // to `from` meanwhile (ABA) is not the row this decision was made on.
+  const next = await ctx.deps.outbox.transition(row.ref, from, patch, row.version);
   if (next) return next;
   const current = await ctx.deps.outbox.get(row.ref);
   if (!current) throw new ReputationError('row_missing', 'the row disappeared');
@@ -368,12 +370,18 @@ async function nonceSpent(ctx: Context, rater: string, nonce: string, block: num
 /**
  * A spent nonce whose rating the logs still do not show a day after the send
  * goes to a human: the nonce may have been cancelled (`cancelNonce`), or the
- * provider may not serve logs that old. It is never prepared again either way.
+ * provider may not serve logs that old. So does a nonce cell that still reads
+ * neither 0 nor 1 (`relay_outcome_unknown`): waiting on it for ever would also
+ * hold every payment behind `authorization_in_flight`. It is never prepared
+ * again either way.
  */
 export const LANDED_UNSEEN_LIMIT_SECS = 86_400;
 
 function unseenTooLong(ctx: Context, s: Submission, step: Scan): boolean {
-  return step.note === 'relay_landed_unseen' && ctx.now - s.submittedAt > LANDED_UNSEEN_LIMIT_SECS;
+  return (
+    (step.note === 'relay_landed_unseen' || step.note === 'relay_outcome_unknown') &&
+    ctx.now - s.submittedAt > LANDED_UNSEEN_LIMIT_SECS
+  );
 }
 
 interface Scan {
@@ -458,7 +466,7 @@ async function reconcileSubmitted(ctx: Context, row: RatingRow): Promise<RatingR
           });
     }
     if (unseenTooLong(ctx, s, step)) {
-      return move(ctx, row, 'submitted', { status: 'failed', error: 'relay_landed_unseen' });
+      return move(ctx, row, 'submitted', { status: 'failed', error: step.note });
     }
     return move(ctx, row, 'submitted', {
       submission: { ...s, scanCursor: step.cursor },
@@ -563,7 +571,7 @@ async function reconcileSubmitting(ctx: Context, row: RatingRow, mayResend: bool
   }
   if (step.note) log(ctx.deps.logger, 'warn', `reputation: ${step.note}`, { ref: row.ref });
   if (unseenTooLong(ctx, s, step)) {
-    return move(ctx, row, 'submitting', { status: 'failed', error: 'relay_landed_unseen' });
+    return move(ctx, row, 'submitting', { status: 'failed', error: step.note });
   }
   const updated = await move(ctx, row, 'submitting', {
     submission: { ...s, scanCursor: step.cursor },
@@ -663,13 +671,18 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
     sends: 0,
     lastOutcome: null,
   };
-  const moved = await deps.outbox.transition(current.ref, 'paid', {
-    status: 'submitting',
-    submission,
-    attempts: current.attempts + 1,
-    error: null,
-    nextAttemptAt: ctx.now,
-  });
+  const moved = await deps.outbox.transition(
+    current.ref,
+    'paid',
+    {
+      status: 'submitting',
+      submission,
+      attempts: current.attempts + 1,
+      error: null,
+      nextAttemptAt: ctx.now,
+    },
+    current.version
+  );
   if (!moved) {
     // Another worker moved the row first. This signature is never sent.
     log(deps.logger, 'warn', 'reputation: lost the race to submit; sending nothing', { ref: current.ref });
