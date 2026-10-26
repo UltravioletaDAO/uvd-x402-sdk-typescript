@@ -69,4 +69,25 @@ describe('messageRef', () => {
   ])('refuses %s', (_name, call) => {
     expect(call).toThrow(ReputationError);
   });
+
+  // What `[c for c in range(sys.maxunicode + 1) if chr(c).isspace()]` lists in Python 3.11.
+  const PYTHON_SPACES = [
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003,
+    0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+  ];
+
+  it.each(PYTHON_SPACES.map((c) => [c.toString(16).padStart(4, '0'), c]))(
+    'a part or a namespace of U+%s only is blank, as Python strip() finds it',
+    (_hex, c) => {
+      const space = String.fromCharCode(c as number);
+      expect(() => messageRef('ns', space + space)).toThrow(ReputationError);
+      expect(() => messageRef(space, 'a')).toThrow(ReputationError);
+      expect(messageRef('ns', space + 'a')).toBe(sha('ns|' + space + 'a'));
+    }
+  );
+
+  it('U+FEFF is not blank to Python, so it is hashed, not refused', () => {
+    const bom = String.fromCharCode(0xfeff);
+    expect(messageRef('ns', bom)).toBe(sha('ns|' + bom));
+  });
 });

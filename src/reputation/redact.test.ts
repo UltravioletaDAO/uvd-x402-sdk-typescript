@@ -138,4 +138,13 @@ describe('walletDirectory', () => {
     expect(dir.lookup('zed')).toBeNull();
     expect(dir.lookup(undefined as unknown as string)).toBeNull();
   });
+
+  it('strips what Python strip() strips (U+001F, U+0085), and keeps U+FEFF', () => {
+    const us = String.fromCharCode(0x1f);
+    const nel = String.fromCharCode(0x85);
+    const bom = String.fromCharCode(0xfeff);
+    expect(dir.lookup(us + 'alice' + nel)).toBe(seededAddress('alice').toLowerCase());
+    expect(dir.lookup(bom + 'alice')).toBeNull();
+    expect(walletDirectory([{ login: us + nel, wallet: seededAddress('blank') }]).lookup('')).toBeNull();
+  });
 });

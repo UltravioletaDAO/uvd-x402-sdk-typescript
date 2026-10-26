@@ -142,6 +142,8 @@ describe('signPayment', () => {
     expect(await code(signPayment({ signer: SIGNER, rpc: new FakeChain({ chainId: 1 }), network: 'base', payee: PAYEE, amount: 1 }))).toBe('unexpected_chain');
     const chain = new FakeChain();
     expect(await code(signPayment({ signer: SIGNER, rpc: chain, network: 'avalanche', payee: PAYEE, amount: 1 }))).toBe('unsupported_token');
+    // A FeedbackDelegate but no chain-registry entry, so no USDC: no testnet rehearsal of the payment.
+    expect(await code(signPayment({ signer: SIGNER, rpc: chain, network: 'base-sepolia', payee: PAYEE, amount: 1 }))).toBe('unsupported_token');
     expect(await code(signPayment({ signer: SIGNER, rpc: chain, network: 'base', payee: SIGNER.address, amount: 1 }))).toBe('invalid_input');
     expect(await code(signPayment({ signer: SIGNER, rpc: chain, network: 'base', payee: PAYEE, amount: 0 }))).toBe('invalid_input');
     expect(await code(signPayment({ signer: { address: SIGNER.address }, rpc: chain, network: 'base', payee: PAYEE, amount: 1 }))).toBe('signer_unavailable');

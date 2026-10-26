@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Erc8004Client } from '../backend';
 import { Governor, messageRef, processRating, type RatingOutbox, type RatingRow } from './index';
 import {
+  DELEGATE,
   FACILITATOR,
   OPEN_CAPS,
   RATER_SEED,
@@ -405,6 +406,61 @@ describe('processRating: the logs are not the only witness', () => {
     expect(w.facilitator.landed).toHaveLength(1);
   });
 
+  it('a lagging state node behind the balancer (latest without the rating): the cell is read at the block past the deadline, so no second prepare', async () => {
+    // RT61-A. The node serving `latest` has not got the rating's block and reads
+    // the cell as 0; asked for a block number, the answer is that block's (the real one).
+    const real = w.chain.request.bind(w.chain);
+    let latestReads = 0;
+    w.chain.request = async (args) => {
+      if (args.method === 'eth_getStorageAt' && args.params?.[2] === 'latest') {
+        latestReads += 1;
+        return '0x' + '00'.repeat(32);
+      }
+      return real(args);
+    };
+    const ref = await enqueue(1);
+    w.facilitator.queue({ route: 'submit', throws: true, land: true });
+    for (let i = 0; i < 3; i++) w.chain.script('eth_getLogs', { result: [] });
+    await processRating(ref, w.deps);
+    w.chain.advanceTime(1200);
+    await processRating(ref, w.deps);
+    const row = await drive(ref);
+    expect(w.facilitator.landed).toHaveLength(1);
+    expect(w.facilitator.prepares).toBe(1);
+    expect(row.status).toBe('confirmed');
+    expect(latestReads).toBe(0);
+    expect(w.chain.count('eth_getStorageAt')).toBeGreaterThan(0);
+  });
+
+  it('a head block whose logs came back empty once is read again: the rating is found inside the deadline', async () => {
+    const ref = await enqueue(1);
+    w.facilitator.queue({ route: 'submit', throws: true, land: true });
+    // The first read of the head lags; the last blocks are read again next time (a shallow reorg looks the same).
+    w.chain.script('eth_getLogs', { result: [] });
+    await processRating(ref, w.deps);
+    const deadline = (await w.outbox.get(ref))!.submission!.deadline;
+    let row: RatingRow | null = null;
+    for (let i = 0; i < 5 && row?.transaction == null; i++) {
+      w.chain.advanceTime(16);
+      row = await processRating(ref, w.deps);
+    }
+    expect(w.chain.now()).toBeLessThan(deadline);
+    expect(row?.transaction).toBe(w.facilitator.landed[0].tx);
+    expect(row?.error).not.toBe('relay_landed_unseen');
+    expect(w.facilitator.submits).toBe(1);
+  });
+
+  it('the double answers eth_getStorageAt for the block asked: a cell written at block N reads 0 before N', async () => {
+    const slot = delegateNonceSlot('0x' + '01'.repeat(32));
+    const before = w.chain.head;
+    w.chain.advanceTime(20);
+    w.chain.setStorage(w.signer.address, slot, '0x' + '00'.repeat(31) + '01');
+    const at = (block: string) => w.chain.request({ method: 'eth_getStorageAt', params: [w.signer.address, slot, block] });
+    expect(await at('0x' + before.toString(16))).toBe('0x' + '00'.repeat(32));
+    expect(await at('0x' + w.chain.head.toString(16))).toBe('0x' + '00'.repeat(31) + '01');
+    expect(await at('latest')).toBe('0x' + '00'.repeat(31) + '01');
+  });
+
   it('a delegation revoked after the rating landed: the storage still says spent, so no second prepare', async () => {
     const ref = await enqueue(1);
     w.facilitator.queue({ route: 'submit', throws: true, land: true });
@@ -585,6 +641,82 @@ describe('processRating: a first rating and a payment never share the account no
     const held = await processRating(first, w.deps);
     expect(held).toMatchObject({ status: 'paid', error: 'payment_in_flight' });
     expect(w.facilitator.prepares).toBe(1);
+  });
+
+  it('a first rating and a payment ticked at once in one process: only one of them goes ahead', async () => {
+    const first = await enqueue(1);
+    w.facilitator.queue({ route: 'prepare', status: 400, body: { success: false, error: 'not now' } });
+    expect((await processRating(first, w.deps))?.status).toBe('paid'); // never delegated yet
+    w.chain.advanceTime(200);
+    const second = await enqueue(2);
+    await Promise.all([processRating(first, w.deps), processRating(second, w.deps)]);
+    const a = (await w.outbox.get(first)) as RatingRow;
+    const b = (await w.outbox.get(second)) as RatingRow;
+    const authorizationNonce = a.submission?.authorization?.nonce ?? null;
+    const paymentNonce = b.payment?.nonce ?? null;
+    // Never an EIP-7702 authorization and a payment over the same account nonce.
+    expect(authorizationNonce !== null && authorizationNonce === paymentNonce).toBe(false);
+    // One of them was held back, with the reason.
+    const held = authorizationNonce === null ? a : b;
+    expect(['rater_busy', 'payment_in_flight', 'authorization_in_flight']).toContain(held.error);
+    expect((await drive(first)).status).toBe('confirmed');
+    expect((await drive(second)).status).toBe('confirmed');
+    expect(w.facilitator.landed).toHaveLength(2);
+  });
+});
+
+describe('processRating: a rater already delegated to another contract (RT61-D)', () => {
+  const foreign = () => w.chain.code.set(w.signer.address.toLowerCase(), '0xef0100' + 'ab'.repeat(20));
+
+  it('is not paid for: the row waits, nothing is signed, until the owner clears it', async () => {
+    foreign();
+    const ref = await enqueue(1);
+    const held = await processRating(ref, w.deps);
+    expect(held).toMatchObject({ status: 'queued', error: 'rater_delegated_elsewhere', payment: null });
+    expect(w.chain.sentRaw).toHaveLength(0);
+    expect(w.facilitator.prepares).toBe(0);
+    w.chain.code.delete(w.signer.address.toLowerCase());
+    w.chain.advanceTime(3601);
+    expect((await drive(ref)).status).toBe('confirmed');
+    expect(w.facilitator.submitBodies[0].authorization?.address).toBe(DELEGATE);
+  });
+
+  it('a paid row is not authorized over it: no prepare, no authorization, until the owner clears it', async () => {
+    const ref = await enqueue(1);
+    w.facilitator.queue({ route: 'prepare', status: 400, body: { success: false, error: 'not now' } });
+    expect((await processRating(ref, w.deps))?.status).toBe('paid');
+    foreign();
+    w.chain.advanceTime(200);
+    const held = await processRating(ref, w.deps);
+    expect(held).toMatchObject({ status: 'paid', error: 'rater_delegated_elsewhere', submission: null });
+    expect(w.facilitator.prepares).toBe(1);
+    expect(w.facilitator.submits).toBe(0);
+    w.chain.code.delete(w.signer.address.toLowerCase());
+    w.chain.advanceTime(3601);
+    expect((await drive(ref)).status).toBe('confirmed');
+    expect(w.facilitator.landed).toHaveLength(1);
+  });
+});
+
+describe('processRating: ticks for different rows at once in one process', () => {
+  it('the caps and one payment at a time hold: perDay 1 and three wallets dispatched together admit one and sign one payment (RT61-B)', async () => {
+    w = world({ caps: { ...OPEN_CAPS, perDay: 1 } });
+    vi.stubGlobal('fetch', w.facilitator.fetch);
+    const refs = [await enqueue(1, 0), await enqueue(2, 1), await enqueue(3, 2)];
+    await Promise.all(refs.map((r) => processRating(r, w.deps)));
+    const rows = (await Promise.all(refs.map((r) => w.outbox.get(r)))) as RatingRow[];
+    expect(rows.filter((r) => r.startedAt !== null)).toHaveLength(1);
+    expect(rows.filter((r) => r.payment !== null)).toHaveLength(1);
+    expect(w.chain.sentRaw).toHaveLength(1);
+    const winner = rows.find((r) => r.payment !== null) as RatingRow;
+    expect((await drive(winner.ref)).status).toBe('confirmed');
+    // The other two are still queued: refused by the day's cap once the first is admitted.
+    for (const r of refs.filter((ref) => ref !== winner.ref)) {
+      await processRating(r, w.deps);
+      expect(await w.outbox.get(r)).toMatchObject({ status: 'queued', startedAt: null, payment: null });
+    }
+    expect(w.chain.sentRaw).toHaveLength(1);
+    expect(w.facilitator.landed).toHaveLength(1);
   });
 });
 

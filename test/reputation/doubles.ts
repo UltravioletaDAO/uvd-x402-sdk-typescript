@@ -126,11 +126,12 @@ export class FakeChain implements EvmRpc {
   /** Account code: an EIP-7702 delegation is `0xef0100` + the delegate. */
   readonly code = new Map<string, string>();
   /**
-   * Account storage, `account -> slot -> 32-byte value`. Under EIP-7702 the
-   * delegate writes the rater's own storage, and it stays when the delegation
-   * is removed.
+   * Account storage, `account -> slot -> [block, 32-byte value]` in the order
+   * written. Under EIP-7702 the delegate writes the rater's own storage, and it
+   * stays when the delegation is removed. `eth_getStorageAt` answers for the
+   * block it is asked about: a cell written at block N reads 0 before N.
    */
-  readonly storage = new Map<string, Map<string, string>>();
+  readonly storage = new Map<string, Map<string, Array<[number, string]>>>();
   readonly logs: Log[] = [];
   autoMine = true;
   baseFee = 5_000_000n;
@@ -183,10 +184,23 @@ export class FakeChain implements EvmRpc {
     this.setStorage(rater, delegateNonceSlot(nonce), pad(1n));
   }
 
+  /** Write a cell as of the head block. */
   setStorage(account: string, slot: string, value: string): void {
-    const cells = this.storage.get(account.toLowerCase()) ?? new Map<string, string>();
-    cells.set(slot.toLowerCase(), value);
+    const cells = this.storage.get(account.toLowerCase()) ?? new Map<string, Array<[number, string]>>();
+    const writes = cells.get(slot.toLowerCase()) ?? [];
+    writes.push([this.head, value]);
+    cells.set(slot.toLowerCase(), writes);
     this.storage.set(account.toLowerCase(), cells);
+  }
+
+  /** The cell as of `block` (`latest`: the head). A block past the head is unknown to the node. */
+  storageAt(account: string, slot: string, block: unknown): string {
+    const n = block === 'latest' ? this.head : Number(BigInt(String(block)));
+    if (n > this.head) throw new Error(`FakeChain: header not found for block ${n}`);
+    const writes = this.storage.get(account.toLowerCase())?.get(slot.toLowerCase()) ?? [];
+    let value = pad(0n);
+    for (const [at, v] of writes) if (at <= n) value = v;
+    return value;
   }
 
   /** Mine `blocks` blocks; pending transactions go in the first. */
@@ -332,7 +346,7 @@ export class FakeChain implements EvmRpc {
       case 'eth_getCode':
         return this.code.get(String(p[0]).toLowerCase()) ?? '0x';
       case 'eth_getStorageAt':
-        return this.storage.get(String(p[0]).toLowerCase())?.get(String(p[1]).toLowerCase()) ?? pad(0n);
+        return this.storageAt(String(p[0]), String(p[1]), p[2]);
       case 'eth_getLogs': {
         const f = p[0] as { address: string; fromBlock: string; toBlock: string; topics: Array<string | null> };
         const from = Number(BigInt(f.fromBlock));

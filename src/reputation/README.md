@@ -33,7 +33,8 @@ for (;;) { for (const r of await outbox.due(Math.floor(Date.now() / 1000), 1)) a
 serialized loop like the last line) does the rest, one row at a time: admit, resolve the agent and check its owner,
 pay, prove, prepare, check, sign, store, send, reconcile, confirm. Read the row (`outbox.get(ref)`) to show a moment
 as pending, anchored or local. Prefer a loop that awaits each tick over a `setInterval` that does not: the module
-already refuses to tick one row twice at once in one process, but a second loop is still a second worker.
+already refuses to tick one row twice at once in one process, and lets one tick at a time admit and pay or prepare a
+first rating, but a second process is still a second worker.
 
 `publishEvidence` is yours, built on `evidenceDocument`:
 
@@ -84,7 +85,11 @@ committed to; it is then searched for everywhere else.
 - **One payment per rating, signed once, one at a time.** The signed transfer is stored (`paying`) before it is
   broadcast; a retry re-broadcasts the same bytes. No second payment starts while one is in flight, nor while a first
   rating's EIP-7702 authorization (signed over the account nonce) has not landed; and a first rating is not prepared
-  while a payment is in flight. A transfer whose nonce another transaction took (the node does not know ours, and the
+  while a payment is in flight. This holds for every tick of one process on one outbox object, also when they run at
+  once (`Promise.all(due.map(...))`): a money gate per outbox lets one tick at a time go from the admission to its
+  stored payment, or from a first rating's check to its stored submission, and a tick that finds it taken retries
+  the row later (`rater_busy`). Across processes it holds only with one worker per rater: the counts it relies on
+  are read before the compare-and-set that stores the payment. A transfer whose nonce another transaction took (the node does not know ours, and the
   account nonce moved past it) fails the row for a human only after an hour of looking that way, counted from the
   first time it was seen; a node that serves the nonce before the receipt makes it look so for a while.
 - **One prepare per signed rating.** Once a row is `submitting`, a failed send, a timeout, a 503 or a 200 without a
@@ -155,3 +160,8 @@ Registering an agent for a subject that has none, anchoring a login to a platfor
 Python SDK's), reading reputation (that is `uvd-describe-sdk`), replacing a payment stuck under a base fee above its
 ceiling (it stays `paying`, and holds the next payment, until it mines or a human looks), and revoking a rating (no
 relayed revocation exists).
+
+No testnet rehearsal of the whole rail: `base-sepolia` has a FeedbackDelegate, but the SDK's chain registry has no
+entry for it, and so no USDC, so `payAndProve` refuses it (`unsupported_token`). There, only the parts without a payment run
+(`validatePreparation`, the signatures, `evidenceDocument`); the anchor payment, and so `processRating`, runs on
+mainnets only.

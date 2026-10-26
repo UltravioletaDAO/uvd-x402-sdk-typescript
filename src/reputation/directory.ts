@@ -14,7 +14,7 @@
  * address is ignored.
  */
 
-import { isAddress } from './values';
+import { isAddress, pyStrip } from './values';
 
 export interface WalletEntry {
   login: string;
@@ -35,7 +35,7 @@ export function walletDirectory(entries: Iterable<WalletEntry>): WalletDirectory
   const loginsByWallet = new Map<string, Set<string>>();
   for (const entry of entries) {
     if (!entry || typeof entry.login !== 'string' || !isAddress(entry.wallet)) continue;
-    const login = entry.login.trim().toLowerCase();
+    const login = pyStrip(entry.login).toLowerCase();
     if (login === '') continue;
     const wallet = entry.wallet.toLowerCase();
     if (!walletsByLogin.has(login)) walletsByLogin.set(login, new Set());
@@ -48,7 +48,7 @@ export function walletDirectory(entries: Iterable<WalletEntry>): WalletDirectory
   return {
     lookup(login: string): string | null {
       if (typeof login !== 'string') return null;
-      const key = login.trim().toLowerCase();
+      const key = pyStrip(login).toLowerCase();
       const wallets = walletsByLogin.get(key);
       if (!wallets || wallets.size !== 1) return null;
       const [wallet] = wallets;

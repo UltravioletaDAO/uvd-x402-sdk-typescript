@@ -21,7 +21,7 @@
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import { ReputationError } from './errors';
-import { LONE_SURROGATE } from './values';
+import { LONE_SURROGATE, pyStrip } from './values';
 
 const SEPARATOR = '|';
 
@@ -38,7 +38,7 @@ function partText(part: MessageRefPart, index: number): string {
       `messageRef part ${index} must be a string, a bigint or a safe integer`
     );
   }
-  if (text.trim() === '') throw new ReputationError('invalid_input', `messageRef part ${index} is empty or blank`);
+  if (pyStrip(text) === '') throw new ReputationError('invalid_input', `messageRef part ${index} is empty or blank`);
   if (text.includes(SEPARATOR)) {
     throw new ReputationError('invalid_input', `messageRef part ${index} contains "|"`);
   }
@@ -49,7 +49,7 @@ function partText(part: MessageRefPart, index: number): string {
 }
 
 export function messageRef(namespace: string, ...parts: MessageRefPart[]): string {
-  if (typeof namespace !== 'string' || namespace.trim() === '') {
+  if (typeof namespace !== 'string' || pyStrip(namespace) === '') {
     throw new ReputationError('invalid_input', 'messageRef needs a non-empty namespace');
   }
   if (namespace.includes(SEPARATOR) || LONE_SURROGATE.test(namespace)) {

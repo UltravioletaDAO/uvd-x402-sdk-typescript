@@ -621,68 +621,83 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
   if (until !== null) return move(ctx, current, 'paid', { error: 'breaker_open', nextAttemptAt: until });
   // The other side of `authorization_in_flight`: a first rating's authorization
   // is signed over the account nonce, which a payment still in flight will use.
-  if ((await deps.outbox.count({ statuses: ['paying'] })) > 0 && !(await raterDelegated(ctx))) {
-    return move(ctx, current, 'paid', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
+  // It holds the money gate until its submission is stored.
+  const code = await raterCode(ctx);
+  if (code === 'foreign') {
+    return move(ctx, current, 'paid', { error: 'rater_delegated_elsewhere', nextAttemptAt: ctx.now + FOREIGN_CODE_WAIT_SECS });
   }
-
-  const params = paramsOf(current, feedback);
-  const prepRequest: PrepareRelayFeedbackRequest = {
-    x402Version: X402_VERSION,
-    network: current.network as Erc8004Network,
-    feedback: wireFeedback(current, feedback, rater),
-  };
-  let prep: unknown;
+  let release: (() => void) | null = null;
+  if (code === 'none') {
+    release = takeGate(deps.outbox);
+    if (release === null) return move(ctx, current, 'paid', { error: 'rater_busy', nextAttemptAt: ctx.now + POLL_SECS });
+    if ((await deps.outbox.count({ statuses: ['paying'] })) > 0) {
+      release();
+      return move(ctx, current, 'paid', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
+    }
+  }
+  let moved: RatingRow | null;
   try {
-    prep = await deps.client.prepareRelayedFeedback(prepRequest);
-  } catch {
-    prep = { success: false, retryable: true };
-  }
-  if (!isRecord(prep) || prep.success !== true) {
-    await tellBreaker(ctx, prep);
-    const status = isRecord(prep) && typeof prep.status === 'number' ? prep.status : 'failed';
-    return later(ctx, current, `prepare_${status}`);
-  }
+    const params = paramsOf(current, feedback);
+    const prepRequest: PrepareRelayFeedbackRequest = {
+      x402Version: X402_VERSION,
+      network: current.network as Erc8004Network,
+      feedback: wireFeedback(current, feedback, rater),
+    };
+    let prep: unknown;
+    try {
+      prep = await deps.client.prepareRelayedFeedback(prepRequest);
+    } catch {
+      prep = { success: false, retryable: true };
+    }
+    if (!isRecord(prep) || prep.success !== true) {
+      await tellBreaker(ctx, prep);
+      const status = isRecord(prep) && typeof prep.status === 'number' ? prep.status : 'failed';
+      return later(ctx, current, `prepare_${status}`);
+    }
 
-  let validated;
-  try {
-    validated = validatePreparation(prep, params, rater, {
-      now: ctx.now,
-      maxDeadlineAheadSecs: deps.maxDeadlineAheadSecs,
-    });
-  } catch (error) {
-    const code = errorCode(error);
-    log(deps.logger, 'error', 'reputation: refused to sign a prepare', { ref: current.ref, code });
-    // A deadline out of the window may be clock skew; anything else is a
-    // prepare asking for something other than this rating.
-    return code === 'deadline' ? later(ctx, current, code) : move(ctx, current, 'paid', { status: 'failed', error: code });
+    let validated;
+    try {
+      validated = validatePreparation(prep, params, rater, {
+        now: ctx.now,
+        maxDeadlineAheadSecs: deps.maxDeadlineAheadSecs,
+      });
+    } catch (error) {
+      const code = errorCode(error);
+      log(deps.logger, 'error', 'reputation: refused to sign a prepare', { ref: current.ref, code });
+      // A deadline out of the window may be clock skew; anything else is a
+      // prepare asking for something other than this rating.
+      return code === 'deadline' ? later(ctx, current, code) : move(ctx, current, 'paid', { status: 'failed', error: code });
+    }
+    const signature = await signRelayedFeedback(validated, deps.signer);
+    const authorization = validated.delegated ? null : await buildRelayAuthorization(validated, deps.signer);
+    const scanFromBlock = Math.max(0, (await blockNumber(deps.rpc)) - REORG_OVERLAP_BLOCKS);
+    const submission: Submission = {
+      rater,
+      nonce: validated.nonce,
+      deadline: validated.deadline,
+      signature,
+      authorization,
+      scanFromBlock,
+      scanCursor: scanFromBlock,
+      submittedAt: ctx.now,
+      sends: 0,
+      lastOutcome: null,
+    };
+    moved = await deps.outbox.transition(
+      current.ref,
+      'paid',
+      {
+        status: 'submitting',
+        submission,
+        attempts: current.attempts + 1,
+        error: null,
+        nextAttemptAt: ctx.now,
+      },
+      current.version
+    );
+  } finally {
+    release?.();
   }
-  const signature = await signRelayedFeedback(validated, deps.signer);
-  const authorization = validated.delegated ? null : await buildRelayAuthorization(validated, deps.signer);
-  const scanFromBlock = Math.max(0, (await blockNumber(deps.rpc)) - REORG_OVERLAP_BLOCKS);
-  const submission: Submission = {
-    rater,
-    nonce: validated.nonce,
-    deadline: validated.deadline,
-    signature,
-    authorization,
-    scanFromBlock,
-    scanCursor: scanFromBlock,
-    submittedAt: ctx.now,
-    sends: 0,
-    lastOutcome: null,
-  };
-  const moved = await deps.outbox.transition(
-    current.ref,
-    'paid',
-    {
-      status: 'submitting',
-      submission,
-      attempts: current.attempts + 1,
-      error: null,
-      nextAttemptAt: ctx.now,
-    },
-    current.version
-  );
   if (!moved) {
     // Another worker moved the row first. This signature is never sent.
     log(deps.logger, 'warn', 'reputation: lost the race to submit; sending nothing', { ref: current.ref });
@@ -693,6 +708,31 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
 
 /** Rows a process is working on right now, per outbox: one tick per row at a time. */
 const RUNNING = new WeakMap<object, Set<string>>();
+
+/** Outboxes whose money gate a tick of this process holds right now. */
+const GATED = new WeakSet<object>();
+
+/**
+ * The money gate, one per outbox in a process. It covers a queued row from
+ * its admission to its signed payment stored as `paying`, and a first rating
+ * from its "no payment in flight" check to its signed submission stored as
+ * `submitting`. The caps, "one payment in flight" and the account-nonce rule
+ * all count stored rows; ticks for different rows running at once would all
+ * count before any of them is stored, and all pass. A tick that finds the gate
+ * taken does not wait: it returns `null` and its row is retried later. The
+ * release is idempotent.
+ */
+function takeGate(outbox: object): (() => void) | null {
+  if (GATED.has(outbox)) return null;
+  GATED.add(outbox);
+  let held = true;
+  return () => {
+    if (held) {
+      held = false;
+      GATED.delete(outbox);
+    }
+  };
+}
 
 async function exclusively<T>(outbox: RatingOutbox, ref: string, busy: () => Promise<T>, work: () => Promise<T>): Promise<T> {
   let refs = RUNNING.get(outbox);
@@ -774,16 +814,49 @@ const PAYMENT_DEFINITIVE: ReadonlySet<string> = new Set([
   'proof_expired',
 ]);
 
+/**
+ * The rater's account code: `none` (a plain account), `delegated` (EIP-7702 to
+ * this chain's delegate) or `foreign` (anything else, e.g. a delegation to
+ * another contract, which a first rating's authorization would replace).
+ */
+async function raterCode(ctx: Context): Promise<'none' | 'delegated' | 'foreign'> {
+  const code = await rpcCall(ctx.deps.rpc, 'eth_getCode', [ctx.deps.signer.address, 'latest']);
+  if (typeof code !== 'string') throw new ReputationError('rpc_failed', 'eth_getCode answered no code');
+  const lower = code.toLowerCase();
+  if (lower === '0x') return 'none';
+  return lower === '0xef0100' + ctx.chain.delegate.slice(2).toLowerCase() ? 'delegated' : 'foreign';
+}
+
 /** Whether the rater's account is delegated to this chain's delegate. */
 async function raterDelegated(ctx: Context): Promise<boolean> {
-  const code = await rpcCall(ctx.deps.rpc, 'eth_getCode', [ctx.deps.signer.address, 'latest']);
-  return typeof code === 'string' && code.toLowerCase() === '0xef0100' + ctx.chain.delegate.slice(2).toLowerCase();
+  return (await raterCode(ctx)) === 'delegated';
 }
+
+/** A rater whose account runs other code is neither paid for nor authorized: replacing that code is the owner's call. */
+const FOREIGN_CODE_WAIT_SECS = 3600;
 
 async function pay(
   ctx: Context & { deps: ProcessDeps },
   row: RatingRow,
   mine: { tx: string | null }
+): Promise<RatingRow> {
+  // A queued row holds the money gate from its admission to its signed payment
+  // stored as `paying`; a payment being resumed is already stored.
+  if (row.status !== 'queued') return payGated(ctx, row, mine, () => undefined);
+  const release = takeGate(ctx.deps.outbox);
+  if (release === null) return move(ctx, row, 'queued', { error: 'rater_busy', nextAttemptAt: ctx.now + POLL_SECS });
+  try {
+    return await payGated(ctx, row, mine, release);
+  } finally {
+    release();
+  }
+}
+
+async function payGated(
+  ctx: Context & { deps: ProcessDeps },
+  row: RatingRow,
+  mine: { tx: string | null },
+  release: () => void
 ): Promise<RatingRow> {
   const { deps } = ctx;
   let current = row;
@@ -808,6 +881,10 @@ async function pay(
     if ((await ownerOf(deps.rpc, ctx.chain, current.agentId)) !== current.subject) {
       return move(ctx, current, 'queued', { status: 'local_only', error: 'identity_owner_mismatch' });
     }
+    // Nobody is paid for a rating that could only land by replacing the rater's other delegation.
+    if ((await raterCode(ctx)) === 'foreign') {
+      return move(ctx, current, 'queued', { error: 'rater_delegated_elsewhere', nextAttemptAt: ctx.now + FOREIGN_CODE_WAIT_SECS });
+    }
     // One anchor payment in flight per rater: two would race for one account nonce.
     if ((await deps.outbox.count({ statuses: ['paying'] })) > 0) {
       return move(ctx, current, 'queued', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
@@ -826,14 +903,20 @@ async function pay(
     amount: current.amount,
     resume: current.status === 'paying' ? current.payment : null,
     onSigned: async (payment) => {
-      const moved = await deps.outbox.transition(current.ref, 'queued', {
-        status: 'paying',
-        payment,
-        startedAt: ctx.now,
-        attempts: current.attempts + 1,
-        error: null,
-        nextAttemptAt: ctx.now + POLL_SECS,
-      });
+      let moved: RatingRow | null;
+      try {
+        moved = await deps.outbox.transition(current.ref, 'queued', {
+          status: 'paying',
+          payment,
+          startedAt: ctx.now,
+          attempts: current.attempts + 1,
+          error: null,
+          nextAttemptAt: ctx.now + POLL_SECS,
+        });
+      } finally {
+        // Stored (or lost): the counts now see it, and the broadcast and polling need no gate.
+        release();
+      }
       if (!moved) {
         throw new ReputationError('invalid_transition', 'the row moved before its payment was stored; nothing was sent');
       }
