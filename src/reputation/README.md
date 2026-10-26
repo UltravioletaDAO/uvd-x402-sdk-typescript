@@ -43,16 +43,24 @@ import { evidenceDocument } from 'uvd-x402-sdk/reputation';
 async function publishEvidence(row) {
   const agentId = row.agentId;                             // what resolveAgent found, checked against ownerOf
   const doc = evidenceDocument({
-    network: row.network, agentId, rater: deps.signer.address, value: row.value,
-    subject: { wallet: row.subject, walletBinding: 'self_declared_unverified', type: 'chat_participant' },
-    tag1: 'moment:idea', tag2: 'my-app', endpoint: 'https://www.twitch.tv/channel', createdAt: '2026-10-26T18:00:00Z', // round it: an exact second can point at a chat line
-    context: { kind: 'idea' }, commitments: { momentRef: row.ref, viewerId: row.viewerId }, salt: await yourSaltFor(row.viewerId),
-    proof: row.proof,
+    network: row.network, agentId, rater: deps.signer.address, subject: row.subject, value: row.value,
+    tag1: 'moment:idea', tag2: 'my-app', endpoint: 'https://www.twitch.tv/channel',
+    createdAt: row.createdAt - (row.createdAt % 3600),       // unix seconds, rounded: an exact second can point at a chat line
+    salt: await yourSaltFor(row.viewerId),                   // newSalt() once per viewer, kept locally, destroyed on !forgetme
+    private: { moment_ref: row.ref, user_id: row.viewerId }, // published only as HMAC commitments
+    proof: row.proof, issuer: { name: 'My App' }, context: { momentType: 'idea' },
   });
-  const uri = await yourStorage.put(doc.bytes);            // serve these exact bytes
+  const uri = await yourStorage.put(doc.body);             // serve these exact bytes
   return { agentId, tag1: 'moment:idea', tag2: 'my-app', endpoint: 'https://www.twitch.tv/channel', feedbackUri: uri, feedbackHash: doc.contentHash };
 }
 ```
+
+The document is the Python SDK's `evidence_document`, byte for byte from the same inputs. It refuses
+(`ReputationError`, the Python codes) a key at any depth that names chat content or a person (`message`, `author`,
+`login`, `chatText`, `author_name`, the Spanish words too: `private_field`), and a `private` value that shows up in a
+public string (`private_value_leaked`: eight characters and up anywhere in the tags, the endpoint, `issuer` and
+`context`; four to seven as a whole word in `issuer` and `context`). Put the chat text in `private` if you want it
+committed to; it is then searched for everywhere else.
 
 ## The pieces
 
@@ -64,7 +72,7 @@ async function publishEvidence(row) {
 | `payAndProve(...)` | The anchor payment: signs the USDC transfer, hands it to `onSigned` to be stored BEFORE broadcasting, and returns a `ProofOfPayment` with the block's timestamp and the facilitator's `paymentHash` recomputed. A retry re-broadcasts the same bytes. Gas has a ceiling, ETH a floor, and the USDC must cover the payment. |
 | `RatingOutbox` | The persistent queue and its state machine. `MemoryRatingOutbox`; `SqliteRatingOutbox` (better-sqlite3, two prefixed tables in your own database). |
 | `Governor(caps, health)` | Caps (all parameters) and the circuit breaker, persisted in the outbox. |
-| `evidenceDocument(...)` | The public evidence, without the chat text, the login or the user id: those only as HMAC commitments under a per-viewer salt. |
+| `evidenceDocument(...)` | The public evidence, without the chat text, the login or the user id: those only as HMAC commitments under a per-viewer salt (`newSalt`, `commitment`). |
 | `submitWithReconcile`, `processRating` | Send once, then read the chain. Never prepared twice while a signed rating could land. |
 | `walletDirectory(entries)` | login → wallet from a self-declared list, with shared wallets (and logins listed twice) resolving to nobody. |
 
@@ -132,11 +140,12 @@ Enqueue with `viewerId`, or there is nothing to forget by.
 
 ## Vectors
 
-`test/vectors/reputation/*.json` (message refs, prepares with their digests, signatures and authorizations, payment
-hashes, canonical JSON, commitments and evidence documents) are derived by `scripts/derive-reputation-vectors.mjs`,
-which does not import this module, and hold in Python with eth_account / hashlib / json
-(`scripts/xlang/reputation-vectors-check.py`). The same files, with the same sha256, belong in
-uvd-x402-sdk-python `tests/vectors/reputation/`.
+`test/vectors/reputation/*.json` (message refs, prepares with their digests, typed data, signatures and
+authorizations, refused prepares with their codes, payment hashes, the anchor transfer, evidence documents and their
+refusals) are the Python SDK's files, byte for byte: uvd-x402-sdk-python `tests/vectors/reputation/`, recorded by its
+`scripts/reputation_vectors.py`, which checks every value against eth-account, the facilitator's captured
+`paymentHash` and the delegate deployed on Base before writing. Both suites pin the same sha256. A change that moves
+one of these bytes is recorded there and copied here, never edited by hand on either side.
 
 ## Not here
 

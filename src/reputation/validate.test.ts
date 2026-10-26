@@ -137,6 +137,8 @@ describe('validatePreparation refuses', () => {
     ['no answer at all', null, 'prepare_failed'],
     ['an array', [prep()], 'prepare_failed'],
     ['another chain id', at((a) => (a.chainId = 1)), 'chain_mismatch'],
+    ['chain id 0', at((a) => (a.chainId = 0)), 'no_chain'],
+    ['no chain id', at((a) => delete a.chainId), 'no_chain'],
     ['a chain id as text', at((a) => (a.chainId = 'base')), 'chain_mismatch'],
     ['another delegate', at((a) => (a.delegate = '0x000000000000000000000000000000000000dEaD')), 'delegate_mismatch'],
     ['arc\'s delegate on base', at((a) => (a.delegate = '0x955Cc9fB9aB95FC0821ae74197D273dde5dA84f1')), 'delegate_mismatch'],
@@ -161,17 +163,17 @@ describe('validatePreparation refuses', () => {
     ['the testnet registry', at((a) => (a.typedData.message.registry = '0x8004B663056A597Dffe9eCcC1965A193B7388713')), 'registry'],
     ['no nonce on the prepare', at((a) => delete a.nonce), 'message_shape'],
     ['no deadline on the prepare', at((a) => delete a.deadline), 'message_shape'],
-    ['another agent', at((a) => (a.typedData.message.agentId = '18897')), 'field_mismatch'],
-    ['another score', at((a) => (a.typedData.message.value = '100')), 'field_mismatch'],
-    ['other decimals', at((a) => (a.typedData.message.valueDecimals = 2)), 'field_mismatch'],
-    ['another tag1', at((a) => (a.typedData.message.tag1 = 'starred')), 'field_mismatch'],
-    ['another tag2', at((a) => (a.typedData.message.tag2 = '')), 'field_mismatch'],
-    ['another endpoint', at((a) => (a.typedData.message.endpoint = 'https://evil.test')), 'field_mismatch'],
-    ['another feedbackURI', at((a) => (a.typedData.message.feedbackURI = 'https://evil.test/doc')), 'field_mismatch'],
-    ['another feedbackHash', at((a) => (a.typedData.message.feedbackHash = '0x' + '11'.repeat(32))), 'field_mismatch'],
-    ['a message deadline that is not the prepare\'s', at((a) => (a.typedData.message.deadline = String(NOW + 901))), 'field_mismatch'],
-    ['a message nonce that is not the prepare\'s', at((a) => (a.typedData.message.nonce = '0x' + '22'.repeat(32))), 'field_mismatch'],
-    ['a score of 9.5', at((a) => (a.typedData.message.value = '9.5')), 'field_mismatch'],
+    ['another agent', at((a) => (a.typedData.message.agentId = '18897')), 'message_binding'],
+    ['another score', at((a) => (a.typedData.message.value = '100')), 'value'],
+    ['other decimals', at((a) => (a.typedData.message.valueDecimals = 2)), 'value'],
+    ['another tag1', at((a) => (a.typedData.message.tag1 = 'starred')), 'message_binding'],
+    ['another tag2', at((a) => (a.typedData.message.tag2 = '')), 'message_binding'],
+    ['another endpoint', at((a) => (a.typedData.message.endpoint = 'https://evil.test')), 'message_binding'],
+    ['another feedbackURI', at((a) => (a.typedData.message.feedbackURI = 'https://evil.test/doc')), 'message_binding'],
+    ['another feedbackHash', at((a) => (a.typedData.message.feedbackHash = '0x' + '11'.repeat(32))), 'message_binding'],
+    ['a message deadline that is not the prepare\'s', at((a) => (a.typedData.message.deadline = String(NOW + 901))), 'message_binding'],
+    ['a message nonce that is not the prepare\'s', at((a) => (a.typedData.message.nonce = '0x' + '22'.repeat(32))), 'message_binding'],
+    ['a score of 9.5', at((a) => (a.typedData.message.value = '9.5')), 'value'],
     ['no account nonce on a first rating', at((a) => delete a.accountNonce), 'account_nonce'],
     ['an account nonce past uint64', at((a) => (a.accountNonce = '18446744073709551616')), 'account_nonce'],
     ['no delegated flag', at((a) => delete a.delegated), 'message_shape'],
@@ -199,8 +201,8 @@ describe('validatePreparation refuses', () => {
   });
 
   it('a network without a delegate', () => {
-    refused(prep(), 'unknown_chain', { ...PARAMS, network: 'avalanche' });
-    refused(prep(), 'unknown_chain', { ...PARAMS, network: 'arc-testnet' });
+    refused(prep(), 'unknown_network', { ...PARAMS, network: 'avalanche' });
+    refused(prep(), 'unknown_network', { ...PARAMS, network: 'arc-testnet' });
   });
 
   it.each<[string, Partial<RelayedFeedbackParams> | null, string]>([
@@ -214,6 +216,6 @@ describe('validatePreparation refuses', () => {
   });
 
   it('a rater that is not an address', () => {
-    refused(prep(), 'invalid_input', PARAMS, 'not-an-address');
+    refused(prep(), 'rater_mismatch', PARAMS, 'not-an-address');
   });
 });

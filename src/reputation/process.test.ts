@@ -514,7 +514,7 @@ describe('processRating: a prepare that asks for something else is never signed'
   const cases: Array<[string, (a: any) => void, string]> = [
     ['a revoke instead of a rating', (a) => (a.typedData.primaryType = 'RelayedRevokeFeedback'), 'primary_type'],
     ['another delegate', (a) => (a.delegate = '0x000000000000000000000000000000000000dEaD'), 'delegate_mismatch'],
-    ['another score', (a) => (a.typedData.message.value = '100'), 'field_mismatch'],
+    ['another score', (a) => (a.typedData.message.value = '100'), 'value'],
     ['another chain', (a) => (a.typedData.domain.chainId = 1), 'domain_chain_id'],
     ['a digest that is not the rating', (a) => (a.digest = '0x' + '5a'.repeat(32)), 'digest_mismatch'],
     ['the v3 opaque hash', (a) => delete a.typedData, 'typed_data_missing'],

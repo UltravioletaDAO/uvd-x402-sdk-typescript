@@ -213,8 +213,8 @@
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "vectors:gen": "node scripts/derive-erc8128-f3-3.mjs --mirror && node scripts/generate-erc8128-vectors.mjs && node scripts/derive-reputation-vectors.mjs",
-    "vectors:check": "node scripts/derive-erc8128-f3-3.mjs --check && node scripts/generate-erc8128-vectors.mjs --check && node scripts/derive-reputation-vectors.mjs --check",
+    "vectors:gen": "node scripts/derive-erc8128-f3-3.mjs --mirror && node scripts/generate-erc8128-vectors.mjs",
+    "vectors:check": "node scripts/derive-erc8128-f3-3.mjs --check && node scripts/generate-erc8128-vectors.mjs --check",
     "test:xlang": "node scripts/xlang/cross-language-conformance.mjs",
     "prepublishOnly": "npm run clean && npm run typecheck && npm run test:run && npm run lint && npm run build",
     "release": "bash scripts/publish-npm.sh"

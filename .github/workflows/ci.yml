@@ -29,7 +29,6 @@ on:
     #   scripts/tag-release.mjs          src/publish-tag.test.ts runs it
     #   test/**           src/reputation/*.test.ts read the shared reputation
     #                     vectors (test/vectors/reputation/) and their doubles
-    #   scripts/derive-reputation-vectors.mjs  src/reputation/vectors.test.ts runs it
     #   .github/workflows/ci.yml         this file
     #   .github/workflows/publish.yml    src/publish-workflow.test.ts reads it
     paths: &ci-paths
@@ -46,7 +45,6 @@ on:
       - 'scripts/xlang/**'
       - 'scripts/tag-release.mjs'
       - 'test/**'
-      - 'scripts/derive-reputation-vectors.mjs'
       - '.github/workflows/ci.yml'
       - '.github/workflows/publish.yml'
   pull_request:

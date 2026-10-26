@@ -700,7 +700,7 @@ async function advance(ref: string, deps: SubmitDeps): Promise<RatingRow> {
   const row = await deps.outbox.get(ref);
   if (!row) throw new ReputationError('row_missing', 'no outbox row has this ref');
   const chain = reputationChain(row.network);
-  if (!chain) throw new ReputationError('unknown_chain', `no FeedbackDelegate is known for ${row.network}`);
+  if (!chain) throw new ReputationError('unknown_network', `no FeedbackDelegate is known for ${row.network}`);
   if (!deps.signer || !isAddress(deps.signer.address)) {
     throw new ReputationError('signer_unavailable', 'submitWithReconcile needs the rater signer');
   }
@@ -860,7 +860,7 @@ async function tick(ref: string, deps: ProcessDeps): Promise<RatingRow | null> {
   let row = await deps.outbox.get(ref);
   if (!row) return null;
   const chain = reputationChain(row.network);
-  if (!chain) throw new ReputationError('unknown_chain', `no FeedbackDelegate is known for ${row.network}`);
+  if (!chain) throw new ReputationError('unknown_network', `no FeedbackDelegate is known for ${row.network}`);
   const ctx = { deps, chain, now: (deps.now ?? (() => Math.floor(Date.now() / 1000)))() };
   if (row.nextAttemptAt > ctx.now) return row;
   const mine: { tx: string | null } = {

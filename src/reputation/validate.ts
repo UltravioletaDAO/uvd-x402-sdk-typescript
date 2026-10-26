@@ -221,20 +221,21 @@ export function validatePreparation(
   rater: string,
   options: ValidatePreparationOptions = {}
 ): ValidatedPreparation {
-  if (!isAddress(rater)) reject('invalid_input', 'rater is not an address');
   const expected = expectedMessage(params);
-  const chain = reputationChain(String(params.network));
-  if (!chain) reject('unknown_chain', `no FeedbackDelegate is known for network ${String(params.network)}`);
-
   if (!isRecord(prep) || prep.success !== true) {
     reject('prepare_failed', 'the prepare did not succeed');
   }
-  if (safeUint(prep.chainId) !== chain.chainId) {
+  const chain = reputationChain(String(params.network));
+  if (!chain) reject('unknown_network', `no FeedbackDelegate is known for network ${String(params.network)}`);
+  const preparedChain = prep.chainId === undefined || prep.chainId === null ? 0 : safeUint(prep.chainId);
+  if (preparedChain === 0) reject('no_chain', 'the prepare names chain 0, which would authorise every chain');
+  if (preparedChain !== chain.chainId) {
     reject('chain_mismatch', `the prepare is for chain ${String(prep.chainId)}, the rating for ${chain.chainId}`);
   }
   if (!sameAddress(prep.delegate, chain.delegate)) {
     reject('delegate_mismatch', `the prepare names delegate ${String(prep.delegate)}, not this chain's`);
   }
+  if (!isAddress(rater)) reject('rater_mismatch', 'the rater is not an address');
 
   const td = prep.typedData;
   if (!isRecord(td)) {
@@ -278,6 +279,9 @@ export function validatePreparation(
   if (!sameAddress(message.registry, chain.reputationRegistry)) {
     reject('registry', 'the message registry is not the ReputationRegistry of this chain');
   }
+  if (int128Of(message.value) !== expected.value || uintOf(message.valueDecimals) !== BigInt(expected.valueDecimals)) {
+    reject('value', 'the value to sign is not the value this rating asked for');
+  }
 
   const deadline = safeUint(prep.deadline);
   const nonce = bytes32Of(prep.nonce);
@@ -286,8 +290,6 @@ export function validatePreparation(
   }
   const bound: Array<[string, boolean]> = [
     ['agentId', uintOf(message.agentId) === expected.agentId],
-    ['value', int128Of(message.value) === expected.value],
-    ['valueDecimals', uintOf(message.valueDecimals) === BigInt(expected.valueDecimals)],
     ['tag1', message.tag1 === expected.tag1],
     ['tag2', message.tag2 === expected.tag2],
     ['endpoint', message.endpoint === expected.endpoint],
@@ -298,7 +300,7 @@ export function validatePreparation(
   ];
   const unbound = bound.find(([, ok]) => !ok);
   if (unbound) {
-    reject('field_mismatch', `the message ${unbound[0]} is not the one this rating asked for`);
+    reject('message_binding', `the message ${unbound[0]} is not the one this rating asked for`);
   }
 
   const now = options.now ?? Math.floor(Date.now() / 1000);

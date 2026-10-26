@@ -86,6 +86,8 @@ export {
 export {
   evidenceDocument,
   commitment,
+  newSalt,
+  isPrivateKey,
   EVIDENCE_SCHEMA,
   COMMITMENT_SCHEME,
   type EvidenceInput,

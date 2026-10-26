@@ -243,7 +243,7 @@ export function newRow(rating: NewRating, now: number): RatingRow {
     throw new ReputationError('invalid_input', 'ref must be a messageRef (64 lowercase hex digits)');
   }
   const chain = reputationChain(String(rating.network));
-  if (!chain) throw new ReputationError('unknown_chain', `no FeedbackDelegate is known for ${String(rating.network)}`);
+  if (!chain) throw new ReputationError('unknown_network', `no FeedbackDelegate is known for ${String(rating.network)}`);
   if (!isAddress(rating.subject)) throw new ReputationError('invalid_input', 'subject must be an address');
   if (typeof rating.streamId !== 'string' || rating.streamId === '' || rating.streamId.length > 200 || CONTROL.test(rating.streamId)) {
     throw new ReputationError('invalid_input', 'streamId must be a non-empty short string');
