@@ -136,6 +136,7 @@ export type RatingPatch = Partial<
   Pick<
     RatingRow,
     | 'status'
+    | 'agentId'
     | 'attempts'
     | 'nextAttemptAt'
     | 'startedAt'
@@ -204,6 +205,7 @@ const ALLOWED: Record<RatingStatus, readonly RatingStatus[]> = {
 const REF = /^[0-9a-f]{64}$/;
 const PATCH_KEYS = new Set<string>([
   'status',
+  'agentId',
   'attempts',
   'nextAttemptAt',
   'startedAt',
@@ -313,8 +315,17 @@ export function applyTransition(
   if (row.payment !== null && 'payment' in patch && !samePayment(row.payment, patch.payment)) {
     invalid('a signed payment is never replaced');
   }
-  if (row.proof !== null && 'proof' in patch && patch.proof !== row.proof) {
-    if (JSON.stringify(patch.proof) !== JSON.stringify(row.proof)) invalid('a proof is never replaced');
+  if (row.proof !== null && 'proof' in patch && JSON.stringify(patch.proof) !== JSON.stringify(row.proof)) {
+    invalid('a proof is never replaced');
+  }
+  // The signed rating covers the stored feedback: replacing it would leave a
+  // signature for one set of fields beside another (two workers each building it).
+  if (row.feedback !== null && 'feedback' in patch && JSON.stringify(patch.feedback) !== JSON.stringify(row.feedback)) {
+    invalid('the feedback, once stored, is never replaced');
+  }
+  if ('agentId' in patch) {
+    if (row.agentId !== null && patch.agentId !== row.agentId) invalid('the agent, once known, is never replaced');
+    if (typeof patch.agentId !== 'string' || uintOf(patch.agentId) === null) invalid('agentId must be a decimal uint256');
   }
   if (from === 'queued' && to === 'paying') {
     if (!patch.payment) invalid('paying needs the signed payment');

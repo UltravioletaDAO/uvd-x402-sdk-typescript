@@ -13,6 +13,17 @@
  * Within the deadline, a send whose outcome was retryable or uncertain is
  * re-sent with the SAME nonce and signature: at most one can land.
  *
+ * "Holds no matching rating" is not taken from the logs alone: a node behind
+ * a balancer can answer `eth_getLogs` with a partial range and no error. Before
+ * a row goes back to `paid`, the delegate's own spent-nonce map is read on the
+ * rater's account (`nonceUsed(nonce)`) at a block past the deadline, where the
+ * contract refuses the signature (`block.timestamp > deadline`). Spent: the
+ * rating landed and the scan starts over from its first block. Unreadable:
+ * the row waits. Only an unspent nonce sends the row back.
+ *
+ * One process never works on one row twice at once (a lock per outbox and
+ * ref), and across processes the compare-and-sets decide.
+ *
  * The signed submission (nonce, deadline, signature, authorization) is
  * stored BEFORE it is sent, by a compare-and-set from `paid`; a worker that
  * loses that race sends nothing.
@@ -84,6 +95,12 @@ export interface SubmitDeps {
   /** Most blocks read per `eth_getLogs`. Default 2000. */
   scanBlocks?: number;
   maxDeadlineAheadSecs?: number;
+  /**
+   * The facilitator's proof freshness window (`ERC8004_PROOF_MAX_AGE_SECS`).
+   * Default 7 days, its production value; a payment within an hour of it is
+   * not spent on a new prepare.
+   */
+  proofMaxAgeSecs?: number;
   now?: () => number;
   logger?: ReputationLogger;
 }
@@ -98,8 +115,10 @@ export const DEADLINE_GRACE_SECS = 120;
 const RESEND_MARGIN_SECS = 30;
 const MAX_SENDS = 3;
 const POLL_SECS = 15;
-/** A proof this close to the facilitator's 7 days is not spent on a new prepare. */
+/** A proof this close to the facilitator's freshness window is not spent on a new prepare. */
 const PROOF_SAFETY_SECS = 3600;
+/** How long a payment's nonce must look consumed by another transaction before the row fails. */
+export const NONCE_CONSUMED_GRACE_SECS = 3600;
 const X402_VERSION = 1;
 
 export function retryDelay(attempts: number): number {
@@ -311,8 +330,39 @@ async function tellBreaker(ctx: Context, resp: unknown): Promise<void> {
   if (failure && ctx.deps.governor) await ctx.deps.governor.recordFailure(failure);
 }
 
+const NONCE_USED = ethers.id('nonceUsed(bytes32)').slice(0, 10);
+
+/**
+ * Was `nonce` spent on the rater's account, as of `block`? Read from the
+ * delegate's storage, which under EIP-7702 is the rater's own (x402-rs
+ * `relay.rs::nonce_already_used`). `false` also when the account has no code
+ * at all: no relay can have run on it. `null` when it cannot be told (the
+ * account runs some other code).
+ */
+async function nonceSpent(ctx: Context, rater: string, nonce: string, block: number): Promise<boolean | null> {
+  const tag = '0x' + block.toString(16);
+  const code = await rpcCall(ctx.deps.rpc, 'eth_getCode', [rater, tag]);
+  if (typeof code !== 'string') throw new ReputationError('rpc_failed', 'eth_getCode answered no code');
+  const lower = code.toLowerCase();
+  if (lower === '0x') return false;
+  if (lower !== '0xef0100' + ctx.chain.delegate.slice(2).toLowerCase()) return null;
+  const raw = await rpcCall(ctx.deps.rpc, 'eth_call', [{ to: rater, data: NONCE_USED + nonce.slice(2) }, tag]);
+  if (raw === '0x' + '0'.repeat(64)) return false;
+  if (raw === '0x' + '0'.repeat(63) + '1') return true;
+  return null;
+}
+
+interface Scan {
+  found: { tx: string } | null;
+  /** The chain was read past the deadline and the nonce is unspent: the signature can never land. */
+  absent: boolean;
+  cursor: number;
+  /** Why the row waits when neither found nor absent. */
+  note: string | null;
+}
+
 /** One step of the chain scan for a submitted rating. */
-async function scanStep(ctx: Context, row: RatingRow): Promise<{ found: { tx: string } | null; proven: boolean; cursor: number }> {
+async function scanStep(ctx: Context, row: RatingRow): Promise<Scan> {
   const s = row.submission as Submission;
   const params = paramsOf(row, row.feedback as FeedbackInput);
   const head = await blockNumber(ctx.deps.rpc);
@@ -332,7 +382,7 @@ async function scanStep(ctx: Context, row: RatingRow): Promise<{ found: { tx: st
     for (const entry of logs) {
       if (matchFeedbackLog(entry, ctx.chain, s.rater, params) !== null) {
         const tx = bytes32Of((entry as Record<string, unknown>).transactionHash);
-        if (tx) return { found: { tx }, proven: false, cursor: from };
+        if (tx) return { found: { tx }, absent: false, cursor: from, note: null };
       }
     }
   }
@@ -340,11 +390,18 @@ async function scanStep(ctx: Context, row: RatingRow): Promise<{ found: { tx: st
   // the head is reached, the last few blocks (what a shallow reorg could
   // still replace) are read again next time.
   const cursor = to === head ? Math.max(from, head + 1 - REORG_OVERLAP_BLOCKS) : to + 1;
-  let proven = false;
-  if (to === head && to >= from) {
-    proven = (await blockTimestamp(ctx.deps.rpc, head)) > s.deadline + DEADLINE_GRACE_SECS;
+  if (!(to === head && to >= from) || (await blockTimestamp(ctx.deps.rpc, head)) <= s.deadline + DEADLINE_GRACE_SECS) {
+    return { found: null, absent: false, cursor, note: null };
   }
-  return { found: null, proven, cursor };
+  // The logs show nothing up to a block past the deadline. Logs can be
+  // incomplete without an error, so the state decides.
+  const spent = await nonceSpent(ctx, s.rater, s.nonce, head);
+  if (spent === false) return { found: null, absent: true, cursor, note: null };
+  if (spent === true) {
+    // It landed and the logs missed it: read them again from the first block.
+    return { found: null, absent: false, cursor: s.scanFromBlock, note: 'relay_landed_unseen' };
+  }
+  return { found: null, absent: false, cursor, note: 'relay_outcome_unknown' };
 }
 
 async function reconcileSubmitted(ctx: Context, row: RatingRow): Promise<RatingRow> {
@@ -365,7 +422,7 @@ async function reconcileSubmitted(ctx: Context, row: RatingRow): Promise<RatingR
         nextAttemptAt: ctx.now,
       });
     }
-    if (step.proven) {
+    if (step.absent) {
       return reverted
         ? move(ctx, row, 'submitted', { status: 'failed', error: 'relay_reverted' })
         : move(ctx, row, 'submitted', {
@@ -376,7 +433,11 @@ async function reconcileSubmitted(ctx: Context, row: RatingRow): Promise<RatingR
             nextAttemptAt: ctx.now,
           });
     }
-    return move(ctx, row, 'submitted', { submission: { ...s, scanCursor: step.cursor }, nextAttemptAt: ctx.now + POLL_SECS });
+    return move(ctx, row, 'submitted', {
+      submission: { ...s, scanCursor: step.cursor },
+      ...(step.note ? { error: step.note } : {}),
+      nextAttemptAt: ctx.now + POLL_SECS,
+    });
   }
   const logs = Array.isArray(receipt.logs) ? receipt.logs : [];
   let index: number | null = null;
@@ -463,8 +524,8 @@ async function reconcileSubmitting(ctx: Context, row: RatingRow, mayResend: bool
     });
     return next.status === 'submitted' ? reconcileSubmitted(ctx, next) : next;
   }
-  if (step.proven) {
-    log(ctx.deps.logger, 'info', 'reputation: the deadline passed with no rating on-chain; preparing again', { ref: row.ref });
+  if (step.absent) {
+    log(ctx.deps.logger, 'info', 'reputation: the deadline passed, the nonce is unspent; preparing again', { ref: row.ref });
     return move(ctx, row, 'submitting', {
       status: 'paid',
       submission: null,
@@ -473,7 +534,11 @@ async function reconcileSubmitting(ctx: Context, row: RatingRow, mayResend: bool
       nextAttemptAt: ctx.now,
     });
   }
-  const updated = await move(ctx, row, 'submitting', { submission: { ...s, scanCursor: step.cursor } });
+  if (step.note) log(ctx.deps.logger, 'warn', `reputation: ${step.note}`, { ref: row.ref });
+  const updated = await move(ctx, row, 'submitting', {
+    submission: { ...s, scanCursor: step.cursor },
+    ...(step.note ? { error: step.note } : {}),
+  });
   const resend =
     mayResend &&
     updated.status === 'submitting' &&
@@ -492,7 +557,7 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
   const { deps } = ctx;
   if (row.forgotten) return move(ctx, row, 'paid', { status: 'local_only', error: 'forgotten' });
   if (!row.proof) throw new ReputationError('invalid_transition', 'a paid row has no proof');
-  if (ctx.now - row.proof.timestamp > PROOF_MAX_AGE_SECS - PROOF_SAFETY_SECS) {
+  if (ctx.now - row.proof.timestamp > (deps.proofMaxAgeSecs ?? PROOF_MAX_AGE_SECS) - PROOF_SAFETY_SECS) {
     return move(ctx, row, 'paid', { status: 'failed', error: 'proof_expired' });
   }
   let current = row;
@@ -578,11 +643,25 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
   return send(ctx, moved);
 }
 
-/**
- * Advance a `paid`, `submitting` or `submitted` row. Returns the row as
- * stored afterwards. A row in any other status is returned untouched.
- */
-export async function submitWithReconcile(ref: string, deps: SubmitDeps): Promise<RatingRow> {
+/** Rows a process is working on right now, per outbox: one tick per row at a time. */
+const RUNNING = new WeakMap<object, Set<string>>();
+
+async function exclusively<T>(outbox: RatingOutbox, ref: string, busy: () => Promise<T>, work: () => Promise<T>): Promise<T> {
+  let refs = RUNNING.get(outbox);
+  if (!refs) {
+    refs = new Set();
+    RUNNING.set(outbox, refs);
+  }
+  if (refs.has(ref)) return busy();
+  refs.add(ref);
+  try {
+    return await work();
+  } finally {
+    refs.delete(ref);
+  }
+}
+
+async function advance(ref: string, deps: SubmitDeps): Promise<RatingRow> {
   const row = await deps.outbox.get(ref);
   if (!row) throw new ReputationError('row_missing', 'no outbox row has this ref');
   const chain = reputationChain(row.network);
@@ -603,8 +682,33 @@ export async function submitWithReconcile(ref: string, deps: SubmitDeps): Promis
   }
 }
 
+/**
+ * Advance a `paid`, `submitting` or `submitted` row. Returns the row as
+ * stored afterwards. A row in any other status, or one this process is
+ * already working on, is returned untouched.
+ */
+export async function submitWithReconcile(ref: string, deps: SubmitDeps): Promise<RatingRow> {
+  return exclusively(
+    deps.outbox,
+    ref,
+    async () => {
+      const row = await deps.outbox.get(ref);
+      if (!row) throw new ReputationError('row_missing', 'no outbox row has this ref');
+      return row;
+    },
+    () => advance(ref, deps)
+  );
+}
+
 export interface ProcessDeps extends SubmitDeps {
   governor: Governor;
+  /**
+   * The rated wallet's ERC-8004 agent, for a row enqueued without one: run
+   * BEFORE the payment, so nobody is paid who cannot be rated. `null` means
+   * the wallet has no agent and the row ends `local_only`. Without this, a
+   * row with no `agentId` is never paid (it waits with `agent_unknown`).
+   */
+  resolveAgent?: (row: RatingRow) => string | number | bigint | null | Promise<string | number | bigint | null>;
   /** Gas ceilings and receipt polling for the anchor payment. */
   payment?: GasLimits & {
     confirmations?: number;
@@ -623,6 +727,12 @@ const PAYMENT_DEFINITIVE: ReadonlySet<string> = new Set([
   'proof_expired',
 ]);
 
+/** Whether the rater's account is delegated to this chain's delegate. */
+async function raterDelegated(ctx: Context): Promise<boolean> {
+  const code = await rpcCall(ctx.deps.rpc, 'eth_getCode', [ctx.deps.signer.address, 'latest']);
+  return typeof code === 'string' && code.toLowerCase() === '0xef0100' + ctx.chain.delegate.slice(2).toLowerCase();
+}
+
 async function pay(
   ctx: Context & { deps: ProcessDeps },
   row: RatingRow,
@@ -636,13 +746,29 @@ async function pay(
       if (admission.final) return move(ctx, current, 'queued', { status: 'local_only', error: admission.reason });
       return move(ctx, current, 'queued', { error: admission.reason, nextAttemptAt: admission.retryAt ?? ctx.now + POLL_SECS });
     }
-    // A wallet that does not own the agent cannot be rated: find out before paying it.
-    if (current.agentId !== null && (await ownerOf(deps.rpc, ctx.chain, current.agentId)) !== current.subject) {
+    // Nobody is paid who cannot be rated: the agent is known, and owned by the wallet, first.
+    if (current.agentId === null) {
+      if (!deps.resolveAgent) return later(ctx, current, 'agent_unknown');
+      const resolved = await deps.resolveAgent(current);
+      if (resolved === null || resolved === undefined) {
+        return move(ctx, current, 'queued', { status: 'local_only', error: 'no_agent' });
+      }
+      const agentId = uintOf(resolved);
+      if (agentId === null) throw new ReputationError('invalid_input', 'resolveAgent gave no uint256 agentId');
+      current = await move(ctx, current, 'queued', { agentId: agentId.toString() });
+      if (current.status !== 'queued' || current.agentId === null) return current;
+    }
+    if ((await ownerOf(deps.rpc, ctx.chain, current.agentId)) !== current.subject) {
       return move(ctx, current, 'queued', { status: 'local_only', error: 'identity_owner_mismatch' });
     }
     // One anchor payment in flight per rater: two would race for one account nonce.
     if ((await deps.outbox.count({ statuses: ['paying'] })) > 0) {
       return move(ctx, current, 'queued', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
+    }
+    // A first rating's EIP-7702 authorization is signed over the account's
+    // nonce; a payment sent before it lands would use that nonce and void it.
+    if ((await deps.outbox.count({ statuses: ['submitting', 'submitted'] })) > 0 && !(await raterDelegated(ctx))) {
+      return move(ctx, current, 'queued', { error: 'authorization_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
     }
   }
   const proof = await payAndProve({
@@ -688,10 +814,15 @@ async function pay(
  * One worker tick for one row: admit and pay a `queued` row, finish a
  * `paying` one, then hand `paid` / `submitting` / `submitted` to
  * {@link submitWithReconcile}. An error is stored on the row as a code with a
- * retry time; an anchor payment that can never complete (reverted, its nonce
- * used by another transaction) fails the row for a human.
+ * retry time; an anchor payment that can never complete (reverted, or its
+ * nonce used by another transaction for an hour) fails the row for a human.
+ * A row this process is already working on is returned untouched.
  */
 export async function processRating(ref: string, deps: ProcessDeps): Promise<RatingRow | null> {
+  return exclusively(deps.outbox, ref, () => deps.outbox.get(ref), () => tick(ref, deps));
+}
+
+async function tick(ref: string, deps: ProcessDeps): Promise<RatingRow | null> {
   let row = await deps.outbox.get(ref);
   if (!row) return null;
   const chain = reputationChain(row.network);
@@ -704,7 +835,7 @@ export async function processRating(ref: string, deps: ProcessDeps): Promise<Rat
   try {
     if (row.status === 'queued' || row.status === 'paying') row = await pay(ctx, row, mine);
     if (row.status === 'paid' || row.status === 'submitting' || row.status === 'submitted') {
-      row = await submitWithReconcile(ref, deps);
+      row = await advance(ref, deps);
     }
     return row;
   } catch (error) {
@@ -715,13 +846,16 @@ export async function processRating(ref: string, deps: ProcessDeps): Promise<Rat
     const current = await deps.outbox.get(ref);
     if (!current) return null;
     log(deps.logger, 'warn', 'reputation: tick failed', { ref, status: current.status, code });
-    // Only what the chain said about the payment THIS tick signed or resumed fails the row.
+    // Only what the chain said about the payment THIS tick signed or resumed
+    // fails the row; a nonce that looks used by another transaction only after
+    // an hour of looking so (a lagging node answers that way too).
     const definitive =
       current.status === 'paying' &&
       error instanceof ReputationError &&
       PAYMENT_DEFINITIVE.has(error.code) &&
       mine.tx !== null &&
-      current.payment?.transactionHash === mine.tx;
+      current.payment?.transactionHash === mine.tx &&
+      (error.code !== 'payment_nonce_consumed' || ctx.now - (current.startedAt ?? ctx.now) >= NONCE_CONSUMED_GRACE_SECS);
     if (definitive) return move(ctx, current, 'paying', { status: 'failed', error: code });
     if (current.status === 'confirmed' || current.status === 'failed' || current.status === 'local_only') return current;
     return later(ctx, current, code);

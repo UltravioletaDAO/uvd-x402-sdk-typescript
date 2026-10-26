@@ -117,7 +117,25 @@ describe('signPayment', () => {
     ).toBe('balance_low');
     chain.script('eth_estimateGas', { error: new Error('execution reverted: ERC20: transfer amount exceeds balance') });
     expect(await code(signPayment({ signer: SIGNER, rpc: chain, network: 'base', payee: PAYEE, amount: 1000 }))).toBe('payment_estimate_failed');
+    chain.usdcBalances.set(SIGNER.address.toLowerCase(), 999n);
+    expect(await code(signPayment({ signer: SIGNER, rpc: chain, network: 'base', payee: PAYEE, amount: 1000 }))).toBe('balance_low');
     chain.assertConsumed();
+  });
+
+  it('never copies the message of a foreign RPC error, which may carry its URL and key', async () => {
+    const leaky = {
+      async request() {
+        throw new Error('server response 401 (requestUrl="https://base.example/v2/SECRETKEY123")');
+      },
+    };
+    let message = '';
+    try {
+      await signPayment({ signer: SIGNER, rpc: leaky, network: 'base', payee: PAYEE, amount: 1000 });
+    } catch (error) {
+      message = (error as Error).message;
+      expect((error as ReputationError).code).toBe('rpc_failed');
+    }
+    expect(message).not.toContain('SECRETKEY123');
   });
 
   it('refuses a wrong chain, an unknown token, a self-payment, a zero amount and a signer without signHash', async () => {
@@ -162,6 +180,16 @@ describe('provePayment', () => {
     expect(error).toBe('payment_pending');
     chain.consumeNonce(SIGNER.address);
     expect(await code(provePayment({ rpc: chain, payment: pending, now: chain.now() }))).toBe('payment_nonce_consumed');
+  });
+
+  it('a node serving the nonce before the receipt (Celo): the payment is pending, not replaced', async () => {
+    const chain = new FakeChain();
+    const p = await paid(chain);
+    chain.advance(2);
+    chain.script('eth_getTransactionReceipt', { result: null });
+    expect(await code(provePayment({ rpc: chain, payment: p, now: chain.now() }))).toBe('payment_pending');
+    expect((await provePayment({ rpc: chain, payment: p, now: chain.now() })).transactionHash).toBe(p.transactionHash);
+    chain.assertConsumed();
   });
 
   it('refuses a reverted payment, a transfer of another amount or to another wallet, a reorged block, an old payment', async () => {

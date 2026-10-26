@@ -20,6 +20,10 @@
  * "Viewer" is the rated WALLET, not a login: describe.net counts a campaign
  * per (rater, wallet), and two logins sharing a wallet share its caps.
  *
+ * Two more caps are checked on the row itself, and both end it `local_only`:
+ * `maxAmountPerRating` (so `perDay * maxAmountPerRating` bounds the day's
+ * spend) and `maxValue`.
+ *
  * HEALTH is a live source of describe.net's `reading_policy.campaign_per_rater`
  * (`GET /health`). The effective per-wallet lifetime cap is
  * `min(perViewerLifetime, campaign_per_rater - campaignMargin)`, read from
@@ -30,12 +34,13 @@
  * it; a store it cannot read refuses everything):
  * - the facilitator's daily write limit (429 `erc8004_daily_write_limit`):
  *   open until the next 00:00 UTC;
- * - any other 429: open for `Retry-After`, at least `minRateLimitSeconds`;
+ * - any other 429, and a 503 (the writer lease): open for `Retry-After`, at
+ *   least `minRateLimitSeconds`;
  * - writes switched off (`ENABLE_ERC8004_WRITES=false` unmounts the routes:
  *   404/405), a proof refused while the facilitator enforces proofs, the
- *   rater's ETH below its floor: open for `openSeconds`;
- * - `failureThreshold` transient failures in a row (502/503/504, timeouts,
- *   unreachable RPC): open for `openSeconds`.
+ *   rater's ETH or USDC below what a payment needs: open for `openSeconds`;
+ * - `failureThreshold` transient failures in a row (502/504, no answer): open
+ *   for `openSeconds`.
  *
  * An open breaker also holds back the facilitator work of rows already
  * admitted (a prepare, a re-send: `blockedUntil`), but never the chain reads
@@ -49,7 +54,7 @@
 import { ReputationError } from './errors';
 import { log, type ReputationLogger } from './redact';
 import type { CountFilter, RatingOutbox } from './outbox';
-import { isRecord } from './values';
+import { int128Of, isRecord, uintOf } from './values';
 
 export interface ReputationCaps {
   perViewerPerStream: number;
@@ -58,6 +63,14 @@ export interface ReputationCaps {
   perStream: number;
   perDay: number;
   lifetime: number;
+  /**
+   * The largest anchor payment one rating may make, in token base units. With
+   * `perDay` it bounds what leaves the rater wallet in a day:
+   * `perDay * maxAmountPerRating`, plus gas.
+   */
+  maxAmountPerRating: string | number | bigint;
+  /** The highest rating value written. A value of 100 from a single rater reads as wash trading. */
+  maxValue: number;
 }
 
 export interface HealthSnapshot {
@@ -148,6 +161,7 @@ function positiveInt(value: unknown, name: string, fallback: number): number {
 
 export class Governor {
   private readonly caps: Readonly<ReputationCaps>;
+  private readonly maxAmount: bigint;
   private readonly health: HealthSource | null;
   private readonly store: GovernorOptions['store'];
   private readonly margin: number;
@@ -163,11 +177,19 @@ export class Governor {
   constructor(caps: ReputationCaps, health: HealthSource | null, options: GovernorOptions) {
     if (!isRecord(caps)) throw new ReputationError('invalid_input', 'caps must be an object');
     for (const name of CAP_NAMES) {
-      const v = caps[name];
-      if (!Number.isSafeInteger(v) || v < 0) {
+      const v: unknown = caps[name];
+      if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
         throw new ReputationError('invalid_input', `caps.${name} must be a non-negative integer (a parameter, never a default)`);
       }
     }
+    const maxAmount = uintOf(caps.maxAmountPerRating);
+    if (maxAmount === null || maxAmount === 0n) {
+      throw new ReputationError('invalid_input', 'caps.maxAmountPerRating must be a positive integer of base units');
+    }
+    if (!Number.isSafeInteger(caps.maxValue) || int128Of(caps.maxValue) === null) {
+      throw new ReputationError('invalid_input', 'caps.maxValue must be an integer');
+    }
+    this.maxAmount = maxAmount;
     if (health !== null && typeof health !== 'function') {
       throw new ReputationError('invalid_input', 'health must be a function, or null to run without one');
     }
@@ -233,8 +255,15 @@ export class Governor {
   }
 
   /** May a new rating for `row` start now? Never throws for a store or health failure: it refuses. */
-  async admit(row: { subject: string; streamId: string }): Promise<Admission> {
+  async admit(row: { subject: string; streamId: string; amount: string | number | bigint; value: number }): Promise<Admission> {
     const now = this.now();
+    const amount = uintOf(row.amount);
+    if (amount === null || amount > this.maxAmount) {
+      return { ok: false, reason: 'cap_maxAmountPerRating', final: true };
+    }
+    if (typeof row.value !== 'number' || !Number.isSafeInteger(row.value) || row.value > this.caps.maxValue) {
+      return { ok: false, reason: 'cap_maxValue', final: true };
+    }
     let breaker: BreakerState;
     try {
       breaker = await this.breaker();
@@ -304,7 +333,8 @@ export class Governor {
       case 'daily_cap':
         next = open(nextUtcMidnight(now));
         break;
-      case 'rate_limited': {
+      case 'rate_limited':
+      case 'unavailable': {
         const wait = Number.isFinite(failure.retryAfterSeconds) ? Math.max(0, Math.floor(failure.retryAfterSeconds as number)) : 0;
         next = open(now + Math.max(wait, this.minRateLimit));
         break;
@@ -314,7 +344,6 @@ export class Governor {
       case 'balance_low':
         next = open(now + this.openSeconds);
         break;
-      case 'unavailable':
       case 'transient': {
         const consecutive = state.consecutive + 1;
         next = consecutive >= this.threshold ? open(now + this.openSeconds) : { ...state, consecutive };

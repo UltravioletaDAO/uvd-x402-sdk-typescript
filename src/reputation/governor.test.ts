@@ -26,6 +26,8 @@ const CAPS: ReputationCaps = {
   perStream: 25,
   perDay: 60,
   lifetime: 74_000,
+  maxAmountPerRating: 10_000,
+  maxValue: 95,
 };
 const PAYMENT = {
   network: 'base',
@@ -62,6 +64,10 @@ describe('Governor caps', () => {
     expect(() => new Governor(missing as ReputationCaps, null, { store })).toThrow(ReputationError);
     expect(() => new Governor({ ...CAPS, perDay: -1 }, null, { store })).toThrow(ReputationError);
     expect(() => new Governor({ ...CAPS, perDay: 1.5 }, null, { store })).toThrow(ReputationError);
+    expect(() => new Governor({ ...CAPS, maxAmountPerRating: 0 }, null, { store })).toThrow(ReputationError);
+    expect(() => new Governor({ ...CAPS, maxAmountPerRating: '1e3' }, null, { store })).toThrow(ReputationError);
+    const { maxValue: _maxValue, ...noValue } = CAPS;
+    expect(() => new Governor(noValue as ReputationCaps, null, { store })).toThrow(ReputationError);
     expect(() => new Governor(CAPS, 'yes' as any, { store })).toThrow(ReputationError);
     expect(() => new Governor(CAPS, null, {} as any)).toThrow(ReputationError);
   });
@@ -76,47 +82,63 @@ describe('Governor caps', () => {
   ])('%s: final=%s', async (cap, final) => {
     const { outbox, governor, now } = setup({ [cap]: 2 });
     await admitted(outbox, A, 'stream-1');
-    expect(await governor.admit({ subject: A, streamId: 'stream-1' })).toEqual({ ok: true });
+    expect(await governor.admit({ subject: A, streamId: 'stream-1', amount: 1000, value: 90 })).toEqual({ ok: true });
     await admitted(outbox, A, 'stream-1');
-    const refusal = await governor.admit({ subject: A, streamId: 'stream-1' });
+    const refusal = await governor.admit({ subject: A, streamId: 'stream-1', amount: 1000, value: 90 });
     expect(refusal).toEqual(
       final ? { ok: false, reason: `cap_${cap}`, final: true } : { ok: false, reason: `cap_${cap}`, retryAt: nextUtcMidnight(now()), final: false }
     );
   });
 
+  it('ends a row that pays more than maxAmountPerRating or rates above maxValue: they bound the day\'s spend and wash trading', async () => {
+    const { governor } = setup({ maxAmountPerRating: 1000, maxValue: 95 });
+    expect((await governor.admit({ subject: A, streamId: 's', amount: '1000', value: 95 })).ok).toBe(true);
+    expect(await governor.admit({ subject: A, streamId: 's', amount: 1001n, value: 90 })).toEqual({
+      ok: false,
+      reason: 'cap_maxAmountPerRating',
+      final: true,
+    });
+    expect(await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 100 })).toEqual({
+      ok: false,
+      reason: 'cap_maxValue',
+      final: true,
+    });
+    expect((await governor.admit({ subject: A, streamId: 's', amount: 'x', value: 90 })).ok).toBe(false);
+  });
+
   it('counts the wallet, not the login, and other wallets and streams separately', async () => {
     const { outbox, governor } = setup({ perViewerPerStream: 1, perStream: 2 });
     await admitted(outbox, A, 'stream-1');
-    expect((await governor.admit({ subject: A.toLowerCase(), streamId: 'stream-1' })).ok).toBe(false);
-    expect((await governor.admit({ subject: B, streamId: 'stream-1' })).ok).toBe(true);
-    expect((await governor.admit({ subject: A, streamId: 'stream-2' })).ok).toBe(true);
+    expect((await governor.admit({ subject: A.toLowerCase(), streamId: 'stream-1', amount: 1000, value: 90 })).ok).toBe(false);
+    expect((await governor.admit({ subject: B, streamId: 'stream-1', amount: 1000, value: 90 })).ok).toBe(true);
+    expect((await governor.admit({ subject: A, streamId: 'stream-2', amount: 1000, value: 90 })).ok).toBe(true);
     await admitted(outbox, B, 'stream-1');
-    expect(await governor.admit({ subject: seededAddress('c'), streamId: 'stream-1' })).toMatchObject({ reason: 'cap_perStream' });
+    expect(await governor.admit({ subject: seededAddress('c'), streamId: 'stream-1', amount: 1000, value: 90 })).toMatchObject({ reason: 'cap_perStream' });
   });
 
   it('the per-day caps start over at 00:00 UTC', async () => {
     const { outbox, governor, tick, now } = setup({ perDay: 1 });
     await admitted(outbox, A, 'stream-1');
-    expect((await governor.admit({ subject: B, streamId: 'stream-2' })).ok).toBe(false);
+    expect((await governor.admit({ subject: B, streamId: 'stream-2', amount: 1000, value: 90 })).ok).toBe(false);
     tick(nextUtcMidnight(now()) - now());
-    expect((await governor.admit({ subject: B, streamId: 'stream-2' })).ok).toBe(true);
+    expect((await governor.admit({ subject: B, streamId: 'stream-2', amount: 1000, value: 90 })).ok).toBe(true);
   });
 
   it('keeps each wallet under describe.net\'s campaign cut, read live: campaign_per_rater - 5', async () => {
     const { outbox, governor } = setup({}, () => ({ campaignPerRater: 7 }));
     await admitted(outbox, A, 's1');
     await admitted(outbox, A, 's2');
-    expect(await governor.admit({ subject: A, streamId: 's3' })).toEqual({ ok: false, reason: 'cap_perViewerLifetime', final: true });
+    expect(await governor.admit({ subject: A, streamId: 's3', amount: 1000, value: 90 })).toEqual({ ok: false, reason: 'cap_perViewerLifetime', final: true });
   });
 
   it('reads the health source once per TTL', async () => {
     const health = vi.fn(() => ({ campaignPerRater: 20 }));
     const { governor, tick } = setup({}, health);
-    await governor.admit({ subject: A, streamId: 's' });
-    await governor.admit({ subject: A, streamId: 's' });
+    await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 90 });
+    await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 90 });
     expect(health).toHaveBeenCalledTimes(1);
     tick(600);
-    await governor.admit({ subject: A, streamId: 's' });
+    await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 90 });
     expect(health).toHaveBeenCalledTimes(2);
   });
 
@@ -129,7 +151,7 @@ describe('Governor caps', () => {
     ['answers nothing', () => undefined],
   ])('refuses when the health source %s', async (_name, health) => {
     const { governor, now } = setup({}, health);
-    expect(await governor.admit({ subject: A, streamId: 's' })).toEqual({
+    expect(await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 90 })).toEqual({
       ok: false,
       reason: 'health_unreadable',
       retryAt: now() + 60,
@@ -140,7 +162,7 @@ describe('Governor caps', () => {
   it('runs without a health source only when told so (null)', async () => {
     const { outbox, governor } = setup({ perViewerLifetime: 100, perViewerPerDay: 100 }, null);
     for (let i = 0; i < 30; i++) await admitted(outbox, A, `s${i}`);
-    expect((await governor.admit({ subject: A, streamId: 'new' })).ok).toBe(true);
+    expect((await governor.admit({ subject: A, streamId: 'new', amount: 1000, value: 90 })).ok).toBe(true);
   });
 
   it('refuses when it cannot read its own state', async () => {
@@ -155,7 +177,7 @@ describe('Governor caps', () => {
         now: () => T0,
       });
     for (const what of ['getState', 'count'] as const) {
-      expect(await failing(what).admit({ subject: A, streamId: 's' })).toEqual({
+      expect(await failing(what).admit({ subject: A, streamId: 's', amount: 1000, value: 90 })).toEqual({
         ok: false,
         reason: 'state_unreadable',
         retryAt: T0 + 60,
@@ -164,7 +186,7 @@ describe('Governor caps', () => {
     }
     await outbox.setState('uvd_reputation.breaker', '{"openUntil":"soon"}');
     const corrupt = new Governor(CAPS, null, { store: outbox, now: () => T0 });
-    expect(await corrupt.admit({ subject: A, streamId: 's' })).toMatchObject({ reason: 'state_unreadable' });
+    expect(await corrupt.admit({ subject: A, streamId: 's', amount: 1000, value: 90 })).toMatchObject({ reason: 'state_unreadable' });
     expect(await corrupt.blockedUntil()).toBe(T0 + 60);
   });
 });
@@ -174,7 +196,7 @@ describe('Governor breaker', () => {
     const { governor, now } = setup();
     const state = await governor.recordFailure({ kind: 'daily_cap', retryAfterSeconds: 15 });
     expect(state.openUntil).toBe(nextUtcMidnight(now()));
-    expect(await governor.admit({ subject: A, streamId: 's' })).toEqual({
+    expect(await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 90 })).toEqual({
       ok: false,
       reason: 'breaker_open:daily_cap',
       retryAt: nextUtcMidnight(now()),
@@ -201,17 +223,26 @@ describe('Governor breaker', () => {
     const { governor, now } = setup();
     await governor.recordFailure({ kind: 'transient' });
     await governor.recordSuccess();
-    expect((await governor.recordFailure({ kind: 'unavailable' })).openUntil).toBe(0);
+    expect((await governor.recordFailure({ kind: 'transient' })).openUntil).toBe(0);
     const state = await governor.recordFailure({ kind: 'transient' });
     expect(state.openUntil).toBe(now() + 3600);
     expect(state.cause).toBe('transient');
+  });
+
+  it('a 503 (the writer lease) opens it at once, for its Retry-After or a minute', async () => {
+    const { governor, now } = setup();
+    expect(await governor.recordFailure({ kind: 'unavailable', retryAfterSeconds: 5 })).toEqual({
+      openUntil: now() + 60,
+      cause: 'unavailable',
+      consecutive: 0,
+    });
   });
 
   it('survives a restart: a new governor on the same store is still open', async () => {
     const { outbox, governor, now } = setup();
     await governor.recordFailure({ kind: 'writes_disabled' });
     const restarted = new Governor(CAPS, null, { store: outbox, now });
-    expect(await restarted.admit({ subject: A, streamId: 's' })).toMatchObject({ reason: 'breaker_open:writes_disabled' });
+    expect(await restarted.admit({ subject: A, streamId: 's', amount: 1000, value: 90 })).toMatchObject({ reason: 'breaker_open:writes_disabled' });
   });
 
   it('closes on its own when the time passes', async () => {
@@ -219,7 +250,7 @@ describe('Governor breaker', () => {
     await governor.recordFailure({ kind: 'balance_low' });
     tick(3600);
     expect(await governor.blockedUntil()).toBeNull();
-    expect((await governor.admit({ subject: A, streamId: 's' })).ok).toBe(true);
+    expect((await governor.admit({ subject: A, streamId: 's', amount: 1000, value: 90 })).ok).toBe(true);
   });
 
   it('refuses an unknown failure kind', async () => {

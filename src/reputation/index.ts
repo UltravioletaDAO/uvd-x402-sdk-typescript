@@ -130,6 +130,7 @@ export {
   RETRY_SCHEDULE_SECS,
   REORG_OVERLAP_BLOCKS,
   DEADLINE_GRACE_SECS,
+  NONCE_CONSUMED_GRACE_SECS,
   type RelayFeedbackClient,
   type FeedbackBuild,
   type SubmitDeps,

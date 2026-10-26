@@ -111,7 +111,12 @@ export class FakeChain implements EvmRpc {
   readonly calls: Array<{ method: string; params: readonly unknown[] }> = [];
   readonly sentRaw: string[] = [];
   readonly balances = new Map<string, bigint>();
+  readonly usdcBalances = new Map<string, bigint>();
   readonly owners = new Map<string, string>();
+  /** Account code: an EIP-7702 delegation is `0xef0100` + the delegate. */
+  readonly code = new Map<string, string>();
+  /** The delegate's spent-nonce map, per account (under 7702 it lives in the rater's storage). */
+  readonly spentNonces = new Map<string, Set<string>>();
   readonly logs: Log[] = [];
   autoMine = true;
   baseFee = 5_000_000n;
@@ -156,6 +161,14 @@ export class FakeChain implements EvmRpc {
   /** Another transaction of `address` was mined: its nonce moves on. */
   consumeNonce(address: string): void {
     this.minedNonce.set(address.toLowerCase(), this.nonceOf(address) + 1);
+  }
+
+  /** A relay ran on `rater`'s account: delegated to `DELEGATE`, `nonce` spent. */
+  spend(rater: string, nonce: string): void {
+    this.code.set(rater.toLowerCase(), '0xef0100' + DELEGATE.slice(2).toLowerCase());
+    const set = this.spentNonces.get(rater.toLowerCase()) ?? new Set<string>();
+    set.add(nonce.toLowerCase());
+    this.spentNonces.set(rater.toLowerCase(), set);
   }
 
   /** Mine `blocks` blocks; pending transactions go in the first. */
@@ -294,6 +307,12 @@ export class FakeChain implements EvmRpc {
       }
       case 'eth_getTransactionReceipt':
         return this.receipts.get(String(p[0]).toLowerCase()) ?? null;
+      case 'eth_getTransactionByHash': {
+        const hash = String(p[0]).toLowerCase();
+        return this.known.has(hash) ? { hash } : null;
+      }
+      case 'eth_getCode':
+        return this.code.get(String(p[0]).toLowerCase()) ?? '0x';
       case 'eth_getLogs': {
         const f = p[0] as { address: string; fromBlock: string; toBlock: string; topics: Array<string | null> };
         const from = Number(BigInt(f.fromBlock));
@@ -310,7 +329,17 @@ export class FakeChain implements EvmRpc {
       }
       case 'eth_call': {
         const call = p[0] as { to: string; data: string };
-        if (call.to.toLowerCase() === IDENTITY.toLowerCase() && call.data.startsWith(ethers.id('ownerOf(uint256)').slice(0, 10))) {
+        const to = call.to.toLowerCase();
+        if (to === USDC.toLowerCase() && call.data.startsWith(ethers.id('balanceOf(address)').slice(0, 10))) {
+          const owner = '0x' + call.data.slice(-40);
+          return pad(this.usdcBalances.get(owner) ?? 10n ** 12n);
+        }
+        if (call.data.startsWith(ethers.id('nonceUsed(bytes32)').slice(0, 10))) {
+          if (!this.code.has(to)) return '0x';
+          const nonce = '0x' + call.data.slice(10).toLowerCase();
+          return pad(this.spentNonces.get(to)?.has(nonce) ? 1n : 0n);
+        }
+        if (to === IDENTITY.toLowerCase() && call.data.startsWith(ethers.id('ownerOf(uint256)').slice(0, 10))) {
           const agentId = BigInt('0x' + call.data.slice(10)).toString();
           const owner = this.owners.get(agentId);
           if (!owner) throw new Error('execution reverted: ERC721NonexistentToken');
@@ -478,6 +507,7 @@ export class FakeFacilitator {
       },
     ]);
     this.used.add(String(body.nonce).toLowerCase());
+    this.chain.spend(rater, String(body.nonce));
     this.landed.push({ rater, agentId: String(f.agentId), nonce: String(body.nonce).toLowerCase(), tx });
     return { tx, index };
   }
@@ -556,6 +586,8 @@ export const OPEN_CAPS: ReputationCaps = {
   perStream: 100,
   perDay: 100,
   lifetime: 74_000,
+  maxAmountPerRating: 10_000,
+  maxValue: 95,
 };
 
 export interface World {
@@ -597,6 +629,7 @@ export function world(
   const viewers = VIEWER_SEEDS.map(seededAddress);
   viewers.forEach((v, i) => chain.owners.set(String(1000 + i), v.toLowerCase()));
   const client = new Erc8004Client({ baseUrl: FACILITATOR, retries: 0 });
+  const agentOf = (subject: string) => 1000 + viewers.findIndex((v) => v.toLowerCase() === subject);
   const deps: ProcessDeps = {
     outbox,
     client,
@@ -605,8 +638,9 @@ export function world(
     governor,
     now,
     logger,
+    resolveAgent: (row) => agentOf(row.subject),
     buildFeedback: (row) => ({
-      agentId: 1000 + viewers.findIndex((v) => v.toLowerCase() === row.subject),
+      agentId: agentOf(row.subject),
       tag1: 'moment:idea',
       tag2: 'credits-roll',
       endpoint: 'https://www.twitch.tv/example',

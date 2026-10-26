@@ -4,10 +4,11 @@
  * A rater's address, a viewer's wallet, a payment proof and a signature are
  * all public or harmless one at a time, and a log is where they get joined to
  * a username. So every long hex value is shortened to its first and last four
- * digits (enough to correlate two lines, not enough to look anything up), and
- * the fields that carry proofs, signatures or a signed transaction are
- * replaced whole. A private key never enters the module, and a hex string of
- * key length is shortened like any other.
+ * digits (enough to correlate two lines, not enough to look anything up), the
+ * fields that carry proofs, signatures or a signed transaction are replaced
+ * whole, and a URL (an RPC URL often carries its API key) is replaced by
+ * `[url]`. A private key never enters the module, and a hex string of key
+ * length is shortened like any other.
  */
 
 /** Keys whose value is dropped from a log entirely, compared case-insensitively. */
@@ -24,10 +25,13 @@ const DROPPED_KEYS = new Set([
 
 const PREFIXED_HEX = /0[xX][0-9a-fA-F]{40,}/g;
 const BARE_HEX = /(?<![0-9a-fA-FxX])[0-9a-fA-F]{64,}(?![0-9a-fA-F])/g;
+/** A URL: an RPC or facilitator URL can carry an API key in its path or query. */
+const URL_TEXT = /\b[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s"'<>`]+/g;
 
-/** Shorten every `0x` value of 40+ hex digits, and every bare run of 64+. */
+/** Drop every URL, then shorten every `0x` value of 40+ hex digits and every bare run of 64+. */
 export function redactText(text: string): string {
   return text
+    .replace(URL_TEXT, '[url]')
     .replace(PREFIXED_HEX, (m) => `${m.slice(0, 6)}…${m.slice(-4)}`)
     .replace(BARE_HEX, (m) => `${m.slice(0, 4)}…${m.slice(-4)}`);
 }

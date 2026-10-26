@@ -15,8 +15,9 @@
  * - A transaction that never mines is not replaced here. When the account's
  *   nonce moves past it with no receipt, it is `payment_nonce_consumed`, for
  *   a human, not a retry.
- * - Gas has a ceiling (`maxFeePerGasWei`, `maxGasLimit`) and the wallet's ETH
- *   a floor (`minNativeBalanceWei`): past either, nothing is signed.
+ * - Gas has a ceiling (`maxFeePerGasWei`, `maxGasLimit`), the wallet's ETH a
+ *   floor (`minNativeBalanceWei`), and its USDC must cover the payment: past
+ *   any of them, nothing is signed.
  * - The proof takes its timestamp from the BLOCK and its `paymentHash` from
  *   the fields it commits to, never from a caller.
  */
@@ -106,12 +107,17 @@ export function jsonRpc(
   };
 }
 
+/**
+ * One RPC call. The message of an error from someone else's `EvmRpc` is not
+ * carried over: an ethers provider, for one, puts the request URL (and the
+ * API key in it) into its errors.
+ */
 async function call(rpc: EvmRpc, method: string, params: readonly unknown[]): Promise<unknown> {
   try {
     return await rpc.request({ method, params });
   } catch (error) {
     if (error instanceof ReputationError) throw error;
-    throw new ReputationError('rpc_failed', `${method} failed: ${redactText(String((error as Error)?.message ?? error)).slice(0, 200)}`);
+    throw new ReputationError('rpc_failed', `${method} failed`);
   }
 }
 
@@ -198,7 +204,10 @@ export const DEFAULT_MAX_FEE_PER_GAS_WEI = 1_000_000_000n;
 export const DEFAULT_MAX_GAS_LIMIT = 150_000;
 /** Used when a node does not implement `eth_maxPriorityFeePerGas`: 0.001 gwei. */
 const FALLBACK_PRIORITY_FEE_WEI = 1_000_000n;
-const ERC20 = new ethers.Interface(['function transfer(address to, uint256 amount) returns (bool)']);
+const ERC20 = new ethers.Interface([
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function balanceOf(address owner) view returns (uint256)',
+]);
 
 /** The chain and token a payment on `network` uses, or throw. */
 function paymentChain(network: string): { chainId: number; network: string; token: string } {
@@ -252,6 +261,9 @@ export async function signPayment(
   if (maxFeePerGas > feeCap) {
     throw new ReputationError('gas_too_expensive', `maxFeePerGas ${maxFeePerGas} is above the ceiling ${feeCap}`);
   }
+  const usdc = quantityOf(await call(rpc, 'eth_call', [{ to: token, data: ERC20.encodeFunctionData('balanceOf', [payer]) }, 'latest']));
+  if (usdc === null) throw new ReputationError('rpc_failed', 'balanceOf answered no quantity');
+  if (usdc < amount) throw new ReputationError('balance_low', 'the rater wallet holds less USDC than this payment');
   const data = ERC20.encodeFunctionData('transfer', [payee, amount]);
   let estimate: bigint;
   try {
@@ -330,8 +342,12 @@ export async function provePayment(options: ProveOptions): Promise<ProofOfPaymen
   if (receipt === null || receipt === undefined) {
     if (payment.nonce !== undefined) {
       const mined = await quantity(rpc, 'eth_getTransactionCount', [payment.payer, 'latest']);
-      if (mined > BigInt(payment.nonce)) {
-        throw new ReputationError('payment_nonce_consumed', 'another transaction used this payment\'s nonce');
+      // A node can serve the account's nonce before it serves the receipt (x402-rs
+      // measured transient null receipts on Celo). Only a transaction the node does
+      // not know at all, with its nonce gone, was replaced; and even that is left
+      // to the caller to confirm over time (`processRating` waits an hour).
+      if (mined > BigInt(payment.nonce) && (await call(rpc, 'eth_getTransactionByHash', [txHash])) == null) {
+        throw new ReputationError('payment_nonce_consumed', 'another transaction may have used this payment\'s nonce');
       }
     }
     throw new ReputationError('payment_pending', 'the payment has no receipt yet');
@@ -395,14 +411,15 @@ const ALREADY_SENT = /already known|known transaction|nonce too low|already impo
 
 async function broadcast(rpc: EvmRpc, payment: SignedPayment, logger?: ReputationLogger): Promise<void> {
   try {
-    await call(rpc, 'eth_sendRawTransaction', [payment.rawTransaction]);
+    await rpc.request({ method: 'eth_sendRawTransaction', params: [payment.rawTransaction] });
   } catch (error) {
+    // Read only to recognise "the node already has it"; never copied into an error.
     const message = error instanceof JsonRpcError ? error.rpcMessage : String((error as Error)?.message ?? '');
     if (ALREADY_SENT.test(message)) {
       log(logger, 'debug', 'reputation: the node already has the payment', { tx: payment.transactionHash });
       return;
     }
-    throw new ReputationError('payment_broadcast_failed', `the payment was not broadcast: ${redactText(message).slice(0, 160)}`);
+    throw new ReputationError('payment_broadcast_failed', 'the payment was not broadcast');
   }
 }
 

@@ -3,9 +3,12 @@
  * `feedbackHash`.
  *
  * Karma Hello's `evidence_document` (`services/reputation/live.py`) publishes
- * the chat message and its author. This one never does, and cannot be made
- * to: a rating is irrevocable, and the Twitch Developer Agreement forbids
- * building public databases out of chat. What it carries instead:
+ * the chat message and its author. This one has no field for either, and
+ * refuses a key that names them: a rating is irrevocable, and the Twitch
+ * Developer Agreement forbids building public databases out of chat. The
+ * short free values it does take (tags, `context`, `subject.type`) are the
+ * caller's to keep free of chat text, and `createdAt` is the caller's to
+ * round if the exact second would point at a chat line. What it carries:
  *
  * - public facts: the subject's wallet and agentId, the rater, the value and
  *   tags, the stream's endpoint, and the anchor payment (its transaction hash

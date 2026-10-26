@@ -9,6 +9,7 @@
  * although the answer said otherwise, a deadline that passed with nothing on
  * the chain, a prepare that asks for something else.
  */
+import { ethers } from 'ethers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Erc8004Client } from '../backend';
 import { Governor, messageRef, processRating, type RatingRow } from './index';
@@ -121,6 +122,26 @@ describe('processRating: idempotency', () => {
     expect((await drive(ref)).status).toBe('confirmed');
     expect(w.chain.sentRaw).toHaveLength(1);
     expect(w.facilitator.landed).toHaveLength(1);
+  });
+
+  it('one anchor payment in flight at a time: a second row waits instead of racing for the same account nonce', async () => {
+    const first = await enqueue(1);
+    w.chain.script('eth_sendRawTransaction', { error: new Error('socket hang up') });
+    await processRating(first, w.deps);
+    const stored = await w.outbox.get(first);
+    expect(stored?.status).toBe('paying');
+    const second = await enqueue(2);
+    const waiting = await processRating(second, w.deps);
+    expect(waiting?.status).toBe('queued');
+    expect(waiting?.error).toBe('payment_in_flight');
+    expect(waiting?.payment).toBeNull();
+    expect(w.chain.sentRaw).toHaveLength(0);
+    // Once the first payment is through, the second pays with the next nonce.
+    w.chain.advanceTime(200);
+    expect((await drive(first)).status).toBe('confirmed');
+    expect((await drive(second)).status).toBe('confirmed');
+    expect(w.chain.sentRaw).toEqual([stored?.payment?.rawTransaction, expect.any(String)]);
+    expect(ethers.Transaction.from(w.chain.sentRaw[1]).nonce).toBe(stored!.payment!.nonce + 1);
   });
 
   it('two workers on one paid row: both may prepare, only one signature is ever submitted', async () => {
@@ -290,6 +311,138 @@ describe('processRating: answers that are not a clean 200', () => {
   });
 });
 
+describe('processRating: the logs are not the only witness', () => {
+  it('a lagging log node past the deadline: the spent nonce keeps the row from a second prepare', async () => {
+    const ref = await enqueue(1);
+    // The rating lands, the answer never comes, and the next three log reads come back empty.
+    w.facilitator.queue({ route: 'submit', throws: true, land: true });
+    for (let i = 0; i < 3; i++) w.chain.script('eth_getLogs', { result: [] });
+    await processRating(ref, w.deps);
+    expect((await w.outbox.get(ref))?.status).toBe('submitting');
+    w.chain.advanceTime(1200); // past the deadline and its grace
+    const unseen = await processRating(ref, w.deps);
+    expect(unseen?.status).toBe('submitting');
+    expect(unseen?.error).toBe('relay_landed_unseen');
+    expect(unseen?.submission?.scanCursor).toBe(unseen?.submission?.scanFromBlock);
+    const row = await drive(ref);
+    expect(row.status).toBe('confirmed');
+    expect(w.facilitator.prepares).toBe(1);
+    expect(w.facilitator.landed).toHaveLength(1);
+  });
+
+  it('an account running some other code: the row waits, it is never prepared again', async () => {
+    const ref = await enqueue(1);
+    w.facilitator.queue({ route: 'submit', phantom: true });
+    await processRating(ref, w.deps);
+    w.chain.code.set(w.signer.address.toLowerCase(), '0xef0100' + '11'.repeat(20));
+    w.chain.advanceTime(1200);
+    for (let i = 0; i < 3; i++) {
+      await processRating(ref, w.deps);
+      w.chain.advanceTime(16);
+    }
+    const row = await w.outbox.get(ref);
+    expect(row?.status).toBe('submitted');
+    expect(row?.error).toBe('relay_outcome_unknown');
+    expect(w.facilitator.prepares).toBe(1);
+  });
+});
+
+describe('processRating: one feedback per signature', () => {
+  it('two workers building the feedback at once: one is stored, and it is the one signed and sent', async () => {
+    const ref = await enqueue(1);
+    let calls = 0;
+    const flaky = {
+      ...w.deps,
+      buildFeedback: async (row: RatingRow) => {
+        calls += 1;
+        if (calls === 1) throw new Error('storage not ready');
+        await new Promise((r) => setTimeout(r, 5));
+        return { ...(await w.deps.buildFeedback!(row)), feedbackUri: `https://evidence.test/${ref}/${calls}.json` };
+      },
+    };
+    expect((await processRating(ref, flaky))?.feedback).toBeNull(); // paid, no feedback yet
+    w.chain.advanceTime(200);
+    // A second outbox object over the same rows: what another process would be.
+    const other = { ...flaky, outbox: Object.create(w.outbox) };
+    await Promise.all([processRating(ref, flaky), processRating(ref, other)]);
+    const row = await drive(ref);
+    expect(row.status).toBe('confirmed');
+    expect(w.facilitator.submits).toBe(1);
+    expect(w.facilitator.submitBodies[0].feedback.feedbackUri).toBe(row.feedback?.feedbackUri);
+    expect(w.facilitator.landed).toHaveLength(1);
+  });
+
+  it('one process never ticks one row twice at once', async () => {
+    const ref = await enqueue(1);
+    let built = 0;
+    const counting = { ...w.deps, buildFeedback: async (row: RatingRow) => (built++, w.deps.buildFeedback!(row)) };
+    await Promise.all([processRating(ref, counting), processRating(ref, counting), processRating(ref, counting)]);
+    expect(built).toBe(1);
+    expect(w.chain.sentRaw).toHaveLength(1);
+  });
+});
+
+describe('processRating: nobody is paid who cannot be rated', () => {
+  it('no agent at enqueue and no resolveAgent: the row waits, nothing is paid', async () => {
+    const ref = await enqueue(1);
+    const row = await processRating(ref, { ...w.deps, resolveAgent: undefined });
+    expect(row?.status).toBe('queued');
+    expect(row?.error).toBe('agent_unknown');
+    expect(w.chain.sentRaw).toHaveLength(0);
+  });
+
+  it('a wallet with no agent ends local_only, unpaid', async () => {
+    const ref = await enqueue(1);
+    const row = await processRating(ref, { ...w.deps, resolveAgent: () => null });
+    expect(row?.status).toBe('local_only');
+    expect(row?.error).toBe('no_agent');
+    expect(w.chain.sentRaw).toHaveLength(0);
+  });
+
+  it('an amount above maxAmountPerRating, or a value above maxValue, is never paid', async () => {
+    const big = messageRef('test:v1', 'stream-1', 'big');
+    await w.outbox.enqueue({ ref: big, network: 'base', subject: w.viewers[0], streamId: 'stream-1', value: 90, amount: 10_001 });
+    expect(await processRating(big, w.deps)).toMatchObject({ status: 'local_only', error: 'cap_maxAmountPerRating' });
+    const hundred = messageRef('test:v1', 'stream-1', 'hundred');
+    await w.outbox.enqueue({ ref: hundred, network: 'base', subject: w.viewers[0], streamId: 'stream-1', value: 100, amount: 1000 });
+    expect(await processRating(hundred, w.deps)).toMatchObject({ status: 'local_only', error: 'cap_maxValue' });
+    expect(w.chain.sentRaw).toHaveLength(0);
+  });
+
+  it('a first rating\'s authorization in flight holds the next payment, which would void it', async () => {
+    const first = await enqueue(1);
+    w.facilitator.queue({ route: 'submit', throws: true });
+    await processRating(first, w.deps);
+    const pending = await w.outbox.get(first);
+    expect(pending?.status).toBe('submitting');
+    expect(pending?.submission?.authorization).not.toBeNull();
+    const second = await enqueue(2);
+    const held = await processRating(second, w.deps);
+    expect(held).toMatchObject({ status: 'queued', error: 'authorization_in_flight' });
+    expect(w.chain.sentRaw).toHaveLength(1);
+    // The re-send lands with the authorization; then the second pays.
+    expect((await drive(first)).status).toBe('confirmed');
+    expect((await drive(second)).status).toBe('confirmed');
+    expect(w.facilitator.landed).toHaveLength(2);
+  });
+});
+
+describe('processRating: a payment\'s nonce taken by another transaction', () => {
+  it('is waited out for an hour, then fails the row for a human', async () => {
+    const ref = await enqueue(1);
+    w.chain.script('eth_sendRawTransaction', { error: new Error('socket hang up') });
+    await processRating(ref, w.deps);
+    // Another transaction of the rater mines with that nonce; ours is unknown to the node.
+    w.chain.consumeNonce(w.signer.address);
+    w.chain.advanceTime(200);
+    const waiting = await processRating(ref, w.deps);
+    expect(waiting).toMatchObject({ status: 'paying', error: 'payment_nonce_consumed' });
+    w.chain.advanceTime(3600);
+    const failed = await processRating(ref, w.deps);
+    expect(failed).toMatchObject({ status: 'failed', error: 'payment_nonce_consumed' });
+  });
+});
+
 describe('processRating: a prepare that asks for something else is never signed', () => {
   const cases: Array<[string, (a: any) => void, string]> = [
     ['a revoke instead of a rating', (a) => (a.typedData.primaryType = 'RelayedRevokeFeedback'), 'primary_type'],
@@ -322,7 +475,7 @@ describe('processRating: the subject', () => {
   });
 
   it('two logins sharing a wallet share its caps', async () => {
-    w = world({ caps: { ...worldCaps(), perViewerPerStream: 1 } });
+    w = world({ caps: { ...OPEN_CAPS, perViewerPerStream: 1 } });
     vi.stubGlobal('fetch', w.facilitator.fetch);
     const a = messageRef('test:v1', 'stream-1', 'a');
     const b = messageRef('test:v1', 'stream-1', 'b');
@@ -349,9 +502,9 @@ describe('processRating: !forgetme', () => {
     const sending = await enqueue(2);
     w.facilitator.queue({ route: 'submit', throws: true });
     await processRating(sending, w.deps);
-    // paid: the prepare answered 503
+    // paid: the prepare answered 400
     const paid = await enqueue(3);
-    w.facilitator.queue({ route: 'prepare', status: 503, body: { success: false, error: 'busy' } });
+    w.facilitator.queue({ route: 'prepare', status: 400, body: { success: false, error: 'not now' } });
     await processRating(paid, w.deps);
     // paying: the broadcast failed
     const paying = await enqueue(4);
@@ -361,6 +514,7 @@ describe('processRating: !forgetme', () => {
     const queued = await enqueue(5);
     expect((await w.outbox.get(sending))?.status).toBe('submitting');
     expect((await w.outbox.get(paid))?.status).toBe('paid');
+    expect((await w.outbox.get(paying))?.error).toBe('payment_broadcast_failed');
     expect((await w.outbox.get(paying))?.status).toBe('paying');
 
     const report = await w.outbox.forget('viewer-0');
@@ -383,7 +537,3 @@ describe('processRating: !forgetme', () => {
     expect(w.facilitator.landed).toHaveLength(2);
   });
 });
-
-function worldCaps() {
-  return { perViewerPerStream: 100, perViewerPerDay: 100, perViewerLifetime: 100, perStream: 100, perDay: 100, lifetime: 74_000 };
-}

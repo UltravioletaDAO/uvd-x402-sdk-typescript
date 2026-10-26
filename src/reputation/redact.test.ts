@@ -22,6 +22,11 @@ describe('redactText', () => {
     expect(text).toContain(`${KEY.slice(2, 6)}…${KEY.slice(-4)}`);
   });
 
+  it('drops URLs, which carry API keys', () => {
+    const text = redactText('POST https://base-mainnet.example/v2/SECRETKEY123?x=1 failed; see wss://node.example/ws/KEY456.');
+    expect(text).toBe('POST [url] failed; see [url]');
+  });
+
   it('leaves short hex and plain text alone', () => {
     expect(redactText('chain 0x2105, block 0x10, code 429')).toBe('chain 0x2105, block 0x10, code 429');
   });

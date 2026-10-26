@@ -220,13 +220,27 @@ describe('submitWithReconcile on the chain', () => {
     expect(w.facilitator.prepares).toBe(1);
   });
 
-  it('an agent the rated wallet does not own fails the row before any prepare', async () => {
+  it('an agent the rated wallet does not own is never paid', async () => {
     const ref = await enqueue();
     w.chain.owners.set('1000', w.viewers[2].toLowerCase());
     const row = await processRating(ref, w.deps);
+    expect(row?.status).toBe('local_only');
+    expect(row?.error).toBe('identity_owner_mismatch');
+    expect(row?.agentId).toBe('1000');
+    expect(w.chain.sentRaw).toHaveLength(0);
+    expect(w.facilitator.prepares).toBe(0);
+  });
+
+  it('an agent transferred away after the payment fails the row before any prepare', async () => {
+    const ref = await enqueue();
+    w.facilitator.queue({ route: 'prepare', status: 400, body: { success: false, error: 'try later' } });
+    expect((await processRating(ref, w.deps))?.status).toBe('paid');
+    w.chain.owners.set('1000', w.viewers[2].toLowerCase());
+    w.chain.advanceTime(200);
+    const row = await processRating(ref, w.deps);
     expect(row?.status).toBe('failed');
     expect(row?.error).toBe('identity_owner_mismatch');
-    expect(w.facilitator.prepares).toBe(0);
+    expect(w.facilitator.prepares).toBe(1);
   });
 
   it('leaves a row it has nothing to do for untouched', async () => {

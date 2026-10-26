@@ -16,7 +16,10 @@
  *
  * Every transition runs inside `BEGIN IMMEDIATE` and its `UPDATE` repeats the
  * expected status in its `WHERE`, so two processes on one file cannot both
- * move a row; the loser gets `null` and sends nothing.
+ * move a row; the loser gets `null` and sends nothing. The connection must
+ * run with `PRAGMA synchronous = FULL` (or `EXTRA`): the constructor refuses
+ * anything less, because a commit a power cut can undo is a payment signed
+ * twice.
  */
 
 import { ReputationError } from './errors';
@@ -59,6 +62,16 @@ export class SqliteRatingOutbox implements RatingOutbox {
   constructor(db: SqliteDatabase, options: { now?: () => number } = {}) {
     if (!db || typeof db.prepare !== 'function' || typeof db.transaction !== 'function') {
       throw new ReputationError('invalid_input', 'SqliteRatingOutbox needs a better-sqlite3 Database');
+    }
+    // "Stored before it is broadcast" holds only if a commit survives a power
+    // cut. Below FULL (with WAL and NORMAL, say) the last commits can roll back
+    // after a crash, the row is `queued` again, and the payment is signed twice.
+    const sync = db.prepare('PRAGMA synchronous').get() as { synchronous?: number } | undefined;
+    if (!sync || typeof sync.synchronous !== 'number' || sync.synchronous < 2) {
+      throw new ReputationError(
+        'invalid_input',
+        'SqliteRatingOutbox needs PRAGMA synchronous = FULL (2) or EXTRA (3) on this connection'
+      );
     }
     this.db = db;
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));

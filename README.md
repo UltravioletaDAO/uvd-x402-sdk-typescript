@@ -716,14 +716,14 @@ Ratings the chain records as authored by your program's own rater wallet, relaye
 import { Erc8004Client } from 'uvd-x402-sdk/backend';
 import { Governor, SqliteRatingOutbox, describeNetHealth, messageRef, processRating } from 'uvd-x402-sdk/reputation';
 
-const outbox = new SqliteRatingOutbox(db); // a better-sqlite3 Database (optional peer dependency)
-const governor = new Governor(caps, describeNetHealth(), { store: outbox }); // caps: six parameters, no defaults
+const outbox = new SqliteRatingOutbox(db); // a better-sqlite3 Database (optional peer dependency), synchronous = FULL
+const governor = new Governor(caps, describeNetHealth(), { store: outbox }); // caps: eight parameters, no defaults
 const ref = messageRef('my-app:v1', streamId, messageId);
-await outbox.enqueue({ ref, network: 'base', subject: wallet, streamId, value: 90, amount: 1000 });
-await processRating(ref, { outbox, governor, client: new Erc8004Client(), rpc, signer, buildFeedback });
+await outbox.enqueue({ ref, network: 'base', subject: wallet, streamId, value: 90, amount: 1000, viewerId });
+await processRating(ref, { outbox, governor, client: new Erc8004Client(), rpc, signer, resolveAgent, buildFeedback });
 ```
 
-The module never reads a key (it signs through the `signer` you pass), refuses to sign any prepare that is not the exact rating asked for, stores the signed payment before broadcasting it and the signed rating before sending it, and once a rating is signed it only reads the chain until the deadline proves it did not land.
+The module never reads a key (it signs through the `signer` you pass), never pays a wallet whose agent it has not resolved and checked, refuses to sign any prepare that is not the exact rating asked for, stores the signed payment before broadcasting it and the signed rating before sending it, and once a rating is signed it only reads the chain until the deadline, and the delegate's own spent-nonce record, prove it did not land.
 
 ## Multi-Stablecoin (EVM)
 

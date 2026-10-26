@@ -186,6 +186,21 @@ describe.each(adapters)('%s', (_name, make) => {
     expect((await o.transition(ref, 'submitting', { submission: { ...SUBMISSION, scanCursor: 9 } }))?.submission?.scanCursor).toBe(9);
   });
 
+  it('stores the feedback and the agent once: a second value is refused', async () => {
+    const o = make();
+    await o.enqueue(rating(1));
+    const ref = rating(1).ref;
+    await expect(o.transition(ref, 'queued', { agentId: 7 as unknown as string })).rejects.toMatchObject({ code: 'invalid_transition' });
+    expect((await o.transition(ref, 'queued', { agentId: '7' }))?.agentId).toBe('7');
+    expect(await o.transition(ref, 'queued', { agentId: '7' })).not.toBeNull();
+    await expect(o.transition(ref, 'queued', { agentId: '8' })).rejects.toMatchObject({ code: 'invalid_transition' });
+    await walk(o, ref, 'paid');
+    await expect(o.transition(ref, 'paid', { feedback: { ...FEEDBACK, feedbackUri: 'other' } })).rejects.toMatchObject({
+      code: 'invalid_transition',
+    });
+    expect((await o.transition(ref, 'paid', { feedback: { ...FEEDBACK } }))?.feedback).toEqual(FEEDBACK);
+  });
+
   it('goes back to paid only by clearing the submission and the transaction', async () => {
     const o = make();
     await o.enqueue(rating(1));
@@ -310,6 +325,17 @@ describe('SqliteRatingOutbox on a file', () => {
     await o.enqueue(rating(1));
     expect(db.pragma('user_version', { simple: true })).toBe(5);
     expect(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'uvd_reputation_%' AND type = 'table'").get()).toEqual({ n: 2 });
+  });
+
+  it('refuses a connection whose commits a power cut could undo (synchronous below FULL)', () => {
+    for (const level of ['OFF', 'NORMAL']) {
+      const db = new Database(':memory:');
+      db.pragma(`synchronous = ${level}`);
+      expect(() => new SqliteRatingOutbox(db, { now })).toThrow(ReputationError);
+    }
+    const extra = new Database(':memory:');
+    extra.pragma('synchronous = EXTRA');
+    expect(() => new SqliteRatingOutbox(extra, { now })).not.toThrow();
   });
 
   it('refuses tables of another schema version', () => {
