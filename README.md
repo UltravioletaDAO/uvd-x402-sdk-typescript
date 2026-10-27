@@ -24,6 +24,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
 - **Escrow Pre-Auth**: Sign-on-assignment `X-Payment-Auth` builder (`buildEscrowPreAuth`) — vector-pinned parity with the Python SDK and Execution Market
 - **Batch Settlement (buyer)**: `uvd-x402-sdk/batch-settlement` — one ERC-3009 deposit opens a channel, each later request pays with a cumulative voucher; capped deposits, vector-pinned parity with the Python SDK
+- **Reputation (rater-authored ERC-8004)**: `uvd-x402-sdk/reputation` — anchor payment, checked prepare, low-s signatures, a persistent outbox that never prepares twice, caps and a circuit breaker, evidence without chat text; vector-pinned parity with the Python SDK
 - **Commerce Scheme**: `'commerce'` scheme alias for marketplace integrations (identical to `'escrow'` on-chain)
 - **`/accepts` Negotiation**: Discover facilitator capabilities before constructing payments
 - **Bazaar Discovery**: Register and discover paid resources across the x402 network
@@ -706,6 +707,23 @@ if (res.ok) await client.confirm(prepared, settleResponse.extra); // from the PA
 ```
 
 A deposit is never above `maxDeposit`: the seller's `extra.minDeposit` is a target, and a deposit the next voucher needs above the cap throws `BatchSettlementError` with nothing signed. Only `eip155:*` networks and the ERC-3009 deposit are signed (`assetTransferMethod: 'permit2'` throws). `confirm` records previous cumulative + `chargedAmount` and never copies the seller's `channelState`; a mismatch leaves the local state untouched and resolves to `false`. If the payer may be an EIP-7702 delegated account (a Paybox wallet), pass `delegationResolver` (e.g. `rpcDelegationResolver(rpcUrl)`): the deposit authorization is then wrapped for ERC-1271 when the delegate needs it, and an unreadable chain refuses instead of signing plain. Not included: Permit2 deposits, the cooperative refund and the corrective-402 resync.
+
+## Reputation (rater-authored ERC-8004)
+
+Ratings the chain records as authored by your program's own rater wallet, relayed by the facilitator, each anchored by a small USDC payment from the rater to the rated wallet. One module for every program, the same contract and shared vectors as the Python SDK's `uvd_x402_sdk.reputation`. Integration in fifteen lines, the money rules, the outbox states and `!forgetme`: [`src/reputation/README.md`](src/reputation/README.md).
+
+```typescript
+import { Erc8004Client } from 'uvd-x402-sdk/backend';
+import { Governor, SqliteRatingOutbox, describeNetHealth, messageRef, processRating } from 'uvd-x402-sdk/reputation';
+
+const outbox = new SqliteRatingOutbox(db); // a better-sqlite3 Database (optional peer dependency), synchronous = FULL
+const governor = new Governor(caps, describeNetHealth(), { store: outbox }); // caps: eight parameters, no defaults
+const ref = messageRef('my-app:v1', streamId, messageId);
+await outbox.enqueue({ ref, network: 'base', subject: wallet, streamId, value: 90, amount: 1000, viewerId });
+await processRating(ref, { outbox, governor, client: new Erc8004Client(), rpc, signer, resolveAgent, buildFeedback });
+```
+
+The module never reads a key (it signs through the `signer` you pass), never pays a wallet whose agent it has not resolved and checked, refuses to sign any prepare that is not the exact rating asked for, stores the signed payment before broadcasting it and the signed rating before sending it, and once a rating is signed it only reads the chain until the deadline, and the delegate's own spent-nonce cell in the rater's storage, prove it did not land.
 
 ## Multi-Stablecoin (EVM)
 

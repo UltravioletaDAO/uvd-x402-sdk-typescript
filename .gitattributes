@@ -7,6 +7,9 @@
 # and in execution-market/shared/test-vectors. Pinned explicitly so the
 # invariant survives any future edit to the blanket rule above.
 src/erc8128/erc8128.f3-*.json text eol=lf
+# Reputation vectors: the same bytes as uvd-x402-sdk-python tests/vectors/reputation/,
+# pinned by sha256 in src/reputation/vectors.test.ts.
+test/vectors/reputation/*.json text eol=lf
 
 # Explicit binaries (never normalize).
 *.png binary

@@ -1,6 +1,6 @@
 {
   "name": "uvd-x402-sdk",
-  "version": "2.105.0",
+  "version": "2.106.0",
   "description": "x402 Payment SDK - Gasless crypto payments across 29 networks via Ultravioleta facilitator. Supports EVM (including Scroll, SKALE Base, Robinhood Chain, Arc mainnet + testnet), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, and native Hedera mainnet + testnet. Features: ERC-8004 Trustless Agents, Escrow/Refunds, multi-stablecoin (USDC, EURC, AUSD, PYUSD, USDT, USDG).",
   "author": "Ultravioleta DAO <ultravioletadao@gmail.com>",
   "license": "MIT",
@@ -132,6 +132,11 @@
       "import": "./dist/batch-settlement/index.mjs",
       "require": "./dist/batch-settlement/index.js"
     },
+    "./reputation": {
+      "types": "./dist/reputation/index.d.ts",
+      "import": "./dist/reputation/index.mjs",
+      "require": "./dist/reputation/index.js"
+    },
     "./hedera": {
       "types": "./dist/providers/hedera/index.d.ts",
       "import": "./dist/providers/hedera/index.mjs",
@@ -181,6 +186,9 @@
       ],
       "batch-settlement": [
         "./dist/batch-settlement/index.d.ts"
+      ],
+      "reputation": [
+        "./dist/reputation/index.d.ts"
       ],
       "hedera": [
         "./dist/providers/hedera/index.d.ts"
@@ -232,7 +240,8 @@
     "lute-connect": "^1.0.0",
     "react": "^18.0.0 || ^19.0.0",
     "xrpl": "^3.0.0 || ^4.0.0",
-    "@hiero-ledger/sdk": "^2.85.0"
+    "@hiero-ledger/sdk": "^2.85.0",
+    "better-sqlite3": ">=11.0.0"
   },
   "peerDependenciesMeta": {
     "@open-wallet-standard/core": {
@@ -279,6 +288,9 @@
     },
     "@hiero-ledger/sdk": {
       "optional": true
+    },
+    "better-sqlite3": {
+      "optional": true
     }
   },
   "devDependencies": {
@@ -297,6 +309,7 @@
     "@types/react": "^19.2.7",
     "@x402/core": "2.28.0",
     "algosdk": "^3.2.0",
+    "better-sqlite3": "12.9.0",
     "dotenv": "^17.3.1",
     "eslint": "^9.0.0",
     "hono": "^4.12.9",
