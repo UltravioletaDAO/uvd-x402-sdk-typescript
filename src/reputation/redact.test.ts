@@ -145,6 +145,11 @@ describe('walletDirectory', () => {
     const bom = String.fromCharCode(0xfeff);
     expect(dir.lookup(us + 'alice' + nel)).toBe(seededAddress('alice').toLowerCase());
     expect(dir.lookup(bom + 'alice')).toBeNull();
-    expect(walletDirectory([{ login: us + nel, wallet: seededAddress('blank') }]).lookup('')).toBeNull();
+    // The same on the entries' side: a padded login is found without its padding...
+    const zoe = seededAddress('zoe');
+    expect(walletDirectory([{ login: us + 'Zoe' + nel, wallet: zoe }]).lookup('zoe')).toBe(zoe.toLowerCase());
+    // ...and a login that is blank to Python is no login: it does not make the wallet shared.
+    const xena = seededAddress('xena');
+    expect(walletDirectory([{ login: us + nel, wallet: xena }, { login: 'xena', wallet: xena }]).lookup('xena')).toBe(xena.toLowerCase());
   });
 });
