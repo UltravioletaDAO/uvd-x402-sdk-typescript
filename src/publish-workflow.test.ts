@@ -292,6 +292,11 @@ function publishWorkflowViolations(source: string, scripts: Record<string, strin
     (job === 'check' && words.join(' ') === REBUILD) ||
     (words.length === 3 && words[0] === 'npm' && words[1] === 'run' && Object.hasOwn(scripts, words[2]));
   const follow = (job: string, text: string, via: string, seen: Set<string>) => {
+    // A script runs only npm and the build tools: `node some.mjs` or `prebuild-install` could
+    // run an install script where no npm command shows it.
+    for (const head of via === '' ? [] : commands(text).map((words) => words[0])) {
+      if (!SCRIPT_TOOLS.has(head)) violations.push(`job ${job} runs ${head}${via}, which is not allowed`);
+    }
     for (const words of npmCommands(text)) {
       if (!allowed(job, words)) violations.push(`job ${job} runs ${words.join(' ')}${via}, which is not allowed`);
       for (const script of reachedScripts(words)) {
@@ -308,17 +313,22 @@ function publishWorkflowViolations(source: string, scripts: Record<string, strin
   if (/^\s*(-\s+)?run:\s*>/m.test(source)) violations.push('a folded run, which the shell reads unlike this test');
   const checkRuns = runs(jobs.check);
   const rebuildAt = checkRuns.indexOf(REBUILD);
-  if (rebuildAt < 0 || rebuildAt > checkRuns.indexOf('npm run test:run')) {
-    violations.push(`job check does not run ${REBUILD} before its tests`);
-  }
+  const testAt = checkRuns.indexOf('npm run test:run');
+  if (testAt < 0) violations.push('job check has no npm run test:run step');
+  else if (rebuildAt < 0 || rebuildAt > testAt) violations.push(`job check does not run ${REBUILD} before its tests`);
 
-  // Nothing that script produced reaches `publish`: no action but checkout and setup-node, no
-  // setup-node cache, no outputs, and no permissions beyond the workflow's contents: read but
-  // those of `publish` and `tag`.
+  // Nothing that script produced reaches `publish`: every job on a fresh GitHub-hosted runner, in
+  // no container and with no services, no action but checkout and setup-node, no setup-node
+  // cache, no outputs, and no permissions beyond the workflow's contents: read but those of
+  // `publish` and `tag`.
   if (!isMap(workflowPermissions) || Object.entries(workflowPermissions).join() !== 'contents,read') {
     violations.push('workflow-level permissions are not exactly contents: read');
   }
   for (const [name, job] of Object.entries(jobs)) {
+    if (at(job, 'runs-on') !== 'ubuntu-latest') violations.push(`job ${name} does not run on ubuntu-latest`);
+    if (at(job, 'container') !== undefined || at(job, 'services') !== undefined) {
+      violations.push(`a container or services in job ${name}`);
+    }
     if (at(job, 'outputs') !== undefined) violations.push(`outputs in job ${name}`);
     if (name !== publisher && name !== tagger && at(job, 'permissions') !== undefined) {
       violations.push(`permissions in job ${name}`);
@@ -357,11 +367,21 @@ const SCRIPTS: Record<string, string> = JSON.parse(
   readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8')
 ).scripts;
 
-// The npm and npx commands in a run, each as its words from `npm` or `npx` up to the next shell
-// separator. Anything else (a comment, a trailing backslash) stays a word and fails the list.
+const SCRIPT_TOOLS = new Set(['npm', 'tsup', 'vitest', 'eslint', 'tsc', 'rimraf']);
+
+// The commands in a run, each as its words up to the next shell separator.
+function commands(run: string): string[][] {
+  return run
+    .split(/&&|\|\||[;&|\n(){}`]/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== '')
+    .map((segment) => segment.split(/\s+/));
+}
+
+// The npm and npx commands in a run, each as its words from `npm` or `npx` on. Anything else
+// after it (a comment, a trailing backslash) stays a word and fails the list.
 function npmCommands(run: string): string[][] {
-  return run.split(/&&|\|\||[;&|\n(){}`]/).flatMap((segment) => {
-    const words = segment.trim().split(/\s+/);
+  return commands(run).flatMap((words) => {
     const npm = words.findIndex((word) => word === 'npm' || word === 'npx');
     return npm < 0 ? [] : [words.slice(npm)];
   });
@@ -786,6 +806,27 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'workflow-level permissions are not exactly contents: read',
     ],
     [
+      'the check and publishing jobs on a self-hosted runner, which keeps what check left',
+      (s) => s.replace(/runs-on: ubuntu-latest\n/g, 'runs-on: self-hosted\n'),
+      'job check does not run on ubuntu-latest',
+    ],
+    [
+      'the publishing job in a container',
+      (s) => s.replace('    environment: npm\n', '    environment: npm\n    container: node:24\n'),
+      'a container or services in job publish',
+    ],
+    [
+      'a service beside the check job',
+      (s) =>
+        s.replace('    timeout-minutes: 20\n', '    timeout-minutes: 20\n    services:\n      cache:\n        image: redis\n'),
+      'a container or services in job check',
+    ],
+    [
+      'no test step in the check job',
+      (s) => s.replace('      - name: Test\n        run: npm run test:run\n\n', ''),
+      'job check has no npm run test:run step',
+    ],
+    [
       'outputs from the check job',
       (s) => s.replace('    timeout-minutes: 20\n', '    timeout-minutes: 20\n    outputs:\n      modules: x\n'),
       'outputs in job check',
@@ -848,6 +889,21 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'npx in a prepack, run by npm pack',
       (s) => ({ ...s, prepack: 'npx --yes prebuild-install' }),
       'job check runs npx --yes prebuild-install (package.json prepack),',
+    ],
+    [
+      'a node script in a pre hook, which could rebuild',
+      (s) => ({ ...s, 'pretest:run': 'node scripts/ensure-sqlite.mjs' }),
+      'job publish runs node (package.json pretest:run),',
+    ],
+    [
+      'npm by its path in a pre hook',
+      (s) => ({ ...s, 'pretest:run': '$npm_execpath rebuild better-sqlite3' }),
+      'job publish runs $npm_execpath (package.json pretest:run),',
+    ],
+    [
+      "better-sqlite3's install tool, run by hand in the build",
+      (s) => ({ ...s, build: `cd node_modules/better-sqlite3 && prebuild-install && cd - && ${s.build}` }),
+      'job publish runs prebuild-install (package.json build),',
     ],
   ];
 
