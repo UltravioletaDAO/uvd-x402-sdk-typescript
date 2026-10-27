@@ -630,13 +630,14 @@ async function prepareAndSend(ctx: Context, row: RatingRow): Promise<RatingRow> 
   if (code === 'none') {
     release = takeGate(deps.outbox);
     if (release === null) return move(ctx, current, 'paid', { error: 'rater_busy', nextAttemptAt: ctx.now + POLL_SECS });
-    if ((await deps.outbox.count({ statuses: ['paying'] })) > 0) {
-      release();
-      return move(ctx, current, 'paid', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
-    }
   }
   let moved: RatingRow | null;
+  // Nothing awaits between taking the gate and this try: a store that throws
+  // anywhere after it still releases the gate.
   try {
+    if (code === 'none' && (await deps.outbox.count({ statuses: ['paying'] })) > 0) {
+      return move(ctx, current, 'paid', { error: 'payment_in_flight', nextAttemptAt: ctx.now + POLL_SECS });
+    }
     const params = paramsOf(current, feedback);
     const prepRequest: PrepareRelayFeedbackRequest = {
       x402Version: X402_VERSION,

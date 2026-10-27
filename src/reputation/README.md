@@ -88,7 +88,7 @@ committed to; it is then searched for everywhere else.
   while a payment is in flight. This holds for every tick of one process on one outbox object, also when they run at
   once (`Promise.all(due.map(...))`): a money gate per outbox lets one tick at a time go from the admission to its
   stored payment, or from a first rating's check to its stored submission, and a tick that finds it taken retries
-  the row later (`rater_busy`). Across processes it holds only with one worker per rater: the counts it relies on
+  the row later (`rater_busy`); a tick releases it however it ends, a store error included. Across processes it holds only with one worker per rater: the counts it relies on
   are read before the compare-and-set that stores the payment. A transfer whose nonce another transaction took (the node does not know ours, and the
   account nonce moved past it) fails the row for a human only after an hour of looking that way, counted from the
   first time it was seen; a node that serves the nonce before the receipt makes it look so for a while.

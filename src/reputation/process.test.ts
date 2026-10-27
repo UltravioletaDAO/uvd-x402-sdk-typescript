@@ -12,7 +12,7 @@
 import { ethers } from 'ethers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Erc8004Client } from '../backend';
-import { Governor, messageRef, processRating, type RatingOutbox, type RatingRow } from './index';
+import { Governor, MemoryRatingOutbox, messageRef, processRating, type CountFilter, type RatingOutbox, type RatingRow } from './index';
 import {
   DELEGATE,
   FACILITATOR,
@@ -717,6 +717,83 @@ describe('processRating: ticks for different rows at once in one process', () =>
     }
     expect(w.chain.sentRaw).toHaveLength(1);
     expect(w.facilitator.landed).toHaveLength(1);
+  });
+});
+
+describe('processRating: the money gate is never left taken', () => {
+  /** A promise and the function that settles it. */
+  function signal(): { promise: Promise<void>; go: () => void } {
+    let go = () => {};
+    const promise = new Promise<void>((resolve) => (go = resolve));
+    return { promise, go };
+  }
+
+  it('a store that throws once under the gate does not keep it: that row and a new one still confirm (RT61-R1)', async () => {
+    // The first count of `paying` rows is the payment's; the second is the
+    // first rating's, taken under the gate. It throws once, as a busy SQLite would.
+    let payingCounts = 0;
+    class FlakyOutbox extends MemoryRatingOutbox {
+      override async count(filter: CountFilter): Promise<number> {
+        if (filter.statuses?.length === 1 && filter.statuses[0] === 'paying' && ++payingCounts === 2) {
+          throw new Error('SQLITE_BUSY: database is locked');
+        }
+        return super.count(filter);
+      }
+    }
+    w = world({ outbox: new FlakyOutbox({ now: () => w.chain.now() }) });
+    vi.stubGlobal('fetch', w.facilitator.fetch);
+    const first = await enqueue(1, 0);
+    expect(await processRating(first, w.deps)).toMatchObject({ status: 'paid', error: 'Error', submission: null });
+    expect(payingCounts).toBe(2);
+    expect(w.facilitator.prepares).toBe(0);
+    const second = await enqueue(2, 1);
+    expect((await drive(first)).status).toBe('confirmed');
+    expect((await drive(second)).status).toBe('confirmed');
+    expect(w.chain.sentRaw).toHaveLength(2);
+    expect(w.facilitator.landed).toHaveLength(2);
+  });
+
+  it('a tick releasing twice does not open the gate another tick holds: a third tick still finds it taken', async () => {
+    const [a, b, c] = [await enqueue(1, 0), await enqueue(2, 1), await enqueue(3, 2)];
+    // A is held after its payment is stored (the gate's first release) and before pay() returns (its second).
+    const aStored = signal();
+    const aGo = signal();
+    let holdA = true;
+    const rpcA = {
+      request: async (args: { method: string; params?: readonly unknown[] }) => {
+        if (args.method === 'eth_getTransactionReceipt' && holdA) {
+          holdA = false;
+          aStored.go();
+          await aGo.promise;
+        }
+        return w.chain.request(args);
+      },
+    };
+    // B is held inside the gate, before its admission is done.
+    const bHolds = signal();
+    const bGo = signal();
+    const depsB = {
+      ...w.deps,
+      resolveAgent: async (row: RatingRow) => {
+        bHolds.go();
+        await bGo.promise;
+        return w.deps.resolveAgent!(row);
+      },
+    };
+    const tickA = processRating(a, { ...w.deps, rpc: rpcA });
+    await aStored.promise;
+    expect((await w.outbox.get(a))?.status).toBe('paying');
+    const tickB = processRating(b, depsB);
+    await bHolds.promise;
+    aGo.go();
+    // A's first rating finds the gate B holds, and A's second release left it with B.
+    expect(await tickA).toMatchObject({ status: 'paid', error: 'rater_busy', submission: null });
+    expect(await processRating(c, w.deps)).toMatchObject({ status: 'queued', error: 'rater_busy', payment: null });
+    bGo.go();
+    await tickB;
+    for (const ref of [a, b, c]) expect((await drive(ref)).status).toBe('confirmed');
+    expect(w.chain.sentRaw).toHaveLength(3);
+    expect(w.facilitator.landed).toHaveLength(3);
   });
 });
 
