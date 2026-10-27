@@ -311,6 +311,13 @@ function publishWorkflowViolations(source: string, scripts: Record<string, strin
     for (const run of runs(job)) follow(name, run, '', seen);
   }
   if (/^\s*(-\s+)?run:\s*>/m.test(source)) violations.push('a folded run, which the shell reads unlike this test');
+  // The job with id-token runs its three commands and nothing else: a step that ran a dependency's
+  // install tool itself (prebuild-install, node-gyp) would run it there with no npm command to show.
+  for (const run of runs(jobs[publisher])) {
+    if (run !== '' && !PUBLISH_JOB_RUNS.includes(run)) {
+      violations.push(`job ${publisher} runs ${run.split('\n')[0]}, which is not one of its commands`);
+    }
+  }
   const checkRuns = runs(jobs.check);
   const rebuildAt = checkRuns.indexOf(REBUILD);
   const testAt = checkRuns.indexOf('npm run test:run');
@@ -363,6 +370,15 @@ const NPM_COMMANDS = new Set([
   'npm pack --dry-run',
   'npm publish --provenance --access public',
 ]);
+// The runs of the publishing job, word for word: the npm version check, the install, npm publish.
+const PUBLISH_JOB_RUNS = [
+  [
+    `node -e "const [a,b,c]=process.argv[1].split('.').map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)" "$(npm --version)" \\`,
+    '|| { echo "::error::npm $(npm --version) cannot publish with OIDC"; exit 1; }',
+  ].join('\n'),
+  'npm ci --ignore-scripts',
+  'npm publish --provenance --access public',
+];
 const SCRIPTS: Record<string, string> = JSON.parse(
   readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8')
 ).scripts;
@@ -735,6 +751,26 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'the rebuild, by its alias, in the publishing job',
       (s) => s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts && npm rb better-sqlite3\n'),
       'job publish runs npm rb better-sqlite3,',
+    ],
+    [
+      "better-sqlite3's install tool, run by hand in the publishing job",
+      (s) =>
+        s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts && cd node_modules/better-sqlite3 && prebuild-install\n'),
+      'job publish runs npm ci --ignore-scripts && cd node_modules/better-sqlite3 && prebuild-install, which is not',
+    ],
+    [
+      'node-gyp in a step of its own in the publishing job',
+      (s) =>
+        s.replace(
+          '      - name: Publish\n',
+          '      - run: node-gyp rebuild --directory node_modules/better-sqlite3\n\n      - name: Publish\n'
+        ),
+      'job publish runs node-gyp rebuild --directory node_modules/better-sqlite3, which is not',
+    ],
+    [
+      'a command after the npm version check',
+      (s) => s.replace('cannot publish with OIDC"; exit 1; }\n', 'cannot publish with OIDC"; exit 1; }; prebuild-install\n'),
+      `job publish runs node -e "const [a,b,c]=process.argv[1].split('.')`,
     ],
     [
       'the rebuild in the tag job',
