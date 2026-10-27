@@ -682,6 +682,11 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'job publish runs npx --yes prebuild-install,',
     ],
     [
+      'a script that package.json does not have',
+      (s) => s.replace('run: npm run test:run\n', 'run: npm run test:native\n'),
+      'job check runs npm run test:native,',
+    ],
+    [
       'every install script in the check job',
       (s) => s.replace('run: npm rebuild better-sqlite3\n', 'run: npm rebuild\n'),
       'job check runs npm rebuild, which is not allowed',
