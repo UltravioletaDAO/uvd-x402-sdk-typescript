@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **USDT on Monad signed under the wrong EIP-712 name**: the registry named it `USD₮0` (U+20AE), as on Arbitrum and Optimism, but the Monad contract (`0xe7cd86e13AC4309349F30B3435a9d337750fC82D`) answers `name()` with plain `USDT0`, and its `DOMAIN_SEPARATOR()` is the hash of `USDT0`, version `1`. Every Monad USDT authorization was one the contract rejects. The registry now carries `USDT0`; `src/usdt-domains.test.ts` pins every enabled USDT row to the separator read from its contract.
+
 ## [2.106.0] - 2026-10-26
 
 ### Added
