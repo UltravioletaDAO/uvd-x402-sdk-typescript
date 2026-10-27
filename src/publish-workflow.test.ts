@@ -818,7 +818,10 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
     [
       'a service beside the check job',
       (s) =>
-        s.replace('    timeout-minutes: 20\n', '    timeout-minutes: 20\n    services:\n      cache:\n        image: redis\n'),
+        s.replace(
+          '    timeout-minutes: 20\n',
+          '    timeout-minutes: 20\n    services:\n      cache:\n        image: redis\n'
+        ),
       'a container or services in job check',
     ],
     [
