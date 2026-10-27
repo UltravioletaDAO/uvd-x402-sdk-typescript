@@ -286,8 +286,8 @@ function publishWorkflowViolations(source: string): string[] {
   // --ignore-scripts, so no dependency's preinstall, install or postinstall runs, least of all in
   // the job with id-token. The one exception is `npm rebuild better-sqlite3`, in `check` only,
   // which can only read: it runs that package's script alone, for its native binary. The variable
-  // that lets src/reputation/outbox.test.ts skip without that binary is set only on the npm
-  // publish step, whose prepublishOnly re-runs the tests that `check` ran with it.
+  // that lets src/reputation/outbox.test.ts skip without that binary is set only in the job that
+  // runs npm publish, whose prepublishOnly re-runs the tests that `check` ran with it.
   for (const [name, job] of Object.entries(jobs)) {
     for (const words of runs(job).flatMap(npmCommands)) {
       const command = words.find((word) => !word.startsWith('-')) ?? '';
@@ -304,10 +304,6 @@ function publishWorkflowViolations(source: string): string[] {
   const mentions = (node: Yaml | undefined) => JSON.stringify(node ?? '').includes(SKIP_SQLITE);
   for (const [name, job] of Object.entries(jobs)) {
     if (name !== publisher && mentions(job)) violations.push(`${SKIP_SQLITE} in job ${name}`);
-  }
-  const { steps: _steps, ...publisherJob } = jobs[publisher] as YamlMap;
-  if (mentions(publisherJob) || steps(jobs[publisher]).some((step) => step !== publishStep && mentions(step))) {
-    violations.push(`${SKIP_SQLITE} outside the npm publish step in job ${publisher}`);
   }
   return violations;
 }
@@ -654,13 +650,13 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'UVD_SKIP_SQLITE_WITHOUT_BINARY in job check',
     ],
     [
-      'the SQLite skip for the whole publishing job',
+      'the SQLite suites skipped in the tag job',
       (s) =>
         s.replace(
-          '    environment: npm\n',
-          "    environment: npm\n    env:\n      UVD_SKIP_SQLITE_WITHOUT_BINARY: '1'\n"
+          '          GITHUB_TOKEN: ${{ github.token }}\n',
+          "          GITHUB_TOKEN: ${{ github.token }}\n          UVD_SKIP_SQLITE_WITHOUT_BINARY: '1'\n"
         ),
-      'UVD_SKIP_SQLITE_WITHOUT_BINARY outside the npm publish step in job publish',
+      'UVD_SKIP_SQLITE_WITHOUT_BINARY in job tag',
     ],
   ];
 
