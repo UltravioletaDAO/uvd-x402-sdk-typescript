@@ -22,6 +22,53 @@ import {
 } from './index';
 import { seededAddress } from '../../test/reputation/doubles';
 
+// better-sqlite3 opens a database through a native binary that only its install script puts in
+// place. The `publish` job of publish.yml runs no install script, so it has none when its
+// prepublishOnly re-runs this file; `check` ran it on the same commit with the binary. That job
+// sets UVD_SKIP_SQLITE_WITHOUT_BINARY=1, and only there a missing binary skips the SQLite suites,
+// with the reason in their names. Anywhere else, or on any other error, this file fails.
+// src/publish-workflow.test.ts pins where the variable may be set.
+function sqliteSkip(open: () => void, env: Record<string, string | undefined>): string {
+  try {
+    open();
+    return '';
+  } catch (error) {
+    const reason = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    if (env.UVD_SKIP_SQLITE_WITHOUT_BINARY !== '1' || !reason.startsWith('Could not locate the bindings file')) {
+      throw new Error(`better-sqlite3 must open a database here and did not: ${reason}`);
+    }
+    return ` (SKIPPED: better-sqlite3 has no binary: ${reason})`;
+  }
+}
+const noBinary = sqliteSkip(() => new Database(':memory:').close(), process.env);
+
+describe('the SQLite suites skip only without the binary, and only where publish.yml says so', () => {
+  const missing = () => {
+    throw new Error('Could not locate the bindings file. Tried:\n -> node_modules/better-sqlite3/build/Release');
+  };
+  it('skips without the binary in the publish job, naming why', () => {
+    expect(sqliteSkip(missing, { UVD_SKIP_SQLITE_WITHOUT_BINARY: '1' })).toBe(
+      ' (SKIPPED: better-sqlite3 has no binary: Could not locate the bindings file. Tried:)'
+    );
+  });
+  it('fails without the binary anywhere else', () => {
+    for (const value of [undefined, '', '0', 'true', ' 1']) {
+      expect(() => sqliteSkip(missing, { UVD_SKIP_SQLITE_WITHOUT_BINARY: value })).toThrow(
+        'better-sqlite3 must open a database here and did not: Could not locate the bindings file'
+      );
+    }
+  });
+  it('fails on any other error, in the publish job too', () => {
+    const stale = () => {
+      throw new Error('The module was compiled against a different Node.js version');
+    };
+    expect(() => sqliteSkip(stale, { UVD_SKIP_SQLITE_WITHOUT_BINARY: '1' })).toThrow('different Node.js version');
+  });
+  it('runs them whenever the binary opens a database', () => {
+    expect(sqliteSkip(() => undefined, { UVD_SKIP_SQLITE_WITHOUT_BINARY: '1' })).toBe('');
+  });
+});
+
 const DIR = mkdtempSync(join(tmpdir(), 'uvd-reputation-outbox-'));
 afterAll(() => rmSync(DIR, { recursive: true, force: true }));
 
@@ -107,12 +154,12 @@ async function walk(o: RatingOutbox, ref: string, to: RatingRow['status']): Prom
   return row;
 }
 
-const adapters: Array<[string, () => RatingOutbox]> = [
-  ['MemoryRatingOutbox', () => new MemoryRatingOutbox({ now })],
-  ['SqliteRatingOutbox', () => new SqliteRatingOutbox(new Database(':memory:'), { now })],
+const adapters: Array<[string, () => RatingOutbox, boolean]> = [
+  ['MemoryRatingOutbox', () => new MemoryRatingOutbox({ now }), false],
+  [`SqliteRatingOutbox${noBinary}`, () => new SqliteRatingOutbox(new Database(':memory:'), { now }), noBinary !== ''],
 ];
 
-describe.each(adapters)('%s', (_name, make) => {
+for (const [name, make, skip] of adapters) describe.skipIf(skip)(name, () => {
   it('enqueues once per ref', async () => {
     const o = make();
     expect(await o.enqueue(rating(1))).toBe('inserted');
@@ -307,7 +354,7 @@ describe.each(adapters)('%s', (_name, make) => {
   });
 });
 
-describe('SqliteRatingOutbox on a file', () => {
+describe.skipIf(noBinary !== '')(`SqliteRatingOutbox on a file${noBinary}`, () => {
   it('survives a reopen: a restart sees every row and the state', async () => {
     const path = join(DIR, 'reopen.db');
     const first = new Database(path);

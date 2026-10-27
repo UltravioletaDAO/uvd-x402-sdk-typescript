@@ -6,6 +6,8 @@ name: Publish to npm
 # environment until the owner approves it under "Review deployments", and only that job gets
 # `id-token`. Once it has published, the `tag` job creates the annotated tag v<version> on the
 # commit it published, the only job that can write to the repository; the tag triggers nothing.
+# No job runs the install scripts of the dependencies (npm ci --ignore-scripts) except `check`,
+# which runs better-sqlite3's alone, for its native binary.
 # src/publish-workflow.test.ts fails if any of that stops being true.
 on:
   workflow_dispatch:
@@ -52,6 +54,12 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
+      # better-sqlite3 (a devDependency: src/reputation/outbox.test.ts opens real databases) has
+      # no native binary until its install script runs. This job, which can only read, runs that
+      # one script, from the tarball the lock pins; the prebuilt binary it downloads from the
+      # package's GitHub release is not in the lock. `publish` and `tag` run no install script.
+      - run: npm rebuild better-sqlite3
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -97,7 +105,11 @@ jobs:
       # npm exchanges this job's OIDC token for a short-lived publish credential, which works only
       # while npmjs.com lists this repository and publish.yml as the package's trusted publisher.
       # There is no token to add here. prepublishOnly re-runs the gates and builds dist/ first.
+      # This job runs no install script, so better-sqlite3 has no binary here: the variable lets
+      # src/reputation/outbox.test.ts skip the suites that need it, which `check` ran on this commit.
       - name: Publish
+        env:
+          UVD_SKIP_SQLITE_WITHOUT_BINARY: '1'
         run: npm publish --provenance --access public
 
   # Runs only when `publish` succeeded (no `if` of its own). The run's commit is the one `check`
