@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -110,7 +110,7 @@ function parseYaml(source: string): Yaml {
 
 const MAIN_ONLY = "github.ref == 'refs/heads/main'";
 
-function publishWorkflowViolations(source: string): string[] {
+function publishWorkflowViolations(source: string, scripts: Record<string, string> = SCRIPTS): string[] {
   const violations: string[] = [];
   if (/secrets\s*[.[:]/.test(source)) violations.push('reads secrets');
   if (/NODE_AUTH_TOKEN|NPM_TOKEN|_authToken/.test(source)) violations.push('names an npm token');
@@ -282,25 +282,62 @@ function publishWorkflowViolations(source: string): string[] {
     violations.push(`the tag step in job ${tagger} does not get exactly INPUT_VERSION and GITHUB_TOKEN`);
   }
 
-  // Install scripts (SDKTS-PUBLISH-SQLITE): every npm command that installs carries
-  // --ignore-scripts, so no dependency's preinstall, install or postinstall runs, least of all in
-  // the job with id-token. The one exception is `npm rebuild better-sqlite3`, in `check` only,
-  // which can only read: it runs that package's script alone, for its native binary. The variable
-  // that lets src/reputation/outbox.test.ts skip without that binary is set only in the job that
-  // runs npm publish, whose prepublishOnly re-runs the tests that `check` ran with it.
-  for (const [name, job] of Object.entries(jobs)) {
-    for (const words of runs(job).flatMap(npmCommands)) {
-      const command = words.find((word) => !word.startsWith('-')) ?? '';
-      const flags = words.filter((word) => word.includes('ignore-scripts'));
-      if (INSTALLS.has(command) && flags.join(' ') !== '--ignore-scripts') {
-        violations.push(`npm ${command} without --ignore-scripts in job ${name}`);
+  // Install scripts (SDKTS-PUBLISH-SQLITE): no dependency's preinstall, install or postinstall
+  // runs, least of all in the job with id-token, except better-sqlite3's (`npm rebuild
+  // better-sqlite3`, for its native binary) in `check`, which can only read. npm takes aliases,
+  // abbreviations and flags anywhere, so every npm or npx command, in a run or in a package.json
+  // script that one reaches, must be one of NPM_COMMANDS word for word, or `npm run <script>`.
+  const allowed = (job: string, words: string[]) =>
+    NPM_COMMANDS.has(words.join(' ')) ||
+    (job === 'check' && words.join(' ') === REBUILD) ||
+    (words.length === 3 && words[0] === 'npm' && words[1] === 'run' && Object.hasOwn(scripts, words[2]));
+  const follow = (job: string, text: string, via: string, seen: Set<string>) => {
+    for (const words of npmCommands(text)) {
+      if (!allowed(job, words)) violations.push(`job ${job} runs ${words.join(' ')}${via}, which is not allowed`);
+      for (const script of reachedScripts(words)) {
+        if (scripts[script] === undefined || seen.has(script)) continue;
+        seen.add(script);
+        follow(job, scripts[script], ` (package.json ${script})`, seen);
       }
-      if (REBUILDS.has(command) && name !== 'check') violations.push(`npm ${command} in job ${name}`);
-      else if (REBUILDS.has(command) && words.join(' ') !== 'rebuild better-sqlite3') {
-        violations.push(`npm ${words.join(' ')} in job ${name}, want npm rebuild better-sqlite3`);
+    }
+  };
+  for (const [name, job] of Object.entries(jobs)) {
+    const seen = new Set<string>();
+    for (const run of runs(job)) follow(name, run, '', seen);
+  }
+  if (/^\s*(-\s+)?run:\s*>/m.test(source)) violations.push('a folded run, which the shell reads unlike this test');
+  const checkRuns = runs(jobs.check);
+  const rebuildAt = checkRuns.indexOf(REBUILD);
+  if (rebuildAt < 0 || rebuildAt > checkRuns.indexOf('npm run test:run')) {
+    violations.push(`job check does not run ${REBUILD} before its tests`);
+  }
+
+  // Nothing that script produced reaches `publish`: no action but checkout and setup-node, no
+  // setup-node cache, no outputs, and no permissions beyond the workflow's contents: read but
+  // those of `publish` and `tag`.
+  if (!isMap(workflowPermissions) || Object.entries(workflowPermissions).join() !== 'contents,read') {
+    violations.push('workflow-level permissions are not exactly contents: read');
+  }
+  for (const [name, job] of Object.entries(jobs)) {
+    if (at(job, 'outputs') !== undefined) violations.push(`outputs in job ${name}`);
+    if (name !== publisher && name !== tagger && at(job, 'permissions') !== undefined) {
+      violations.push(`permissions in job ${name}`);
+    }
+    for (const step of steps(job)) {
+      const uses = String(at(step, 'uses') ?? '');
+      if (uses !== '' && !uses.startsWith('actions/checkout@') && !uses.startsWith('actions/setup-node@')) {
+        violations.push(`job ${name} uses ${uses}`);
+      }
+      if (uses.startsWith('actions/setup-node@')) {
+        if (at(step, 'with', 'package-manager-cache') !== 'false' || at(step, 'with', 'cache') !== undefined) {
+          violations.push(`setup-node caches in job ${name}`);
+        }
       }
     }
   }
+
+  // The variable that lets src/reputation/outbox.test.ts skip without that binary is set only in
+  // the job that runs npm publish, whose prepublishOnly re-runs the tests `check` ran with it.
   const mentions = (node: Yaml | undefined) => JSON.stringify(node ?? '').includes(SKIP_SQLITE);
   for (const [name, job] of Object.entries(jobs)) {
     if (name !== publisher && mentions(job)) violations.push(`${SKIP_SQLITE} in job ${name}`);
@@ -309,24 +346,35 @@ function publishWorkflowViolations(source: string): string[] {
 }
 
 const SKIP_SQLITE = 'UVD_SKIP_SQLITE_WITHOUT_BINARY';
-// npm's commands (and their aliases) that install packages, and so run their install scripts.
-const INSTALLS = new Set(
-  [
-    'ci clean-install ic install-clean isntall-clean',
-    'install add i in ins inst insta instal isnt isnta isntal isntall',
-    'install-test it install-ci-test cit clean-install-test sit',
-    'update up upgrade udpate dedupe ddp link ln',
-  ].flatMap((line) => line.split(' '))
-);
-const REBUILDS = new Set(['rebuild', 'rb']);
+const REBUILD = 'npm rebuild better-sqlite3';
+const NPM_COMMANDS = new Set([
+  'npm --version',
+  'npm ci --ignore-scripts',
+  'npm pack --dry-run',
+  'npm publish --provenance --access public',
+]);
+const SCRIPTS: Record<string, string> = JSON.parse(
+  readFileSync(resolve(__dirname, '..', 'package.json'), 'utf8')
+).scripts;
 
-// The npm commands in a run, each as the words after `npm` up to the next shell separator.
+// The npm and npx commands in a run, each as its words from `npm` or `npx` up to the next shell
+// separator. Anything else (a comment, a trailing backslash) stays a word and fails the list.
 function npmCommands(run: string): string[][] {
   return run.split(/&&|\|\||[;&|\n(){}`]/).flatMap((segment) => {
     const words = segment.trim().split(/\s+/);
-    const npm = words.indexOf('npm');
-    return npm < 0 ? [] : [words.slice(npm + 1)];
+    const npm = words.findIndex((word) => word === 'npm' || word === 'npx');
+    return npm < 0 ? [] : [words.slice(npm)];
   });
+}
+
+// The package.json scripts an npm command runs: `npm run x` runs prex, x and postx; npm pack and
+// npm publish run their lifecycle (with prepare's own pre and post).
+function reachedScripts(words: string[]): string[] {
+  const pack = ['prepack', 'preprepare', 'prepare', 'postprepare', 'postpack'];
+  if (words[1] === 'run' && words[2]) return [`pre${words[2]}`, words[2], `post${words[2]}`];
+  if (words[1] === 'pack') return pack;
+  if (words[1] === 'publish') return ['prepublishOnly', ...pack, 'prepublish', 'publish', 'postpublish'];
+  return [];
 }
 
 describe('publish.yml: trusted publishing, run by hand from main, approved by the owner, tagged after', () => {
@@ -341,13 +389,16 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
 
   // The guard itself: each edit below is how the workflow used to publish, or a way to skip the
   // approval. If one stops being caught, the test above proves nothing.
+  // The install step of `check` (the first one) and of `publish`, for the edits below.
+  const CHECK_CI = '      - run: npm ci --ignore-scripts\n';
+  const PUBLISH_CI = /(\n  publish:\n[\s\S]*?)run: npm ci --ignore-scripts\n/;
   const mutations: Array<[string, (s: string) => string, string]> = [
     [
       'the npm token back',
       (s) =>
         s.replace(
-          "          UVD_SKIP_SQLITE_WITHOUT_BINARY: '1'\n",
-          "          UVD_SKIP_SQLITE_WITHOUT_BINARY: '1'\n          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}\n"
+          '    environment: npm\n',
+          '    environment: npm\n    env:\n      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}\n'
         ),
       'reads secrets',
     ],
@@ -576,55 +627,89 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
     [
       'install scripts back in the check job',
       (s) => s.replace('      - run: npm ci --ignore-scripts\n', '      - run: npm ci\n'),
-      'npm ci without --ignore-scripts in job check',
+      'job check runs npm ci, which is not allowed',
     ],
     [
       'install scripts back in the publishing job',
-      (s) => s.replace(/(\n  publish:\n[\s\S]*?)run: npm ci --ignore-scripts\n/, '$1run: npm ci\n'),
-      'npm ci without --ignore-scripts in job publish',
+      (s) => s.replace(PUBLISH_CI, '$1run: npm ci\n'),
+      'job publish runs npm ci, which is not allowed',
     ],
     [
       'install scripts turned back on after --ignore-scripts',
+      (s) => s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts --ignore-scripts=false\n'),
+      'job publish runs npm ci --ignore-scripts --ignore-scripts=false,',
+    ],
+    [
+      '--ignore-scripts given the value false',
+      (s) => s.replace('      - run: npm ci --ignore-scripts\n', '      - run: npm ci --ignore-scripts false\n'),
+      'job check runs npm ci --ignore-scripts false,',
+    ],
+    [
+      'a flag with a value before the subcommand',
+      (s) => s.replace('      - run: npm ci --ignore-scripts\n', '      - run: npm --prefix . ci\n'),
+      'job check runs npm --prefix . ci,',
+    ],
+    [
+      'a shell comment where the flag was',
+      (s) => s.replace(CHECK_CI, '      - run: |\n          npm ci # was --ignore-scripts\n'),
+      'job check runs npm ci # was --ignore-scripts,',
+    ],
+    [
+      'a line continuation that adds a flag',
       (s) =>
-        s.replace(
-          /(\n  publish:\n[\s\S]*?)run: npm ci --ignore-scripts\n/,
-          '$1run: npm ci --ignore-scripts --ignore-scripts=false\n'
-        ),
-      'npm ci without --ignore-scripts in job publish',
+        s.replace(PUBLISH_CI, '$1run: |\n          npm ci --ignore-scripts \\\n            --ignore-scripts=false\n'),
+      'job publish runs npm ci --ignore-scripts \\,',
+    ],
+    [
+      'a folded run',
+      (s) => s.replace(CHECK_CI, '      - run: >-\n          npm ci --ignore-scripts\n'),
+      'a folded run',
     ],
     [
       'an npm install in the publishing job',
-      (s) =>
-        s.replace(
-          /(\n  publish:\n[\s\S]*?run: npm ci --ignore-scripts\n)/,
-          '$1\n      - run: npm i --no-save left-pad && npm run build\n'
-        ),
-      'npm i without --ignore-scripts in job publish',
+      (s) => s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts && npm i --no-save left-pad\n'),
+      'job publish runs npm i --no-save left-pad,',
+    ],
+    ['npm update by its alias u', (s) => s.replace(PUBLISH_CI, '$1run: npm u\n'), 'job publish runs npm u,'],
+    [
+      'npm ci by its camelCase name',
+      (s) => s.replace('      - run: npm ci --ignore-scripts\n', '      - run: npm cleanInstall --ignore-scripts\n'),
+      'job check runs npm cleanInstall --ignore-scripts,',
+    ],
+    [
+      'npx in the publishing job',
+      (s) => s.replace(PUBLISH_CI, '$1run: npx --yes prebuild-install\n'),
+      'job publish runs npx --yes prebuild-install,',
     ],
     [
       'every install script in the check job',
       (s) => s.replace('run: npm rebuild better-sqlite3\n', 'run: npm rebuild\n'),
-      'npm rebuild in job check, want npm rebuild better-sqlite3',
+      'job check runs npm rebuild, which is not allowed',
+    ],
+    [
+      'every install script, behind a flag, in the check job',
+      (s) => s.replace('run: npm rebuild better-sqlite3\n', 'run: npm --loglevel verbose rebuild\n'),
+      'job check runs npm --loglevel verbose rebuild,',
     ],
     [
       "another package's install script in the check job",
       (s) => s.replace('run: npm rebuild better-sqlite3\n', 'run: npm rebuild better-sqlite3 esbuild\n'),
-      'npm rebuild better-sqlite3 esbuild in job check, want npm rebuild better-sqlite3',
+      'job check runs npm rebuild better-sqlite3 esbuild,',
     ],
     [
       'the rebuild in the publishing job',
-      (s) =>
-        s.replace(
-          /(\n  publish:\n[\s\S]*?run: npm ci --ignore-scripts\n)/,
-          '$1\n      - run: npm rebuild better-sqlite3\n'
-        ),
-      'npm rebuild in job publish',
+      (s) => s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts && npm rebuild better-sqlite3\n'),
+      'job publish runs npm rebuild better-sqlite3,',
+    ],
+    [
+      'the rebuild, abbreviated, in the publishing job',
+      (s) => s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts && npm reb better-sqlite3\n'),
+      'job publish runs npm reb better-sqlite3,',
     ],
     [
       'the rebuild, by its alias, in the publishing job',
-      (s) =>
-        s.replace(/(\n  publish:\n[\s\S]*?run: npm ci --ignore-scripts)\n/, '$1 && npm rb better-sqlite3\n'),
-      'npm rb in job publish',
+      (s) => s.replace(PUBLISH_CI, '$1run: npm ci --ignore-scripts && npm rb better-sqlite3\n'),
+      'job publish runs npm rb better-sqlite3,',
     ],
     [
       'the rebuild in the tag job',
@@ -633,7 +718,72 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
           '      - name: Tag v<version> on the published commit\n',
           '      - run: npm rebuild better-sqlite3\n\n      - name: Tag v<version> on the published commit\n'
         ),
-      'npm rebuild in job tag',
+      'job tag runs npm rebuild better-sqlite3,',
+    ],
+    [
+      'no rebuild in the check job',
+      (s) => s.replace('      - run: npm rebuild better-sqlite3\n', ''),
+      'job check does not run npm rebuild better-sqlite3 before its tests',
+    ],
+    [
+      'the rebuild after the tests',
+      (s) =>
+        s
+          .replace('      - run: npm rebuild better-sqlite3\n', '')
+          .replace('        run: npm run test:run\n', `        run: npm run test:run\n\n      - run: ${REBUILD}\n`),
+      'job check does not run npm rebuild better-sqlite3 before its tests',
+    ],
+    // What the check job's install script produced, carried into the publishing job.
+    [
+      'a setup-node cache in the publishing job',
+      (s) => s.replace(/( {10}registry-url: .*\n)/, '$1          cache: npm\n'),
+      'setup-node caches in job publish',
+    ],
+    [
+      'the package-manager cache on in the check job',
+      (s) => s.replace('          package-manager-cache: false\n', '          package-manager-cache: true\n'),
+      'setup-node caches in job check',
+    ],
+    [
+      'node_modules saved to the cache in the check job',
+      (s) =>
+        s.replace(
+          '      - run: npm rebuild better-sqlite3\n',
+          '      - run: npm rebuild better-sqlite3\n\n' +
+            '      - uses: actions/cache/save@v4\n        with:\n          path: node_modules\n          key: modules\n'
+        ),
+      'job check uses actions/cache/save@v4',
+    ],
+    [
+      'an artifact downloaded into the publishing job',
+      (s) =>
+        s.replace(
+          PUBLISH_CI,
+          '$1run: npm ci --ignore-scripts\n\n' +
+            '      - uses: actions/download-artifact@v4\n        with:\n          name: modules\n'
+        ),
+      'job publish uses actions/download-artifact@v4',
+    ],
+    [
+      'a local action in the publishing job',
+      (s) => s.replace(PUBLISH_CI, '$1uses: ./.github/actions/install\n'),
+      'job publish uses ./.github/actions/install',
+    ],
+    [
+      'actions: write in the check job',
+      (s) =>
+        s.replace('    timeout-minutes: 20\n', '    timeout-minutes: 20\n    permissions:\n      actions: write\n'),
+      'permissions in job check',
+    ],
+    [
+      'actions: write for the whole workflow',
+      (s) => s.replace(/^permissions:\n/m, 'permissions:\n  actions: write\n'),
+      'workflow-level permissions are not exactly contents: read',
+    ],
+    [
+      'outputs from the check job',
+      (s) => s.replace('    timeout-minutes: 20\n', '    timeout-minutes: 20\n    outputs:\n      modules: x\n'),
+      'outputs in job check',
     ],
     [
       'the SQLite suites skipped in the check job',
@@ -666,6 +816,40 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
     expect(publishWorkflowViolations(mutated).join('\n')).toContain(expected);
   });
 
+  // The same rules reach the package.json scripts that the workflow's npm commands run: npm
+  // publish runs prepublishOnly, which runs `npm run test:run`, which runs pretest:run first.
+  const scriptMutations: Array<[string, (s: Record<string, string>) => Record<string, string>, string]> = [
+    [
+      'a pre hook that rebuilds, run by prepublishOnly in the publishing job',
+      (s) => ({ ...s, 'pretest:run': 'npm rebuild better-sqlite3' }),
+      'job publish runs npm rebuild better-sqlite3 (package.json pretest:run),',
+    ],
+    [
+      'the rebuild inside prepublishOnly',
+      (s) => ({ ...s, prepublishOnly: `npm rebuild better-sqlite3 && ${s.prepublishOnly}` }),
+      'job publish runs npm rebuild better-sqlite3 (package.json prepublishOnly),',
+    ],
+    [
+      'an install inside the test script',
+      (s) => ({ ...s, 'test:run': `npm i && ${s['test:run']}` }),
+      'job check runs npm i (package.json test:run),',
+    ],
+    [
+      'a prepare that installs, run by npm publish',
+      (s) => ({ ...s, prepare: 'npm ci' }),
+      'job publish runs npm ci (package.json prepare),',
+    ],
+    [
+      'npx in a prepack, run by npm pack',
+      (s) => ({ ...s, prepack: 'npx --yes prebuild-install' }),
+      'job check runs npx --yes prebuild-install (package.json prepack),',
+    ],
+  ];
+
+  it.each(scriptMutations)('catches %s', (_name, mutate, expected) => {
+    expect(publishWorkflowViolations(source, mutate(SCRIPTS)).join('\n')).toContain(expected);
+  });
+
   it('refuses YAML it cannot read rather than passing it', () => {
     expect(() => publishWorkflowViolations(source.replace(/^on:\n/m, 'on: [push, workflow_dispatch]\n'))).toThrow(
       /flow collections/
@@ -689,8 +873,12 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
     expect(entry.integrity).toMatch(/^sha512-[A-Za-z0-9+/]{86}==$/);
   });
 
-  it('ci.yml never skips the SQLite suites', () => {
-    const ci = readFileSync(resolve(__dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8');
-    expect(ci).not.toContain(SKIP_SQLITE);
+  // The other places that could set it for every run: ci.yml, package.json, a vitest config.
+  it('nothing outside the publishing job skips the SQLite suites', () => {
+    const root = resolve(__dirname, '..');
+    const configs = readdirSync(root).filter((file) => /^vite(st)?\.(config|workspace)\./.test(file));
+    for (const file of ['.github/workflows/ci.yml', 'package.json', ...configs]) {
+      expect(readFileSync(resolve(root, file), 'utf8'), file).not.toContain(SKIP_SQLITE);
+    }
   });
 });

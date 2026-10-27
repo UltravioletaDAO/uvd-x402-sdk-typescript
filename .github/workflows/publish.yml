@@ -56,7 +56,8 @@ jobs:
 
       # better-sqlite3 (a devDependency: src/reputation/outbox.test.ts opens real databases) has
       # no native binary until its install script runs. This job, which can only read, runs that
-      # one script, of the version and tarball the lock pins; `publish` and `tag` run none.
+      # one script, from the tarball the lock pins; the prebuilt binary it downloads from the
+      # package's GitHub release is not in the lock. `publish` and `tag` run no install script.
       - run: npm rebuild better-sqlite3
 
       - name: Typecheck
