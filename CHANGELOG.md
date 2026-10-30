@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.107.0] - 2026-10-30
+
 ### Added
 
 - HashKey Chain mainnet (177) and testnet (133), including CAIP-2 identifiers and USDC EIP-712 domains pinned to on-chain separators. Gas is HSK; HashKey USDT is not supported.

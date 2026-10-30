@@ -24,4 +24,4 @@ const network = CAIP2_IDENTIFIERS[chain.name]; // eip155:177
 const client = new X402Client({ defaultChain: chain.name });
 ```
 
-When constructing requirements manually, supply `extra: { name: 'Bridged USDC', version: '2' }` on mainnet and `extra: { name: 'USD Coin', version: '2' }` on testnet. `buildPaymentRequirements` supplies these from the registry.
+When constructing requirements manually, supply `extra: { name: 'Bridged USDC', version: '2' }` on mainnet and `extra: { name: 'USD Coin', version: '2' }` on testnet.
