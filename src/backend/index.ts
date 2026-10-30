@@ -433,7 +433,14 @@ export function parsePaymentHeader(
   }
 
   try {
-    return decodeX402Header(headerValue);
+    const payment = decodeX402Header(headerValue);
+    // JSON decoding alone does not validate the envelope. Network is read by
+    // the requirement resolver before the facilitator can validate the rest.
+    if (!payment || typeof payment !== 'object' || Array.isArray(payment)) return null;
+    const network = networkOfPayload(payment);
+    if (typeof network !== 'string' || !network.trim()
+      || network !== network.trim()) return null;
+    return payment;
   } catch {
     return null;
   }
@@ -442,7 +449,8 @@ export function parsePaymentHeader(
 /**
  * Extract payment header from request headers object
  *
- * Checks both X-PAYMENT and PAYMENT-SIGNATURE headers.
+ * Accepts either header, or both with identical values after HTTP optional
+ * whitespace is removed. Conflicting values are invalid.
  *
  * @param headers - Request headers object (case-insensitive)
  * @returns Parsed x402 header object, or null if not found/invalid
@@ -455,24 +463,37 @@ export function parsePaymentHeader(
 export function extractPaymentFromHeaders(
   headers: Record<string, string | string[] | undefined>
 ): X402Header | null {
-  // Normalize header keys to lowercase
-  const normalizedHeaders: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value === 'string') {
-      normalizedHeaders[key.toLowerCase()] = value;
-    } else if (Array.isArray(value) && value.length > 0) {
-      normalizedHeaders[key.toLowerCase()] = value[0];
-    }
-  }
-
-  // Try X-PAYMENT first, then PAYMENT-SIGNATURE
-  const headerValue =
-    normalizedHeaders['x-payment'] ||
-    normalizedHeaders['payment-signature'];
-
-  return parsePaymentHeader(headerValue);
+  const result = readPaymentHeaders(headers);
+  return result.kind === 'payment' ? result.payment : null;
 }
 
+type PaymentHeaderResult =
+  | { kind: 'missing' }
+  | { kind: 'invalid' }
+  | { kind: 'conflict' }
+  | { kind: 'payment'; payment: X402Header };
+
+/** One selection rule for extraction, Express, Hono and Fetch paywalls. */
+function readPaymentHeaders(
+  headers: Record<string, string | string[] | undefined>
+): PaymentHeaderResult {
+  const values: string[] = [];
+  for (const [key, value] of Object.entries(headers)) {
+    if (!['x-payment', 'payment-signature'].includes(key.toLowerCase()) || value === undefined) continue;
+    const entries = Array.isArray(value) ? value : [value];
+    if (entries.length === 0 || entries.some(entry => typeof entry !== 'string')) return { kind: 'invalid' };
+    // HTTP optional whitespace is SP/HTAB; do not rewrite the base64 payload.
+    values.push(...entries.map(entry => entry.replace(/^[ \t]+|[ \t]+$/g, '')));
+  }
+  if (values.length === 0) return { kind: 'missing' };
+  if (values.some(value => value !== values[0])) return { kind: 'conflict' };
+  const payment = parsePaymentHeader(values[0]);
+  return payment ? { kind: 'payment', payment } : { kind: 'invalid' };
+}
+
+function paymentHeaderError(kind: 'invalid' | 'conflict'): string {
+  return kind === 'conflict' ? 'Conflicting payment headers' : 'Invalid payment header';
+}
 // ============================================================================
 // REQUEST BUILDERS
 // ============================================================================
@@ -2057,14 +2078,16 @@ async function resolvePaymentRequirement(
     };
   }
 
+  // parsePaymentHeader has already validated the effective network.
+  const network = networkOfPayload(payment)!;
   const networkMatches = normalizedRequirements.filter((requirements) =>
-    getComparableNetwork(requirements.network) === getComparableNetwork(payment.network)
+    getComparableNetwork(requirements.network) === getComparableNetwork(network)
   );
 
   if (networkMatches.length === 0) {
     return {
       requirement: null,
-      reason: `No advertised payment requirement matched network ${payment.network}.`,
+      reason: `No advertised payment requirement matched network ${network}.`,
     };
   }
 
@@ -2411,16 +2434,21 @@ export function createPaymentMiddleware(
   const anchorer = durableAnchorerFor(options);
 
   return async (req, res, next) => {
-    // Extract payment header
-    const payment = extractPaymentFromHeaders(req.headers);
+    const selected = readPaymentHeaders(req.headers);
+    if (selected.kind === 'invalid' || selected.kind === 'conflict') {
+      res.status(400).json({ error: paymentHeaderError(selected.kind) });
+      return;
+    }
 
-    // If no payment, return 402
-    if (!payment) {
+    // Only an absent payment is a request for a 402 challenge.
+    if (selected.kind === 'missing') {
       const reqOptions = getRequirements(req);
       const { status, headers, body } = create402Response(reqOptions);
       res.status(status).set(headers).json(body);
       return;
     }
+
+    const payment = selected.payment;
 
     // Build requirements and verify
     const reqOptions = getRequirements(req);
@@ -2687,13 +2715,19 @@ function createAcceptsPaymentGate(input: HonoMiddlewareOptions) {
   const reply = (status: number, body: unknown): PaymentGateOutcome => ({ reply: { status, headers: {}, body } });
 
   return async (req: PaymentGateRequest, hooks: PaymentGateHooks): Promise<PaymentGateOutcome> => {
-    const paymentHeader = req.header('PAYMENT-SIGNATURE') || req.header('X-PAYMENT') || req.header('x-payment');
+    const selected = readPaymentHeaders({
+      'X-PAYMENT': req.header('X-PAYMENT') ?? req.header('x-payment'),
+      'PAYMENT-SIGNATURE': req.header('PAYMENT-SIGNATURE') ?? req.header('payment-signature'),
+    });
+    if (selected.kind === 'invalid' || selected.kind === 'conflict') {
+      return reply(400, { error: paymentHeaderError(selected.kind) });
+    }
     const advertisedVersion = resolveAdvertisedVersion(options.accepts, options.x402Version);
     const advertisedRequirements = options.accepts.map((accept) =>
       buildRequirementFromAcceptance(accept, req.url, advertisedVersion)
     );
 
-    if (!paymentHeader) {
+    if (selected.kind === 'missing') {
       return {
         reply: {
           status: 402,
@@ -2710,10 +2744,7 @@ function createAcceptsPaymentGate(input: HonoMiddlewareOptions) {
       };
     }
 
-    const parsed = parsePaymentHeader(paymentHeader);
-    if (!parsed) {
-      return reply(400, { error: 'Invalid X-PAYMENT header' });
-    }
+    const parsed = selected.payment;
 
     const { requirement, reason } = await resolvePaymentRequirement(
       parsed,

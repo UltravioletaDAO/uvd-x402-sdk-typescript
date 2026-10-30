@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [2.107.0] - 2026-10-30
+
+### Added
+
+- HashKey Chain mainnet (177) and testnet (133), including CAIP-2 identifiers and USDC EIP-712 domains pinned to on-chain separators. Gas is HSK; HashKey USDT is not supported.
+
+### Fixed
+
+- Payment header selection is shared by extraction and the Express, Hono and Fetch paywalls. Conflicting headers and malformed payments, including payments with no network in either `network` or `accepted.network`, return 400 before verify/settle; matching headers share one parsed payment. Standard v2 and Hedera payloads use `accepted.network` for validation and requirement selection, including Hono/Fetch without a custom resolver.
+
+- Monad USDT now signs with the ASCII EIP-712 name `USDT0`. Offline regression tests pin USDT domains and both signing paths on Arbitrum, Optimism, Monad and Celo to measured on-chain separators. Reported by hey-research-lab in PR #62.
+
 ## [2.106.0] - 2026-10-26
 
 ### Added
