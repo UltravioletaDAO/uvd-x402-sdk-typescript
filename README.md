@@ -886,6 +886,8 @@ getFacilitatorAddress('xrpl-mainnet'); // rfADKk...
 
 ## Backend
 
+Payment headers follow one rule in Express, Hono and `createFetchPaywall`: send `X-PAYMENT`, `PAYMENT-SIGNATURE`, or both with the same value. Names are case-insensitive and surrounding HTTP spaces/tabs are ignored. Distinct values return **400** (`Conflicting payment headers`) before verification or settlement. Empty, malformed or missing-network payment headers return **400**; absent payment headers return **402**. The extractor returns `null` for invalid or conflicting headers. Verification and settlement use the same parsed payment, including manual settlement.
+
 ```typescript
 import {
   FacilitatorClient,

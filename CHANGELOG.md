@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Payment header selection is shared by extraction and the Express, Hono and Fetch paywalls. Conflicting headers and malformed or missing-network payments return 400 before verify/settle; matching headers share one parsed payment.
+
 - Monad USDT now signs with the ASCII EIP-712 name `USDT0`. Offline regression tests pin USDT domains and both signing paths on Arbitrum, Optimism, Monad and Celo to measured on-chain separators. Reported by hey-research-lab in PR #62.
 
 ## [2.106.0] - 2026-10-26
