@@ -4,7 +4,7 @@
  * x402 Payment SDK - Gasless crypto payments using the Ultravioleta facilitator.
  *
  * Supports 29 blockchain networks:
- * - EVM (17): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad, Scroll, SKALE Base (mainnet + Sepolia), Robinhood Chain (mainnet + testnet), Arc mainnet + testnet
+ * - EVM (19): Base, Ethereum, Polygon, Arbitrum, Optimism, Avalanche, Celo, HyperEVM, Unichain, Monad, Scroll, SKALE Base (mainnet + Sepolia), Robinhood Chain (mainnet + testnet), HashKey Chain (mainnet + testnet), Arc mainnet + testnet
  * - SVM (2): Solana, Fogo
  * - Stellar (1): Stellar
  * - NEAR (1): NEAR Protocol

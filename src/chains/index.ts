@@ -1,8 +1,8 @@
 /**
  * uvd-x402-sdk - Chain Registry
  *
- * Complete configuration for all 29 supported blockchain networks.
- * EVM chains (17): Use ERC-3009 TransferWithAuthorization (includes Scroll, SKALE Base, Robinhood Chain mainnet + testnet, Arc mainnet + testnet)
+ * Complete configuration for all 31 supported blockchain networks.
+ * EVM chains (19): Use ERC-3009 TransferWithAuthorization (includes HashKey Chain mainnet + testnet, Scroll, SKALE Base, Robinhood Chain mainnet + testnet, Arc mainnet + testnet)
  * BSC is registered but disabled (Binance-Peg USDC has no ERC-3009), so it is not in those counts.
  * SVM chains (2): Solana and Fogo - Use SPL tokens with partially-signed transactions
  * Stellar (1): Uses Soroban authorization entries
@@ -52,7 +52,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
   },
 
   // ============================================================================
-  // EVM CHAINS (16 enabled + BSC, disabled)
+  // EVM CHAINS (19 enabled + BSC, disabled)
   // ============================================================================
 
   base: {
@@ -611,6 +611,58 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
     },
   },
 
+  // HashKey Chain: USDC supports EIP-3009; HashKey USDT does not.
+  hashkey: {
+    chainId: 177,
+    chainIdHex: '0xb1',
+    name: 'hashkey',
+    displayName: 'HashKey Chain',
+    networkType: 'evm',
+    rpcUrl: 'https://mainnet.hsk.xyz',
+    explorerUrl: 'https://hsk.blockscout.com',
+    nativeCurrency: { name: 'HashKey', symbol: 'HSK', decimals: 18 },
+    usdc: {
+      address: '0x054ed45810DbBAb8B27668922D110669c9D88D0a',
+      decimals: 6,
+      name: 'Bridged USDC',
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x054ed45810DbBAb8B27668922D110669c9D88D0a',
+        decimals: 6,
+        name: 'Bridged USDC',
+        version: '2',
+      },
+    },
+    x402: { facilitatorUrl: DEFAULT_FACILITATOR_URL, enabled: true },
+  },
+
+  'hashkey-testnet': {
+    chainId: 133,
+    chainIdHex: '0x85',
+    name: 'hashkey-testnet',
+    displayName: 'HashKey Chain Testnet',
+    networkType: 'evm',
+    rpcUrl: 'https://testnet.hsk.xyz',
+    explorerUrl: 'https://testnet-explorer.hskchain.net',
+    nativeCurrency: { name: 'HashKey', symbol: 'HSK', decimals: 18 },
+    usdc: {
+      address: '0x8FE3cB719Ee4410E236Cd6b72ab1fCDC06eF53c6',
+      decimals: 6,
+      name: 'USD Coin',
+      version: '2',
+    },
+    tokens: {
+      usdc: {
+        address: '0x8FE3cB719Ee4410E236Cd6b72ab1fCDC06eF53c6',
+        decimals: 6,
+        name: 'USD Coin',
+        version: '2',
+      },
+    },
+    x402: { facilitatorUrl: DEFAULT_FACILITATOR_URL, enabled: true },
+  },
   // Robinhood Chain (Arbitrum Orbit L2). NOTE: there is NO USDC on this chain -
   // the settlement stablecoin is Paxos USDG (Global Dollar). The `usdc` field
   // below carries USDG for interface compatibility (same pattern as XRPL's native

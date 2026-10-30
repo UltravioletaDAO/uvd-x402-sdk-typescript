@@ -10,7 +10,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 
 ## Features
 
-- **29 Networks**: EVM (17 including Arc, Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, Hedera (mainnet + testnet)
+- **31 Networks**: EVM (19 including HashKey Chain, Arc, Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, Hedera (mainnet + testnet)
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT, USDG (Robinhood Chain)
 - **x402 v1 & v2**: Protocol auto-detection; native Hedera supports v2/exact only
 - **Gasless**: Facilitator pays all network fees
@@ -813,12 +813,16 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Scroll | 534352 | USDC |
 | SKALE Base | 1187947933 | USDC.e |
 | SKALE Base Sepolia | 324705682 | USDC.e |
+| HashKey Chain | 177 | USDC |
+| HashKey Chain Testnet | 133 | USDC |
 | Robinhood Chain | 4663 | USDG |
 | Robinhood Chain Testnet | 46630 | USDG |
 | Arc | 5042 | USDC, EURC |
 | Arc Testnet | 5042002 | USDC, EURC |
 
 > **Arc mainnet and testnet:** payment amounts use 6 decimals. USDC signs with the `USDC` / `2` domain; EURC (`0xbEf5…21c1` mainnet, `0x89B5…D72a` testnet) signs with `EURC` / `2` and its amounts are **euros**, not dollars (`tokenType: 'eurc'`, `usdPegged: false`). Native gas uses 18 decimals on the same balance. Use `arc` / `eip155:5042` for mainnet and `arc-testnet` / `eip155:5042002` for testnet. See [Arc usage and validation](docs/networks/arc.md).
+
+> **HashKey Chain / USDC:** Use `hashkey` (177) or `hashkey-testnet` (133). Gas is HSK; payments use 6-decimal USDC. Mainnet's EIP-712 name is `Bridged USDC` and testnet's is `USD Coin`, both version `2`. HashKey USDT is unsupported because it has no EIP-3009. [Network configuration and measured domains](docs/networks/hashkey.md).
 
 > **Robinhood Chain / USDG:** Robinhood Chain has no USDC — the settlement stablecoin is Paxos **USDG** (Global Dollar, 6 decimals, EIP-3009). Its on-chain `version()` getter reverts, so the EIP-712 domain `{ name: "Global Dollar", version: "1" }` can never be resolved on-chain. The SDK carries this domain in the chain config; when constructing `PaymentRequirements` yourself, send it in `extra`: `{ "name": "Global Dollar", "version": "1" }`. Use `tokenType: 'usdg'` (or the default, which resolves to USDG on these networks).
 
