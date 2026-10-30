@@ -458,7 +458,7 @@ export const SUPPORTED_CHAINS: Record<string, ChainConfig> = {
       usdt: {
         address: '0xe7cd86e13AC4309349F30B3435a9d337750fC82D',
         decimals: 6,
-        name: 'USD\u20AE0',  // USD₮0 (USDT0 omnichain via LayerZero)
+        name: 'USDT0',  // ASCII on Monad, unlike USD₮0 on Arbitrum/Optimism (src/usdt-domains.test.ts)
         version: '1',
       },
     },

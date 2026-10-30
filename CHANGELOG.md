@@ -6,6 +6,10 @@
 
 - HashKey Chain mainnet (177) and testnet (133), including CAIP-2 identifiers and USDC EIP-712 domains pinned to on-chain separators. Gas is HSK; HashKey USDT is not supported.
 
+### Fixed
+
+- Monad USDT now signs with the ASCII EIP-712 name `USDT0`. Offline regression tests pin USDT domains and both signing paths on Arbitrum, Optimism, Monad and Celo to measured on-chain separators. Reported by hey-research-lab in PR #62.
+
 ## [2.106.0] - 2026-10-26
 
 ### Added
