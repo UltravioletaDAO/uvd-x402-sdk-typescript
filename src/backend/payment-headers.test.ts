@@ -4,7 +4,7 @@ import {
   createFetchPaywall, createHonoMiddleware, createPaymentMiddleware,
   extractPaymentFromHeaders, FacilitatorClient, parsePaymentHeader,
 } from './index';
-import type { VerifiedPaymentState } from './index';
+import type { HonoMiddlewareOptions, PaymentRequirementsOptions, VerifiedPaymentState } from './index';
 
 const PAY_TO = '0x2222222222222222222222222222222222222222';
 const ASSET = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
@@ -19,11 +19,17 @@ const envelope = (version: 1 | 2 = 1) => ({
 const accepts = [{ network: 'base', asset: ASSET, amount: '10000', payTo: PAY_TO }];
 type HeadersRecord = Record<string, string | string[] | undefined>;
 
-async function request(framework: string, headers: HeadersRecord, strategy: 'before-handler' | 'manual') {
+async function request(
+  framework: string,
+  headers: HeadersRecord,
+  strategy: 'before-handler' | 'manual',
+  overrides: Partial<HonoMiddlewareOptions> = {},
+  expressRequirements: Partial<PaymentRequirementsOptions> = {},
+) {
   const handler = vi.fn(async (payment: VerifiedPaymentState) => {
     if (strategy === 'manual') expect((await payment.settle()).success).toBe(true);
   });
-  const options = { accepts, retries: 0, settlementStrategy: strategy };
+  const options = { accepts, retries: 0, settlementStrategy: strategy, ...overrides };
   if (framework === 'express') {
     const req: { headers: HeadersRecord; x402?: VerifiedPaymentState } = { headers };
     const state = { status: 200, body: undefined as unknown };
@@ -32,7 +38,9 @@ async function request(framework: string, headers: HeadersRecord, strategy: 'bef
       set() { return this; },
       json(body: unknown) { state.body = body; },
     };
-    const middleware = createPaymentMiddleware(() => ({ amount: '0.01', recipient: PAY_TO, resource: URL_, chainName: 'base' }), options);
+    const middleware = createPaymentMiddleware(() => ({
+      amount: '0.01', recipient: PAY_TO, resource: URL_, chainName: 'base', ...expressRequirements,
+    }), options);
     const next = vi.fn();
     await middleware(req, res, next);
     if (next.mock.calls.length) await handler(req.x402!);
@@ -137,4 +145,121 @@ it('parsePaymentHeader refuses absent or non-string networks', () => {
   for (const value of [undefined, null, '', encode({}), encode({ network: 1 })]) {
     expect(parsePaymentHeader(value)).toBeNull();
   }
+});
+
+// Wire shapes from @x402/core's client and HederaProvider.createPaymentPayload:
+// neither has a top-level network; Hedera also omits resource when not supplied.
+const v2Reference = {
+  x402Version: 2 as const,
+  resource: { url: URL_, description: '', mimeType: 'application/json' },
+  accepted: {
+    scheme: 'exact', network: 'eip155:8453', asset: ASSET, amount: '10000', payTo: PAY_TO,
+    maxTimeoutSeconds: 300, extra: { name: 'USD Coin', version: '2' },
+  },
+  payload: envelope().payload,
+};
+const hederaPayment = {
+  x402Version: 2 as const,
+  accepted: {
+    scheme: 'exact', network: 'hedera:mainnet', asset: '0.0.456858', amount: '10000', payTo: '0.0.1234',
+    maxTimeoutSeconds: 120, extra: { feePayer: '0.0.10868300' },
+  },
+  payload: { transaction: 'AAAA' },
+};
+
+const v2Payments = [
+  { name: '@x402/core', payment: v2Reference, accepts, expressRequirements: { x402Version: 2 as const } },
+  {
+    name: 'HederaProvider', payment: hederaPayment, accepts: [hederaPayment.accepted],
+    expressRequirements: { chainName: 'hedera:mainnet', recipient: '0.0.1234', x402Version: 2 as const },
+  },
+];
+const adapters = [
+  { framework: 'express', resolver: false },
+  { framework: 'hono', resolver: false },
+  { framework: 'hono', resolver: true },
+  { framework: 'fetch', resolver: false },
+  { framework: 'fetch', resolver: true },
+];
+
+describe.each(v2Payments)('standard v2 $name via PAYMENT-SIGNATURE only', fixture => {
+  const { payment } = fixture;
+  const headers = { 'PAYMENT-SIGNATURE': encode(payment) };
+
+  it('parses and extracts the unmodified payment with accepted.network', () => {
+    expect(payment).not.toHaveProperty('network');
+    expect(parsePaymentHeader(headers['PAYMENT-SIGNATURE'])).toEqual(payment);
+    expect(extractPaymentFromHeaders(headers)).toEqual(payment);
+  });
+
+  describe.each(adapters)('$framework, custom resolver: $resolver', ({ framework, resolver }) => {
+    it.each(['before-handler', 'manual'] as const)('%s verifies and settles the same payment', async strategy => {
+      const verify = vi.spyOn(FacilitatorClient.prototype, 'verify').mockResolvedValue({ isValid: true, payer: PAY_TO });
+      const settle = vi.spyOn(FacilitatorClient.prototype, 'settle').mockResolvedValue({ success: true, transaction: 'tx' });
+      const resolveRequirement = vi.fn<NonNullable<HonoMiddlewareOptions['resolveRequirement']>>((_payment, requirements) => requirements[0]);
+      const result = await request(framework, headers, strategy, {
+        accepts: fixture.accepts,
+        ...(resolver ? { resolveRequirement } : {}),
+      }, fixture.expressRequirements);
+      expect(result.status).toBe(200);
+      expect(result.handler).toHaveBeenCalledTimes(1);
+      expect(verify).toHaveBeenCalledTimes(1);
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(verify.mock.calls[0][0]).toEqual(payment);
+      expect(settle.mock.calls[0][0]).toBe(verify.mock.calls[0][0]);
+      expect(settle.mock.calls[0][1]).toEqual(verify.mock.calls[0][1]);
+      expect(settle.mock.calls[0][2]).toEqual(verify.mock.calls[0][2]);
+      if (framework !== 'express') expect(verify.mock.calls[0][1].network).toBe(payment.accepted.network);
+      if (resolver) {
+        expect(resolveRequirement).toHaveBeenCalledTimes(1);
+        expect(resolveRequirement.mock.calls[0][0]).toBe(verify.mock.calls[0][0]);
+      }
+    });
+  });
+});
+
+const invalidV2Networks = [undefined, null, '', ' ', 177, {}, [], ' eip155:8453', 'eip155:8453 ', '\teip155:8453', 'eip155:8453\n', '\u00a0eip155:8453'];
+describe.each(invalidV2Networks)('invalid accepted.network %j without a top-level network', network => {
+  const payment = { ...v2Reference, accepted: { ...v2Reference.accepted, network } };
+  const headers = { 'PAYMENT-SIGNATURE': encode(payment) };
+  it('is rejected by the parser and extractor', () => {
+    expect(parsePaymentHeader(headers['PAYMENT-SIGNATURE'])).toBeNull();
+    expect(extractPaymentFromHeaders(headers)).toBeNull();
+  });
+  describe.each(['express', 'hono', 'fetch'])('%s', framework => {
+    it.each(['before-handler', 'manual'] as const)('%s returns 400 without verify or settle', async strategy => {
+      const verify = vi.spyOn(FacilitatorClient.prototype, 'verify');
+      const settle = vi.spyOn(FacilitatorClient.prototype, 'settle');
+      const result = await request(framework, headers, strategy);
+      expect(result.status).toBe(400);
+      expect(result.body).toEqual({ error: 'Invalid payment header' });
+      expect(result.handler).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+      expect(settle).not.toHaveBeenCalled();
+    });
+  });
+});
+
+it('keeps top-level string network precedence, including invalid empty or padded strings', () => {
+  for (const network of ['', ' ', ' eip155:8453', 'eip155:8453 ']) {
+    expect(parsePaymentHeader(encode({ ...v2Reference, network }))).toBeNull();
+  }
+  for (const network of [undefined, null, 177]) {
+    const payment = { ...v2Reference, network };
+    expect(parsePaymentHeader(encode(payment))).toEqual(JSON.parse(JSON.stringify(payment)));
+  }
+});
+
+it.each(['hono', 'fetch'])('%s reports the effective network when no advertised requirement matches', async framework => {
+  const payment = { ...v2Reference, accepted: { ...v2Reference.accepted, network: 'eip155:1' } };
+  const verify = vi.spyOn(FacilitatorClient.prototype, 'verify');
+  const settle = vi.spyOn(FacilitatorClient.prototype, 'settle');
+  const result = await request(framework, { 'PAYMENT-SIGNATURE': encode(payment) }, 'before-handler');
+  expect(result.status).toBe(402);
+  expect(result.body).toEqual({
+    error: 'Payment verification failed',
+    reason: 'No advertised payment requirement matched network eip155:1.',
+  });
+  expect(verify).not.toHaveBeenCalled();
+  expect(settle).not.toHaveBeenCalled();
 });

@@ -436,9 +436,10 @@ export function parsePaymentHeader(
     const payment = decodeX402Header(headerValue);
     // JSON decoding alone does not validate the envelope. Network is read by
     // the requirement resolver before the facilitator can validate the rest.
-    if (!payment || typeof payment !== 'object' || Array.isArray(payment)
-      || typeof payment.network !== 'string' || !payment.network.trim()
-      || payment.network !== payment.network.trim()) return null;
+    if (!payment || typeof payment !== 'object' || Array.isArray(payment)) return null;
+    const network = networkOfPayload(payment);
+    if (typeof network !== 'string' || !network.trim()
+      || network !== network.trim()) return null;
     return payment;
   } catch {
     return null;
@@ -2077,14 +2078,16 @@ async function resolvePaymentRequirement(
     };
   }
 
+  // parsePaymentHeader has already validated the effective network.
+  const network = networkOfPayload(payment)!;
   const networkMatches = normalizedRequirements.filter((requirements) =>
-    getComparableNetwork(requirements.network) === getComparableNetwork(payment.network)
+    getComparableNetwork(requirements.network) === getComparableNetwork(network)
   );
 
   if (networkMatches.length === 0) {
     return {
       requirement: null,
-      reason: `No advertised payment requirement matched network ${payment.network}.`,
+      reason: `No advertised payment requirement matched network ${network}.`,
     };
   }
 
