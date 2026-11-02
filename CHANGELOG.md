@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.108.0] - 2026-11-02
+
+### Added
+
+- Arras v1 escrow on `uvd-x402-sdk/near`: `buildEscrowMsg`, `paymentIdPreimage`, `computePaymentId`, local Ed25519 signing with `createNearLocalSigner` and `signEscrowAuthorization`, and zero-deposit `release`, `refund`, `reclaim`, `withdraw`, `withdrawFor` delegates. Authorization validates one `ft_transfer_call`, native USDC for the selected CAIP-2 NEAR network, one yocto and 38..100 TGas. Lifecycle methods use the facilitator's individual gas bounds. Signing is offline; nonce, height and trusted contract configuration are supplied by the caller.
+- Frozen Arras Rust vectors, independent OpenSSL signature checks, and negative tests for action count, receivers, deposits, gas, exact integers and key formats. `AuthorizeFromBudget` is an interface for v2; no budget signing format is invented. See `docs/near-escrow.md` and `examples/near-escrow-agent.mjs`.
+
 ## [2.107.0] - 2026-10-30
 
 ### Added

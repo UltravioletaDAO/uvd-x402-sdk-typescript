@@ -49,6 +49,8 @@ import { X402Error } from '../../types';
 import { chainToCAIP2, encodeBase64Json } from '../../utils';
 import { toAtomicUnits } from '../../utils/amount';
 
+export * from './escrow';
+
 // NEAR configuration
 const NEAR_CONFIG = {
   networkId: 'mainnet',
