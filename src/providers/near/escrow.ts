@@ -68,7 +68,7 @@ export const NEAR_ESCROW_TOKENS: Readonly<Record<NearEscrowNetwork, string>> = O
   'near:testnet': '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
 });
 
-// JavaScript's $ also matches before a final line break. Require the entire match.
+// Signed values must match in full, without trimming or normalization.
 function fullMatch(pattern: RegExp, value: string): boolean {
   return pattern.exec(value)?.[0] === value;
 }
@@ -203,6 +203,7 @@ export function validateEscrowAuthorizationDelegate(d: NearEscrowDelegate, o: Es
   if (gas < NEAR_ESCROW_MIN_GAS || gas > NEAR_ESCROW_MAX_GAS) throw new Error('FT gas outside 38..100 TGas');
 }
 async function signDelegate(o: NearEscrowDelegateOptions, d: NearEscrowDelegate): Promise<NearEscrowPayment> {
+  const network = o.network;
   const pk = new Uint8Array(o.signer.publicKey);
   if (pk.length !== 32) throw new Error('Expected 32-byte Ed25519 public key');
   const a = d.actions[0];
@@ -210,12 +211,12 @@ async function signDelegate(o: NearEscrowDelegateOptions, d: NearEscrowDelegate)
     le(uint(a.gas, 64, 'gas'), 8), le(uint(a.deposit, 128, 'deposit'), 16),
     le(uint(d.nonce, 64, 'nonce'), 8), le(uint(d.maxBlockHeight, 64, 'maxBlockHeight'), 8), Uint8Array.of(0), pk);
   const digest = sha256(concat(Uint8Array.of(0x6e, 0x01, 0x00, 0x40), bytes));
-  const signature = await o.signer.sign(digest);
+  const signature = await o.signer.sign(digest.slice());
   if (!(signature instanceof Uint8Array) || signature.length !== 64 || !ed25519.verify(signature, digest, pk)) {
     throw new Error('Invalid Ed25519 delegate signature');
   }
   const signed = concat(bytes, Uint8Array.of(0), signature);
-  return { x402Version: 2, scheme: 'escrow', network: o.network,
+  return { x402Version: 2, scheme: 'escrow', network,
     payload: { signedDelegateAction: btoa(Array.from(signed, (b) => String.fromCharCode(b)).join('')) } };
 }
 export async function signEscrowAuthorization(o: EscrowAuthorizationOptions): Promise<NearEscrowPayment> {

@@ -63,7 +63,7 @@ describe('Arras frozen Rust vectors (copied without regeneration)', () => {
 });
 
 describe('exact input validation before signing', () => {
-  it('rejects final line breaks rather than treating a JS $ match as the whole input', async () => {
+  it('rejects final line breaks without trimming signed values', async () => {
     for (const ending of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
       expect(() => buildEscrowMsg({ ...v1, operator_id: 'em' + ending })).toThrow(/operator/);
       expect(() => buildEscrowMsg({ ...v1, receiver: 'worker.near' + ending })).toThrow(/receiver/);
@@ -172,6 +172,9 @@ describe('the single FT action and NEP-366 signature', () => {
   it('seed copy, NEAR base58 secret, leading zero seed, inconsistent public half and key format', async () => {
     const localSeed = seed.slice(); const local = createNearLocalSigner(localSeed); localSeed.fill(0);
     const nearSecret = 'ed25519:' + encodeBase58(Buffer.concat([Buffer.from(seed), Buffer.from(signer.publicKey)]));
+    for (const prefix of ['ED25519:', 'ed25519 ', 'xx25519:']) {
+      expect(() => createNearLocalSigner(prefix + nearSecret.slice(8))).toThrow(/ed25519:/);
+    }
     expect(decode(await signEscrowAuthorization({ ...options, signer: createNearLocalSigner(nearSecret) })).signature)
       .toEqual(decode(await signEscrowAuthorization({ ...options, signer: local })).signature);
     for (const bad of [new Uint8Array(31), new Uint8Array(33), 'secp256k1:abc', 'ed25519:0', 'ed25519:' + '1'.repeat(64), 'ed25519:' + '1'.repeat(65), 'ed25519:' + encodeBase58(seed)]) {
@@ -184,9 +187,21 @@ describe('the single FT action and NEP-366 signature', () => {
       await expect(signEscrowAuthorization({ ...options, signer: badSigner })).rejects.toThrow(/Ed25519/);
     }
   });
+  it('snapshots the network and refuses a signer that mutates its digest argument', async () => {
+    const mutable = { ...options };
+    mutable.signer = { ...signer, sign: (digest) => { mutable.network = 'near:mainnet'; return signer.sign(digest); } };
+    expect((await signEscrowAuthorization(mutable)).network).toBe('near:testnet');
+    await expect(signEscrowAuthorization({ ...options, signer: { ...signer,
+      sign: (digest) => { digest.fill(0); return signer.sign(digest); } } })).rejects.toThrow(/signature/);
+  });
 });
 
 describe('v1 lifecycle closed method list and zero deposit', () => {
+  it('rejects an unknown network in lifecycle before asking for a signature', async () => {
+    const sign = vi.fn(signer.sign);
+    await expect(withdraw({ ...options, network: 'near' as 'near:mainnet', signer: { ...signer, sign } })).rejects.toThrow(/network/);
+    expect(sign).not.toHaveBeenCalled();
+  });
   it('release/refund/reclaim/withdraw/withdraw_for sign their actual Rust args', async () => {
     const calls = [await release(options, v1.payment_id), await release(options, v1.payment_id, '400000'),
       await refund(options, v1.payment_id), await reclaim(options, v1.payment_id), await withdraw(options), await withdrawFor(options, v1.receiver)];
