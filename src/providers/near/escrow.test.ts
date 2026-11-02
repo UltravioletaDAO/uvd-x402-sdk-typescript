@@ -174,7 +174,7 @@ describe('the single FT action and NEP-366 signature', () => {
     const nearSecret = 'ed25519:' + encodeBase58(Buffer.concat([Buffer.from(seed), Buffer.from(signer.publicKey)]));
     expect(decode(await signEscrowAuthorization({ ...options, signer: createNearLocalSigner(nearSecret) })).signature)
       .toEqual(decode(await signEscrowAuthorization({ ...options, signer: local })).signature);
-    for (const bad of [new Uint8Array(31), 'secp256k1:abc', 'ed25519:0', 'ed25519:' + '1'.repeat(64), 'ed25519:' + '1'.repeat(65), 'ed25519:' + encodeBase58(seed)]) {
+    for (const bad of [new Uint8Array(31), new Uint8Array(33), 'secp256k1:abc', 'ed25519:0', 'ed25519:' + '1'.repeat(64), 'ed25519:' + '1'.repeat(65), 'ed25519:' + encodeBase58(seed)]) {
       expect(() => createNearLocalSigner(bad)).toThrow();
     }
   });
