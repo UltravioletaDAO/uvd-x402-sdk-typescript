@@ -1,11 +1,11 @@
 /** Offline agent example. No RPC or transaction submission. Run after npm run build. */
 import { createNearLocalSigner, buildEscrowMsg, computePaymentId, signEscrowAuthorization,
-  release, refund, withdrawFor, NEAR_ESCROW_TOKENS } from '../dist/providers/near/index.mjs';
+  release, refund, withdrawFor, NEAR_ESCROW_TOKENS, NEAR_ESCROW_CONTRACTS } from '../dist/providers/near/index.mjs';
 
 // A public deterministic test seed, never an operational wallet.
 const signer = createNearLocalSigner(Uint8Array.from({ length: 32 }, (_, i) => i));
 const context = { signer, network: 'near:testnet', senderId: 'payer-demo.testnet',
-  escrowContract: 'arras-v1b-1101.testnet', nonce: '42', maxBlockHeight: '100000000' };
+  escrowContract: NEAR_ESCROW_CONTRACTS['near:testnet'][0], nonce: '42', maxBlockHeight: '100000000' };
 const msg = { operator_id: 'em', receiver: 'worker-demo.testnet',
   release_deadline: '1793577600000000000', reclaim_after: '1793664000000000000',
   fee_bps_max: 1300, terms_hash: '00'.repeat(32), salt: '00'.repeat(16) };

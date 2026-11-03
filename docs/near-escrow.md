@@ -6,7 +6,7 @@ Import from `uvd-x402-sdk/near`. The helpers sign offline and do not send transa
 
 ```js
 import { createNearLocalSigner, buildEscrowMsg, computePaymentId,
-  signEscrowAuthorization, release, withdrawFor } from 'uvd-x402-sdk/near';
+  signEscrowAuthorization, release, withdrawFor, NEAR_ESCROW_CONTRACTS } from 'uvd-x402-sdk/near';
 
 const msg = {
   operator_id: 'em', receiver: 'worker-demo.testnet',
@@ -15,7 +15,7 @@ const msg = {
 }; // Vector dates: use future dates and a fresh random salt for an actual payment.
 const context = {
   network: 'near:testnet', senderId: 'payer-demo.testnet',
-  escrowContract: 'arras-v1b-1101.testnet',
+  escrowContract: NEAR_ESCROW_CONTRACTS['near:testnet'][0],
   signer: createNearLocalSigner(localSecret), // your application's local key storage
   nonce: nextAccessKeyNonce, maxBlockHeight: shortLivedHeight,
 };
@@ -34,9 +34,9 @@ const body = { x402Version: 2, paymentPayload, paymentRequirements };
 
 The returned envelope has `x402Version: 2`, `scheme: 'escrow'`, the exact `near:mainnet` or `near:testnet` network and `payload.signedDelegateAction` (base64 Borsh). The current facilitator accepts it in `paymentPayload` together with `paymentRequirements` above. For a canonical x402 v2 `PAYMENT-SIGNATURE` to a resource server, wrap its inner payload in `{x402Version: 2, accepted: paymentRequirements, payload: paymentPayload.payload}` and base64-encode the JSON (include `resource` if required by that server).
 
-The delegate targets native USDC with one `ft_transfer_call` to the escrow's `receiver_id`. Deposit is one yocto; gas defaults to 100 TGas and must be 38..100 TGas. `buildEscrowAuthorizationDelegate` and `validateEscrowAuthorizationDelegate` expose those checks. Select contract and operator from trusted configuration checked against `/supported`. Offline mainnet signing does not establish that mainnet escrow is live: on 2026-11-02, [the facilitator](https://facilitator.ultravioletadao.xyz/supported) advertised escrow only for testnet. Activation/deployment are separate work.
+The delegate targets native USDC with one `ft_transfer_call` to the escrow's `receiver_id`. Deposit is one yocto; gas defaults to 100 TGas and must be 38..100 TGas. `buildEscrowAuthorizationDelegate` and `validateEscrowAuthorizationDelegate` expose those checks. The SDK signs only for the Arras deployments listed in `NEAR_ESCROW_CONTRACTS` and refuses any other `escrowContract` before calling the signer, for the authorization and for every lifecycle call: a signed delegate can be relayed by anyone, so a server must not be able to point it at its own account. The mainnet row stays empty until the mainnet Arras contract is deployed and added in a release, so mainnet escrow signing is refused today. Select the operator from trusted configuration checked against `/supported`; on 2026-11-02, [the facilitator](https://facilitator.ultravioletadao.xyz/supported) advertised escrow only for testnet.
 
-Supply the exact signing key's next nonce and a recent block height with short expiry. The SDK does not allocate nonces; concurrent calls require unique increasing nonces. No helper contacts RPC. Register escrow/recipients in USDC and pay Arras NEP-145 storage or arrange operator sponsorship first. Authorization requires a full-access key for the one-yocto transfer. Require the facilitator's confirmed escrow result and expected `arras` event/payment ID: a successful transaction alone does not prove funds were locked. Release credits claimable balances; withdrawal is separate.
+Supply the exact signing key's next nonce and a recent block height with short expiry. The SDK refuses `nonce >= maxBlockHeight * 10^6`, which NEAR always rejects (`DelegateActionNonceTooLarge`); checking expiry against the current height is left to the facilitator, which has RPC. The SDK does not allocate nonces; concurrent calls require unique increasing nonces. No helper contacts RPC. Register escrow/recipients in USDC and pay Arras NEP-145 storage or arrange operator sponsorship first. Authorization requires a full-access key for the one-yocto transfer. Require the facilitator's confirmed escrow result and expected `arras` event/payment ID: a successful transaction alone does not prove funds were locked. Release credits claimable balances; withdrawal is separate.
 
 | Helper | Signed Rust method and args | Gas (TGas) |
 |---|---|---|
@@ -59,6 +59,6 @@ const payout = await withdrawFor(nextCapturerContext, msg.receiver);
 
 After building, run `node examples/near-escrow-agent.mjs` for deterministic offline requests with a deliberately public test seed. It submits nothing. No development key was available in this Windows worktree, so live testnet transactions were not run. To exercise testnet, supply development payer/capturer keys locally and fresh nonce/height/deadlines/salt, then verify/settle authorize → release → worker and fee withdrawals, and a second authorize → refund → payer withdrawal. Check `get_payment`, `get_claimable`, USDC balances and `arras` events after each transaction. Arras' `scripts/testnet.sh` documents setup.
 
-For live cross-language byte conformance, build this package, install the Python SDK's `near` extra from the H-7 checkout, set `UVD_X402_PY_ROOT` to that checkout and `UVD_PYTHON` to its interpreter, then run `node scripts/xlang/near-escrow-conformance.mjs`. It compares the actual TypeScript bundle with the Python implementation: frozen fixture hash, all three messages/preimages/IDs, and 21 signed authorization/lifecycle delegates. A missing Python implementation or mismatching artifact fails the command. This is a separate opt-in check until both paired SDK PRs are merged; the existing CI cross-language job continues to cover ERC-8128/EVM.
+For live cross-language byte conformance, build this package, install the Python SDK's `near` extra from the H-7 checkout, set `UVD_X402_PY_ROOT` to that checkout and `UVD_PYTHON` to its interpreter, then run `node scripts/xlang/near-escrow-conformance.mjs`. It compares the actual TypeScript bundle with the Python implementation: frozen fixture hash, all three messages/preimages/IDs, 21 signed authorization/lifecycle delegates, the `NEAR_ESCROW_CONTRACTS` registry and five cases each runtime must refuse before signing (unregistered and cross-network contracts, and the nonce ceiling). Until the registry has a mainnet row, every vector signs on testnet with the registered contract and testnet USDC. A missing Python implementation, a Python SDK without the registry, or a mismatching artifact fails the command. This is a separate opt-in check until both paired SDK PRs are merged; the existing CI cross-language job continues to cover ERC-8128/EVM.
 
 On Windows, changing `PATH` to select Node 20 may still leave `npm.ps1` using the Node executable beside that launcher. Invoke the npm CLI with the selected Node executable explicitly when reproducing CI (`& $node20 $npmCli run test:run`, where `$npmCli` points to npm's `bin/npm-cli.js`), and use the same runtime for installation and the pre-push checks. The native OWS library has no Windows binary; its dedicated Linux CI load check remains required.

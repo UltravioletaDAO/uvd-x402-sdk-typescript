@@ -6,8 +6,9 @@
 
 ### Added
 
-- Arras v1 escrow on `uvd-x402-sdk/near`: `buildEscrowMsg`, `paymentIdPreimage`, `computePaymentId`, local Ed25519 signing with `createNearLocalSigner` and `signEscrowAuthorization`, and zero-deposit `release`, `refund`, `reclaim`, `withdraw`, `withdrawFor` delegates. Authorization validates one `ft_transfer_call`, native USDC for the selected CAIP-2 NEAR network, one yocto and 38..100 TGas. Lifecycle methods use the facilitator's individual gas bounds. Signing is offline; nonce, height and trusted contract configuration are supplied by the caller.
-- Frozen Arras Rust vectors, independent OpenSSL signature checks, and negative tests for action count, receivers, deposits, gas, exact integers and key formats. `AuthorizeFromBudget` is an interface for v2; no budget signing format is invented. See `docs/near-escrow.md` and `examples/near-escrow-agent.mjs`.
+- Arras v1 escrow on `uvd-x402-sdk/near`: `buildEscrowMsg`, `paymentIdPreimage`, `computePaymentId`, local Ed25519 signing with `createNearLocalSigner` and `signEscrowAuthorization`, and zero-deposit `release`, `refund`, `reclaim`, `withdraw`, `withdrawFor` delegates. Authorization validates one `ft_transfer_call`, native USDC for the selected CAIP-2 NEAR network, one yocto and 38..100 TGas. Lifecycle methods use the facilitator's individual gas bounds. Signing is offline; nonce and height are supplied by the caller.
+- `NEAR_ESCROW_CONTRACTS`: frozen per-network registry of the Arras deployments the SDK signs for (`near:testnet`: `arras-v1b-1101.testnet`; `near:mainnet`: none until the mainnet contract ships in a release). Authorization and every lifecycle call refuse any other `escrowContract` before the signer runs, so a server cannot point a relayable signed delegate at its own account. Also refused before signing: `nonce >= maxBlockHeight * 10^6`, which NEAR always rejects (`DelegateActionNonceTooLarge`).
+- Frozen Arras Rust vectors, independent OpenSSL signature checks, and negative tests for action count, receivers, deposits, gas (pinned to the facilitator's literal limits for the authorization and all five lifecycle methods), extra lifecycle arguments, exact integers and key formats. `AuthorizeFromBudget` is an interface for v2; no budget signing format is invented. See `docs/near-escrow.md` and `examples/near-escrow-agent.mjs`.
 
 ## [2.107.0] - 2026-10-30
 
