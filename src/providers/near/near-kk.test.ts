@@ -102,6 +102,10 @@ describe('local exact NEP-366 reuses the escrow serializer', () => {
       expect(d.args.amount).toBe('1000000'); expect(d.gas).toBe(gas);
     }
   });
+  it('accepts the smallest positive expiry with the largest valid nonce below its ceiling', async () => {
+    const d = decode((await signExactNearDelegate({ ...exact, maxBlockHeight: 1, nonce: 999999 })).payload.signedDelegateAction);
+    expect(d.height).toBe(1n); expect(d.nextNonce).toBe(999999n);
+  });
   it.each([
     { network: 'near' }, { token: NEAR_ESCROW_TOKENS['near:mainnet'] }, { token: 'usdc.testnet' },
     { payTo: 'intents.near' }, { payTo: 'INTENTS.NEAR' }, { payTo: 'a.near\n' }, { payTo: '' }, { payTo: null },
