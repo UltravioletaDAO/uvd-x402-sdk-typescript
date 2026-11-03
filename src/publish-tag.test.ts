@@ -561,7 +561,7 @@ it('O-258: production backoff totals 300 seconds and stays inside the tag job bu
   expect(fakeProcess.exitCode).toBe(0);
   expect(waits).toEqual([5000, 10000, 20000, 40000, 60000, 60000, 60000, 45000]);
   expect(now).toBe(300000);
-  const workflow = readFileSync(resolve(__dirname, '..', '.github', 'workflows', 'publish.yml'), 'utf8');
+  const workflow = readFileSync(resolve(__dirname, '..', '.github', 'workflows', 'publish.yml'), 'utf8').replace(/\r\n/g, '\n');
   const minutes = Number(workflow.match(/\n  tag:\n[\s\S]*?timeout-minutes:\s*(\d+)/)?.[1]);
   expect(minutes).toBeGreaterThanOrEqual(6); // five-minute polling plus setup and GitHub requests
 

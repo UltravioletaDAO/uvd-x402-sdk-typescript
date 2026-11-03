@@ -139,7 +139,7 @@ describe('payer-funded NEP-145 transactions', () => {
     expect(tx.actions[0].params.deposit).toBe('60000000000000000000000');
     expect(tx.actions[0].params.args.account_id).toBe('worker.testnet');
   });
-  it.each([{ network: 'near' }, { payerId: '' }, { payerId: 'a.near\n' }, { accountId: 'A.near' },
+  it.each([{ network: 'near' }, { payerId: '', accountId: 'valid.near' }, { payerId: 'A.near', accountId: 'valid.near' }, { payerId: '' }, { payerId: 'a.near\n' }, { accountId: 'A.near' },
     { deposit: 0 }, { deposit: -1 }, { deposit: '01' }, { deposit: '1 ' }, { deposit: '0x1' }, { deposit: '0X1' },
     { deposit: Number.MAX_SAFE_INTEGER + 1 }, { deposit: 1n << 128n }])('refuses %s', (bad) => {
     expect(() => buildArrasStorageDeposit({ ...storage, ...bad } as never)).toThrow();
