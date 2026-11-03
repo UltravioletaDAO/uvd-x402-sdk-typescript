@@ -6,7 +6,7 @@ import vectors from './vectors/arras-v1.json';
 import {
   buildEscrowMsg, computePaymentId, paymentIdPreimage, createNearLocalSigner, signEscrowAuthorization,
   buildEscrowAuthorizationDelegate, validateEscrowAuthorizationDelegate, signEscrowLifecycle,
-  release, refund, reclaim, withdraw, withdrawFor, NEAR_ESCROW_MIN_GAS, NEAR_ESCROW_MAX_GAS,
+  release, refund, reclaim, withdraw, withdrawFor, NEAR_ESCROW_MIN_GAS, NEAR_ESCROW_MAX_GAS, NEAR_ESCROW_CONTRACTS,
   type EscrowAuthorizationOptions, type NearEscrowPayment, type NearEscrowLifecycleMethod,
 } from './escrow';
 
@@ -110,6 +110,19 @@ describe('exact input validation before signing', () => {
   it.each(['nonce', 'maxBlockHeight'] as const)('%s must be a positive u64', async (field) => {
     for (const n of [0n, 1n << 64n, Number.MAX_SAFE_INTEGER + 1]) await expect(signEscrowAuthorization({ ...options, [field]: n })).rejects.toThrow(field);
   });
+  it('refuses nonce >= maxBlockHeight * 10^6 before signing (NEAR DelegateActionNonceTooLarge)', async () => {
+    for (const [nonce, maxBlockHeight] of [['99999999', '100'], ['18446744073709551615', '18446744073709551615']]) {
+      expect(decode(await signEscrowAuthorization({ ...options, nonce, maxBlockHeight })).nonce).toBe(BigInt(nonce));
+      expect(decode(await withdraw({ ...options, nonce, maxBlockHeight })).nonce).toBe(BigInt(nonce));
+    }
+    for (const [nonce, maxBlockHeight] of [['100000000', '100'], ['1000000', '1'], ['18446744073709551615', '1000']]) {
+      const sign = vi.fn(signer.sign);
+      const o = { ...options, nonce, maxBlockHeight, signer: { ...signer, sign } };
+      await expect(signEscrowAuthorization(o)).rejects.toThrow(/nonce must be below/);
+      await expect(withdraw(o)).rejects.toThrow(/nonce must be below/);
+      expect(sign).not.toHaveBeenCalled();
+    }
+  });
   it('validates network, token, sender, escrow, amount and receiver before signing', async () => {
     for (const change of [{ network: 'near' }, { token: vectors.payment_id.vectores[2].token }, { senderId: 'Bad.near' },
       { escrowContract: '' }, { amount: '0' }, { msg: { ...v1, receiver: options.senderId } },
@@ -129,13 +142,6 @@ describe('the single FT action and NEP-366 signature', () => {
       args: { receiver_id: options.escrowContract, amount: '1000000', msg: vectors.msg_canonico_v1 },
       gas: NEAR_ESCROW_MAX_GAS, deposit: 1n, nonce: 42n, maxBlockHeight: 100000000n });
     expect(await signEscrowAuthorization(options)).toEqual(payment);
-  });
-  it('can sign mainnet offline with its own USDC token', async () => {
-    const v = vectors.payment_id.vectores[2];
-    const payment = await signEscrowAuthorization({ ...options, network: 'near:mainnet', senderId: v.payer,
-      escrowContract: 'escrow.example.near', token: v.token, msg: v });
-    expect(payment.network).toBe('near:mainnet');
-    expect(decode(payment).receiver).toBe(v.token);
   });
   it.each([0n, 2n, (1n << 128n) - 1n])('refuses deposit %s', (deposit) => {
     const d = buildEscrowAuthorizationDelegate(options); d.actions[0].deposit = deposit;
@@ -161,10 +167,15 @@ describe('the single FT action and NEP-366 signature', () => {
       expect(() => validateEscrowAuthorizationDelegate(d, options)).toThrow(/arguments/);
     }
   });
-  it.each([NEAR_ESCROW_MIN_GAS, NEAR_ESCROW_MAX_GAS])('accepts gas boundary %s', async (gas) => {
+  // Facilitator literals written by hand, so a drifted SDK constant cannot validate itself.
+  it('pins the authorization gas constants to 38 and 100 TGas, with 100 TGas as default', async () => {
+    expect([NEAR_ESCROW_MIN_GAS, NEAR_ESCROW_MAX_GAS]).toEqual([38_000_000_000_000n, 100_000_000_000_000n]);
+    expect(decode(await signEscrowAuthorization(options)).gas).toBe(100_000_000_000_000n);
+  });
+  it.each([38_000_000_000_000n, 100_000_000_000_000n])('accepts gas boundary %s', async (gas) => {
     expect(decode(await signEscrowAuthorization({ ...options, gas })).gas).toBe(gas);
   });
-  it.each([0n, NEAR_ESCROW_MIN_GAS - 1n, NEAR_ESCROW_MAX_GAS + 1n, 1n << 64n])('rejects gas %s before signing', async (gas) => {
+  it.each([0n, 37_999_999_999_999n, 100_000_000_000_001n, 1n << 64n])('rejects gas %s before signing', async (gas) => {
     const sign = vi.fn(signer.sign);
     await expect(signEscrowAuthorization({ ...options, gas, signer: { ...signer, sign } })).rejects.toThrow(/gas/);
     expect(sign).not.toHaveBeenCalled();
@@ -196,6 +207,41 @@ describe('the single FT action and NEP-366 signature', () => {
   });
 });
 
+describe('per-network Arras escrow registry', () => {
+  const v3 = vectors.payment_id.vectores[2];
+  const mainnet: EscrowAuthorizationOptions = { ...options, network: 'near:mainnet', senderId: v3.payer, token: v3.token, msg: v3 };
+  const signedBy = (o: EscrowAuthorizationOptions) => [() => signEscrowAuthorization(o), () => release(o, v1.payment_id),
+    () => refund(o, v1.payment_id), () => reclaim(o, v1.payment_id), () => withdraw(o), () => withdrawFor(o, v1.receiver)];
+  it('is frozen: one testnet deployment and no mainnet contract yet', () => {
+    expect(NEAR_ESCROW_CONTRACTS).toEqual({ 'near:testnet': ['arras-v1b-1101.testnet'], 'near:mainnet': [] });
+    expect(() => { (NEAR_ESCROW_CONTRACTS['near:mainnet'] as string[]).push('evil-sink.near'); }).toThrow(TypeError);
+    expect(() => { (NEAR_ESCROW_CONTRACTS as Record<string, readonly string[]>)['near:mainnet'] = ['evil-sink.near']; }).toThrow(TypeError);
+    expect(NEAR_ESCROW_CONTRACTS['near:mainnet']).toEqual([]);
+  });
+  it.each(['evil-sink.near', 'arras-v1b-1101.testnet', 'arras.near', 'escrow.example.near'])(
+    'mainnet refuses %s for authorization and every lifecycle call without calling the signer', async (escrowContract) => {
+      const sign = vi.fn(signer.sign);
+      const o = { ...mainnet, escrowContract, signer: { ...signer, sign } };
+      expect(() => buildEscrowAuthorizationDelegate(o)).toThrow(/escrowContract/);
+      for (const call of signedBy(o)) await expect(call()).rejects.toThrow(/escrowContract/);
+      expect(sign).not.toHaveBeenCalled();
+    });
+  it.each(['evil-sink.testnet', 'arras.testnet', 'sub.arras-v1b-1101.testnet', 'arras-v1b-1101', 'arras-v1b-1101.testnet ', 'ARRAS-V1B-1101.TESTNET'])(
+    'testnet refuses %s without calling the signer', async (escrowContract) => {
+      const sign = vi.fn(signer.sign);
+      for (const call of signedBy({ ...options, escrowContract, signer: { ...signer, sign } })) await expect(call()).rejects.toThrow(/escrowContract/);
+      expect(sign).not.toHaveBeenCalled();
+    });
+  it('signs the contract it checked, even if an options getter changes after the first read', async () => {
+    const flipping = () => {
+      let reads = 0;
+      return { ...options, get escrowContract() { return reads++ === 0 ? 'arras-v1b-1101.testnet' : 'evil-sink.testnet'; } };
+    };
+    expect(decode(await signEscrowAuthorization(flipping())).args.receiver_id).toBe('arras-v1b-1101.testnet');
+    expect(decode(await withdraw(flipping())).receiver).toBe('arras-v1b-1101.testnet');
+  });
+});
+
 describe('v1 lifecycle closed method list and zero deposit', () => {
   it('rejects an unknown network in lifecycle before asking for a signature', async () => {
     const sign = vi.fn(signer.sign);
@@ -218,18 +264,31 @@ describe('v1 lifecycle closed method list and zero deposit', () => {
   it.each(['', '0', '1'.repeat(31), '1'.repeat(33), 'l'.repeat(44), '1'.repeat(45)])('refuses payment ID %s', async (id) => {
     await expect(refund(options, id)).rejects.toThrow();
   });
-  it('rejects unexpected args, empty withdrawal account, zero release and method gas boundaries', async () => {
-    await expect(signEscrowLifecycle(options, 'withdraw', { account: v1.receiver })).rejects.toThrow(/argument/);
-    await expect(signEscrowLifecycle(options, 'refund', { payment_id: v1.payment_id, amount: '1' })).rejects.toThrow(/argument/);
+  it('rejects an empty withdrawal account and a zero release', async () => {
     await expect(withdrawFor(options, '')).rejects.toThrow(/account/);
     await expect(release(options, v1.payment_id, '0')).rejects.toThrow(/amount/);
-    for (const [method, args, min, max] of [
-      ['release', { payment_id: v1.payment_id }, 3_000_000_000_000n, 30_000_000_000_000n],
-      ['withdraw', {}, 29_000_000_000_000n, 50_000_000_000_000n],
-    ] as const) {
-      for (const gas of [min - 1n, max + 1n]) await expect(signEscrowLifecycle({ ...options, gas }, method, args)).rejects.toThrow(/gas/);
-      for (const gas of [min, max]) expect(decode(await signEscrowLifecycle({ ...options, gas }, method, args)).gas).toBe(gas);
+  });
+  // Facilitator gas limits written by hand (x402-rs escrow.rs), plus the argument a sibling method takes.
+  const lifecycleTable = [
+    ['release', { payment_id: v1.payment_id }, 3_000_000_000_000n, 30_000_000_000_000n, { account: v1.receiver }],
+    ['refund', { payment_id: v1.payment_id }, 3_000_000_000_000n, 30_000_000_000_000n, { amount: '1' }],
+    ['reclaim', { payment_id: v1.payment_id }, 3_000_000_000_000n, 30_000_000_000_000n, { amount: '1' }],
+    ['withdraw', {}, 29_000_000_000_000n, 50_000_000_000_000n, { account: v1.receiver }],
+    ['withdraw_for', { account: v1.receiver }, 29_000_000_000_000n, 50_000_000_000_000n, { payment_id: v1.payment_id }],
+  ] as const;
+  it.each(lifecycleTable)('%s gas: refuses min-1 and max+1, signs min and max, defaults to max', async (method, args, min, max) => {
+    for (const gas of [min - 1n, max + 1n]) {
+      const sign = vi.fn(signer.sign);
+      await expect(signEscrowLifecycle({ ...options, gas, signer: { ...signer, sign } }, method, args)).rejects.toThrow(/gas/);
+      expect(sign).not.toHaveBeenCalled();
     }
+    for (const gas of [min, max]) expect(decode(await signEscrowLifecycle({ ...options, gas }, method, args)).gas).toBe(gas);
+    expect(decode(await signEscrowLifecycle(options, method, args)).gas).toBe(max);
+  });
+  it.each(lifecycleTable)('%s refuses one extra argument before signing', async (method, args, _min, _max, extra) => {
+    const sign = vi.fn(signer.sign);
+    await expect(signEscrowLifecycle({ ...options, signer: { ...signer, sign } }, method, { ...args, ...extra })).rejects.toThrow(/argument/);
+    expect(sign).not.toHaveBeenCalled();
   });
   it('exports through the existing near subpath', async () => {
     const near = await import('./index');

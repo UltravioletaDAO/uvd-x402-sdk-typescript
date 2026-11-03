@@ -67,6 +67,17 @@ export const NEAR_ESCROW_TOKENS: Readonly<Record<NearEscrowNetwork, string>> = O
   'near:mainnet': '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
   'near:testnet': '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
 });
+/**
+ * The Arras escrow deployments this SDK signs for, per network. Any other escrowContract is refused before the
+ * signer is called, for authorization and lifecycle alike: a signed delegate can be relayed by anyone, so a 402
+ * server must not be able to point it at its own account. Mainnet stays empty until its contract ships in a release.
+ */
+export const NEAR_ESCROW_CONTRACTS: Readonly<Record<NearEscrowNetwork, readonly string[]>> = Object.freeze({
+  'near:testnet': Object.freeze(['arras-v1b-1101.testnet']),
+  'near:mainnet': Object.freeze([]),
+});
+/** NEAR's ACCESS_KEY_NONCE_RANGE_MULTIPLIER: a delegate needs nonce < block height * 10^6. */
+const NONCE_RANGE_MULTIPLIER = 1_000_000n;
 
 // Signed values must match in full, without trimming or normalization.
 function fullMatch(pattern: RegExp, value: string): boolean {
@@ -172,11 +183,18 @@ export function createNearLocalSigner(secret: Uint8Array | string): NearLocalSig
 function delegateOptions(o: NearEscrowDelegateOptions): void {
   if (o.network !== 'near:mainnet' && o.network !== 'near:testnet') throw new Error('Unsupported NEAR network');
   account(o.senderId, 'senderId'); account(o.escrowContract, 'escrowContract');
-  if (uint(o.nonce, 64, 'nonce') === 0n) throw new Error('nonce must be positive');
-  if (uint(o.maxBlockHeight, 64, 'maxBlockHeight') === 0n) throw new Error('maxBlockHeight must be positive');
+  if (!NEAR_ESCROW_CONTRACTS[o.network].includes(o.escrowContract)) {
+    throw new Error(`escrowContract: not a registered Arras escrow for ${o.network}`);
+  }
+  const nonce = uint(o.nonce, 64, 'nonce');
+  if (nonce === 0n) throw new Error('nonce must be positive');
+  const height = uint(o.maxBlockHeight, 64, 'maxBlockHeight');
+  if (height === 0n) throw new Error('maxBlockHeight must be positive');
+  // Execution never passes maxBlockHeight, so NEAR would always answer DelegateActionNonceTooLarge.
+  if (nonce >= height * NONCE_RANGE_MULTIPLIER) throw new Error('nonce must be below maxBlockHeight * 10^6');
 }
 
-/** Build the one allowed FT action. Contract/operator scope must come from trusted /supported configuration. */
+/** Build the one allowed FT action. The contract must be in NEAR_ESCROW_CONTRACTS; the operator comes from trusted /supported configuration. */
 export function buildEscrowAuthorizationDelegate(o: EscrowAuthorizationOptions): NearEscrowDelegate {
   delegateOptions(o);
   if (o.token !== NEAR_ESCROW_TOKENS[o.network]) throw new Error('token does not match network USDC');
@@ -219,7 +237,8 @@ async function signDelegate(o: NearEscrowDelegateOptions, d: NearEscrowDelegate)
   return { x402Version: 2, scheme: 'escrow', network,
     payload: { signedDelegateAction: btoa(Array.from(signed, (b) => String.fromCharCode(b)).join('')) } };
 }
-export async function signEscrowAuthorization(o: EscrowAuthorizationOptions): Promise<NearEscrowPayment> {
+export async function signEscrowAuthorization(options: EscrowAuthorizationOptions): Promise<NearEscrowPayment> {
+  const o = { ...options }; // read each field once, so the contract checked is the contract signed
   const d = buildEscrowAuthorizationDelegate(o);
   validateEscrowAuthorizationDelegate(d, o);
   return signDelegate(o, d);
@@ -230,9 +249,10 @@ const lifecycleGas: Record<NearEscrowLifecycleMethod, bigint> = Object.freeze({
   release: 30_000_000_000_000n, refund: 30_000_000_000_000n, reclaim: 30_000_000_000_000n,
   withdraw: 50_000_000_000_000n, withdraw_for: 50_000_000_000_000n,
 });
-export async function signEscrowLifecycle(o: NearEscrowDelegateOptions,
+export async function signEscrowLifecycle(options: NearEscrowDelegateOptions,
   method: NearEscrowLifecycleMethod, args: { payment_id?: string; amount?: NearUnsigned | null; account?: string } = {}
 ): Promise<NearEscrowPayment> {
+  const o = { ...options }; // read each field once, so the contract checked is the contract signed
   delegateOptions(o);
   if (!Object.hasOwn(lifecycleGas, method)) throw new Error('Escrow method not allowed');
   const gas = uint(o.gas ?? lifecycleGas[method], 64, 'gas');
