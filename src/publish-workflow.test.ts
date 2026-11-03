@@ -579,8 +579,8 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'a default shell for the tag job',
       (s) =>
         s.replace(
-          '    timeout-minutes: 5\n',
-          '    timeout-minutes: 5\n    defaults:\n      run:\n        shell: sh {0}\n'
+          '    timeout-minutes: 10\n',
+          '    timeout-minutes: 10\n    defaults:\n      run:\n        shell: sh {0}\n'
         ),
       'defaults in job tag',
     ],
@@ -634,8 +634,8 @@ describe('publish.yml: trusted publishing, run by hand from main, approved by th
       'env for the whole tag job',
       (s) =>
         s.replace(
-          '    timeout-minutes: 5\n',
-          '    timeout-minutes: 5\n    env:\n      NODE_OPTIONS: --require ./x.js\n'
+          '    timeout-minutes: 10\n',
+          '    timeout-minutes: 10\n    env:\n      NODE_OPTIONS: --require ./x.js\n'
         ),
       'env in job tag',
     ],

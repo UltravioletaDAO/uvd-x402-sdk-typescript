@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net';
 import { resolve } from 'node:path';
@@ -438,6 +440,16 @@ describe('scripts/tag-release.mjs: v<version> on the published commit, once', { 
     expect(github.taggedCommit()).toEqual({ type: 'commit', sha: RUN_SHA });
   });
 
+  it('O-258: can see a version only on the ninth read after the increasing five-minute schedule', async () => {
+    const github = new FakeGitHub();
+    github.registryMisses = 8;
+    const { code, stderr } = await run(github);
+    expect(stderr).toBe('');
+    expect(code).toBe(0);
+    expect(github.registryReads()).toHaveLength(9);
+    expect(github.taggedCommit()).toEqual({ type: 'commit', sha: RUN_SHA });
+  });
+
   it('reads the gitHead whatever its case', async () => {
     const github = new FakeGitHub();
     const upper = { name: 'uvd-x402-sdk', version: VERSION, gitHead: RUN_SHA.toUpperCase() };
@@ -454,7 +466,7 @@ describe('scripts/tag-release.mjs: v<version> on the published commit, once', { 
     const { code, stderr } = await run(github);
     expect(code).toBe(1);
     expect(stderr).toContain(`npm does not have uvd-x402-sdk@${VERSION} (HTTP 404`);
-    expect(github.registryReads()).toHaveLength(5);
+    expect(github.registryReads()).toHaveLength(9);
     expect(github.requests.some((r) => r.path.includes('/git/'))).toBe(false);
   });
 
@@ -513,4 +525,57 @@ describe('scripts/tag-release.mjs: v<version> on the published commit, once', { 
     expect(code).toBe(1);
     expect(stderr).toContain(`creating ${TAG_REF}: HTTP 500`);
   });
+});
+
+// Virtual time pins production delays, RTT and network recovery without waiting five minutes.
+async function virtualRegistry({ misses = 8, rtt = 0, networkFailures = 0, visibleAt = 0 } = {}) {
+  const github = new FakeGitHub();
+  github.registryMisses = misses;
+  let now = 0;
+  const waits: number[] = [], readsAt: number[] = [];
+  const fakeProcess = { env: { INPUT_VERSION: VERSION, GITHUB_TOKEN: CREDENTIAL, GITHUB_SHA: RUN_SHA,
+    GITHUB_REPOSITORY: REPO }, exitCode: 1 };
+  await runInNewContext(readFileSync(SCRIPT, 'utf8'), {
+    process: fakeProcess, Buffer, console: { log() {}, error() {} },
+    Date: { now: () => now }, AbortSignal,
+    setTimeout: (done: () => void, delay: number) => { waits.push(delay); now += delay; done(); },
+    fetch: async (url: string, init: RequestInit = {}) => {
+      const parsed = new URL(url);
+      const request: Recorded = { method: init.method ?? 'GET', path: parsed.pathname,
+        ref: parsed.searchParams.get('ref'), body: init.body ? JSON.parse(String(init.body)) : undefined };
+      const registry = !request.path.startsWith('/repos/');
+      if (registry) {
+        readsAt.push(now);
+        now += rtt;
+        if (networkFailures-- > 0) throw new Error('connection reset');
+        if (now < visibleAt) return { status: 404, text: async () => '{}' };
+      }
+      const answer = github.answer(request);
+      return { status: answer.status, text: async () => JSON.stringify(answer.body) };
+    },
+  });
+  return { github, fakeProcess, waits, now, readsAt };
+}
+it('O-258: production backoff totals 300 seconds and stays inside the tag job budget', async () => {
+  const { github, fakeProcess, waits, now } = await virtualRegistry();
+  expect(fakeProcess.exitCode).toBe(0);
+  expect(waits).toEqual([5000, 10000, 20000, 40000, 60000, 60000, 60000, 45000]);
+  expect(now).toBe(300000);
+  const workflow = readFileSync(resolve(__dirname, '..', '.github', 'workflows', 'publish.yml'), 'utf8').replace(/\r\n/g, '\n');
+  const minutes = Number(workflow.match(/\n  tag:\n[\s\S]*?timeout-minutes:\s*(\d+)/)?.[1]);
+  expect(minutes).toBeGreaterThanOrEqual(6); // five-minute polling plus setup and GitHub requests
+
+  expect(github.taggedCommit()).toEqual({ type: 'commit', sha: RUN_SHA });
+});
+it('O-258: slow registry responses do not erase the last read after propagation', async () => {
+  const { github, fakeProcess, readsAt } = await virtualRegistry({ misses: 0, rtt: 1000, visibleAt: 270000 });
+  expect(readsAt).toEqual([0, 5000, 15000, 35000, 75000, 135000, 195000, 255000, 300000]);
+  expect(fakeProcess.exitCode).toBe(0);
+  expect(github.taggedCommit()).toEqual({ type: 'commit', sha: RUN_SHA });
+});
+it('O-258: transient registry connection failures are retried before tagging', async () => {
+  const { github, fakeProcess, readsAt } = await virtualRegistry({ misses: 0, networkFailures: 2 });
+  expect(readsAt).toEqual([0, 5000, 15000]);
+  expect(fakeProcess.exitCode).toBe(0);
+  expect(github.taggedCommit()).toEqual({ type: 'commit', sha: RUN_SHA });
 });

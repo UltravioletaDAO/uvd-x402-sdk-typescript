@@ -122,7 +122,7 @@ jobs:
     name: Tag the published version
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: write # the tag; no id-token, and no npm install runs in this job
     steps:
