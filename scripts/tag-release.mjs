@@ -94,9 +94,13 @@ async function manifestAt(commit) {
 async function publishedFrom(name) {
   const url = `${registryUrl}/${name.replace('/', '%2f')}/${version}`;
   let last = '';
-  const deadline = Date.now() + 305_000;
+  let nextReadAt = Date.now();
+  const deadline = nextReadAt + 305_000;
   for (const factor of registryFactors) {
-    if (factor > 0) await new Promise((done) => setTimeout(done, Math.min(factor * registryWait, Math.max(0, deadline - Date.now()))));
+    // Anchor reads to absolute offsets: network latency must not consume the last attempt.
+    nextReadAt += factor * registryWait;
+    if (factor > 0) await new Promise((done) => setTimeout(done,
+      Math.min(Math.max(0, nextReadAt - Date.now()), Math.max(0, deadline - Date.now()))));
     const remaining = deadline - Date.now();
     if (remaining <= 0) break;
     let response, text;
