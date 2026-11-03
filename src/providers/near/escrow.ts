@@ -71,11 +71,11 @@ export const NEAR_ESCROW_TOKENS: Readonly<Record<NearEscrowNetwork, string>> = O
 /**
  * The Arras escrow deployments this SDK signs for, per network. Any other escrowContract is refused before the
  * signer is called, for authorization and lifecycle alike: a signed delegate can be relayed by anyone, so a 402
- * server must not be able to point it at its own account. Mainnet stays empty until its contract ships in a release.
+ * server must not be able to point it at its own account. Only deployed Arras v1 contracts are registered.
  */
 export const NEAR_ESCROW_CONTRACTS: Readonly<Record<NearEscrowNetwork, readonly string[]>> = Object.freeze({
   'near:testnet': Object.freeze(['arras-v1b-1101.testnet']),
-  'near:mainnet': Object.freeze([]),
+  'near:mainnet': Object.freeze(['v1.arras-escrow.near']),
 });
 /** NEAR's ACCESS_KEY_NONCE_RANGE_MULTIPLIER: a delegate needs nonce < block height * 10^6. */
 const NONCE_RANGE_MULTIPLIER = 1_000_000n;

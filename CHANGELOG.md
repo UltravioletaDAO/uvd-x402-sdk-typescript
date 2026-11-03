@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.110.0] - 2026-11-03
+
+### Added
+
+- Register `v1.arras-escrow.near` for Arras v1 escrow on `near:mainnet`, enabling offline authorization and lifecycle signing. Mainnet v2 remains unregistered; testnet keeps `arras-v1b-1101.testnet`.
+
+### Fixed
+
+- `buildArrasStorageDeposit` now checks the selected network's `NEAR_ESCROW_CONTRACTS` registry before building a payer-funded transaction. Unregistered and cross-network targets are refused, including `v2.arras-escrow.near`.
+
 ## [2.109.0] - 2026-11-02
 
 ### Added
