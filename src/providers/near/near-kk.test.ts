@@ -48,6 +48,10 @@ describe('NEP-413 official example and independent fixed bytes', () => {
     expect(signed.publicKey).toBe('ed25519:FAe4sisG95oZ42w7buUn5qEE4TAnfTTFPiguZUHmhiF');
     expect(verify(null, digest, publicKey, Buffer.from(signed.signature, 'base64'))).toBe(true);
     expect(verify(null, preimage, publicKey, Buffer.from(signed.signature, 'base64'))).toBe(false);
+    if (v.id === 'official-example') {
+      const mutated = preimage.slice(); mutated[0] ^= 1;
+      expect(verify(null, createHash('sha256').update(mutated).digest(), publicKey, Buffer.from(signed.signature, 'base64'))).toBe(false);
+    }
     expect(decodeBase58(signed.publicKey.slice(8))).toBeGreaterThan(0n);
   });
   it('distinguishes absent and empty callback, and copies caller nonce bytes', () => {
@@ -68,6 +72,11 @@ describe('NEP-413 official example and independent fixed bytes', () => {
   it.each([{ message: null }, { message: '\ud800' }, { message: '\udfff' }, { callbackUrl: '\ud800' }, { recipient: '\udfff' }, { callbackUrl: null }, { accountId: 'Payer.near' }, { accountId: 'a.near\n' }])('refuses malformed input %s', async (bad) => {
     const spy = { publicKey: signer.publicKey, sign: vi.fn(signer.sign) };
     await expect(signNep413({ ...message, ...bad, signer: spy } as never)).rejects.toThrow();
+    expect(spy.sign).not.toHaveBeenCalled();
+  });
+  it('refuses a malformed public key before invoking an external signer', async () => {
+    const spy = { publicKey: new Uint8Array(31), sign: vi.fn(signer.sign) };
+    await expect(signNep413({ ...message, signer: spy })).rejects.toThrow(/public key/);
     expect(spy.sign).not.toHaveBeenCalled();
   });
   it.each([

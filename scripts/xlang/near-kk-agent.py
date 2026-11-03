@@ -7,7 +7,7 @@ from uvd_x402_sdk.near_nep413 import nep413_preimage, sign_nep413
 from uvd_x402_sdk.near_events import parse_arras_events
 from uvd_x402_sdk.near_storage import build_arras_storage_deposit, build_usdc_storage_deposit
 
-v = json.load(sys.stdin)
+v = json.loads(sys.stdin.buffer.read().decode('utf-8'))
 signer = NearEd25519Signer(bytes(range(32)))
 messages, preimages, exact = [], [], []
 for item in v['nep413']:
