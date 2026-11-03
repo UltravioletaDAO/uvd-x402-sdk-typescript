@@ -16,8 +16,8 @@ const raw = readFileSync(join(here, '../../src/providers/near/vectors/arras-v1.j
 const vectors = JSON.parse(raw);
 const seed = Uint8Array.from({ length: 32 }, (_, i) => i);
 const signer = sdk.createNearLocalSigner(seed);
-// Delegates are signed only for registered contracts. Until NEAR_ESCROW_CONTRACTS has a mainnet row, every vector
-// signs on testnet with testnet USDC; the mainnet vector keeps its own msg, preimage and payment ID.
+// Delegates are signed only for registered contracts. This runner keeps every vector on testnet and
+// uses testnet USDC; the mainnet vector keeps its own msg, preimage and payment ID.
 const network = 'near:testnet';
 const escrowContract = sdk.NEAR_ESCROW_CONTRACTS[network][0];
 const results = [];

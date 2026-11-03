@@ -10,7 +10,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 
 ## Features
 
-**Arras NEAR escrow (v2.108.0):** offline local-key NEP-366 authorization, canonical Rust payment IDs and pull lifecycle helpers through `uvd-x402-sdk/near`. [Guide and agent example](docs/near-escrow.md). As of 2026-11-02 the facilitator advertises escrow only on testnet, and the SDK's escrow contract registry has no mainnet row yet.
+**Arras NEAR escrow (v2.110.0):** offline local-key NEP-366 authorization, canonical Rust payment IDs and pull lifecycle helpers through `uvd-x402-sdk/near`. [Guide and agent example](docs/near-escrow.md). As of 2026-11-03 the production facilitator relays NEAR escrow only on testnet. Since 2.110.0 the registry allows mainnet escrow signing only for `v1.arras-escrow.near`; testnet keeps `arras-v1b-1101.testnet`.
 
 - **31 Networks**: EVM (19 including HashKey Chain, Arc, Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, Hedera (mainnet + testnet)
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT, USDG (Robinhood Chain)

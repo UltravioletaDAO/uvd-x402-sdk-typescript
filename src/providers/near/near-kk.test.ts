@@ -148,7 +148,31 @@ describe('payer-funded NEP-145 transactions', () => {
   it.each(['A.near', 'arras-v1b-1101.testnet\n', 'intents.near'])('rejects invalid storage target %s', (escrowContract) => {
     expect(() => buildArrasStorageDeposit({ ...storage, escrowContract })).toThrow();
   });
-  it('uses the explicit mainnet deployment configuration without guessing an account parent', () => {
+  it.each([
+    ['near:mainnet', 'v2.arras-escrow.near'], ['near:mainnet', 'evil-sink.near'],
+    ['near:mainnet', 'arras-v1b-1101.testnet'], ['near:testnet', 'v1.arras-escrow.near'],
+    ['near:testnet', 'v2.arras-escrow.near'], ['near:testnet', 'evil-sink.testnet'],
+    ['near:mainnet', 'V1.ARRAS-ESCROW.NEAR'], ['near:mainnet', ' v1.arras-escrow.near'],
+    ['near:mainnet', 'v1.arras-escrow.near '], ['near:mainnet', 'v1.arras-escrow.near\n'],
+    ['near:mainnet', 'sub.v1.arras-escrow.near'], ['near:mainnet', 'v1.arras-escrow.near.evil.near'],
+    ['near:mainnet', 'v1.аrras-escrow.near'], ['near:mainnet', '0xv1.arras-escrow.near'],
+    ['near:mainnet', '0Xv1.arras-escrow.near'], ['near:mainnet', ''], ['near:mainnet', null],
+  ])('refuses an unregistered storage target on %s: %s', (network, escrowContract) => {
+    expect(() => buildArrasStorageDeposit({ ...storage, network, escrowContract } as never)).toThrow(/escrowContract/);
+  });
+  it('builds only the contract and network checked, even with changing option getters', () => {
+    let contractReads = 0, networkReads = 0;
+    const tx = buildArrasStorageDeposit({ ...storage,
+      get network() { return networkReads++ === 0 ? 'near:mainnet' as const : 'near:testnet' as const; },
+      get escrowContract() { return contractReads++ === 0 ? 'v1.arras-escrow.near' : 'evil-sink.near'; },
+    });
+    expect(tx.receiverId).toBe('v1.arras-escrow.near');
+    expect(contractReads).toBe(1); expect(networkReads).toBe(1);
+  });
+  it.each(['near', 'NEAR:MAINNET', 'near:mainnet ', '', null, undefined])('rejects unsupported storage network %s', (network) => {
+    expect(() => buildArrasStorageDeposit({ ...storage, network } as never)).toThrow('Unsupported NEAR network');
+  });
+  it('accepts the registered mainnet v1 deployment', () => {
     expect(buildArrasStorageDeposit({ ...storage, network: 'near:mainnet', escrowContract: 'v1.arras-escrow.near' }).receiverId).toBe('v1.arras-escrow.near');
   });
 });

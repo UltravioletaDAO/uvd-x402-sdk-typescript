@@ -209,24 +209,42 @@ describe('the single FT action and NEP-366 signature', () => {
 
 describe('per-network Arras escrow registry', () => {
   const v3 = vectors.payment_id.vectores[2];
-  const mainnet: EscrowAuthorizationOptions = { ...options, network: 'near:mainnet', senderId: v3.payer, token: v3.token, msg: v3 };
+  const mainnet: EscrowAuthorizationOptions = { ...options, network: 'near:mainnet', senderId: v3.payer, token: v3.token, amount: v3.amount, msg: v3 };
   const signedBy = (o: EscrowAuthorizationOptions) => [() => signEscrowAuthorization(o), () => release(o, v1.payment_id),
     () => refund(o, v1.payment_id), () => reclaim(o, v1.payment_id), () => withdraw(o), () => withdrawFor(o, v1.receiver)];
-  it('is frozen: one testnet deployment and no mainnet contract yet', () => {
-    expect(NEAR_ESCROW_CONTRACTS).toEqual({ 'near:testnet': ['arras-v1b-1101.testnet'], 'near:mainnet': [] });
+  it('is frozen: only the deployed v1 contract on each network', () => {
+    expect(NEAR_ESCROW_CONTRACTS).toEqual({ 'near:testnet': ['arras-v1b-1101.testnet'], 'near:mainnet': ['v1.arras-escrow.near'] });
     expect(() => { (NEAR_ESCROW_CONTRACTS['near:mainnet'] as string[]).push('evil-sink.near'); }).toThrow(TypeError);
     expect(() => { (NEAR_ESCROW_CONTRACTS as Record<string, readonly string[]>)['near:mainnet'] = ['evil-sink.near']; }).toThrow(TypeError);
-    expect(NEAR_ESCROW_CONTRACTS['near:mainnet']).toEqual([]);
+    expect(NEAR_ESCROW_CONTRACTS['near:mainnet']).toEqual(['v1.arras-escrow.near']);
   });
-  it.each(['evil-sink.near', 'arras-v1b-1101.testnet', 'arras.near', 'escrow.example.near'])(
+  it('signs mainnet v1 authorization and release with independently verified wire bytes', async () => {
+    const sign = vi.fn(signer.sign);
+    const o = { ...mainnet, escrowContract: 'v1.arras-escrow.near', signer: { ...signer, sign } };
+    const authorization = await signEscrowAuthorization(o);
+    expect(authorization).toMatchObject({ x402Version: 2, scheme: 'escrow', network: 'near:mainnet' });
+    expect(decode(authorization)).toMatchObject({ sender: v3.payer, receiver: v3.token, method: 'ft_transfer_call',
+      args: { receiver_id: 'v1.arras-escrow.near', amount: v3.amount, msg: buildEscrowMsg(v3) },
+      deposit: 1n, nonce: 42n, maxBlockHeight: 100000000n });
+    expect(computePaymentId({ ...o.msg, token: o.token, payer: o.senderId, amount: o.amount })).toBe(v3.payment_id);
+    const payment = await release(o, v3.payment_id);
+    expect(payment).toMatchObject({ x402Version: 2, scheme: 'escrow', network: 'near:mainnet' });
+    expect(decode(payment)).toMatchObject({ sender: v3.payer, receiver: 'v1.arras-escrow.near', method: 'release',
+      args: { payment_id: v3.payment_id, amount: null }, deposit: 0n, gas: 30_000_000_000_000n });
+    expect(sign).toHaveBeenCalledTimes(2);
+  });
+  it.each(['v2.arras-escrow.near', 'evil-sink.near', 'arras-v1b-1101.testnet', 'arras.near', 'escrow.example.near',
+    'V1.ARRAS-ESCROW.NEAR', ' v1.arras-escrow.near', 'v1.arras-escrow.near ', 'sub.v1.arras-escrow.near',
+    'v1.arras-escrow.near.evil.near', 'v1.аrras-escrow.near', 'v1.arras-escrow.near\n',
+    '0xv1.arras-escrow.near', '0Xv1.arras-escrow.near', '', null])(
     'mainnet refuses %s for authorization and every lifecycle call without calling the signer', async (escrowContract) => {
       const sign = vi.fn(signer.sign);
-      const o = { ...mainnet, escrowContract, signer: { ...signer, sign } };
+      const o = { ...mainnet, escrowContract: escrowContract as string, signer: { ...signer, sign } };
       expect(() => buildEscrowAuthorizationDelegate(o)).toThrow(/escrowContract/);
       for (const call of signedBy(o)) await expect(call()).rejects.toThrow(/escrowContract/);
       expect(sign).not.toHaveBeenCalled();
     });
-  it.each(['evil-sink.testnet', 'arras.testnet', 'sub.arras-v1b-1101.testnet', 'arras-v1b-1101', 'arras-v1b-1101.testnet ', 'ARRAS-V1B-1101.TESTNET'])(
+  it.each(['v1.arras-escrow.near', 'v2.arras-escrow.near', 'evil-sink.testnet', 'arras.testnet', 'sub.arras-v1b-1101.testnet', 'arras-v1b-1101', 'arras-v1b-1101.testnet ', 'ARRAS-V1B-1101.TESTNET'])(
     'testnet refuses %s without calling the signer', async (escrowContract) => {
       const sign = vi.fn(signer.sign);
       for (const call of signedBy({ ...options, escrowContract, signer: { ...signer, sign } })) await expect(call()).rejects.toThrow(/escrowContract/);

@@ -1,5 +1,5 @@
 /** Payer-funded NEP-145 calls. These are unsigned normal transactions, never facilitator delegates. */
-import { NEAR_ESCROW_TOKENS, type NearEscrowNetwork, type NearUnsigned } from './escrow';
+import { NEAR_ESCROW_CONTRACTS, NEAR_ESCROW_TOKENS, type NearEscrowNetwork, type NearUnsigned } from './escrow';
 import { account, uint } from './encoding';
 
 export interface NearStorageTransaction {
@@ -19,7 +19,7 @@ export interface NearStorageOptions {
   /** YoctoNEAR, not NEAR. Query storage_balance_bounds for the live contract minimum. */
   deposit?: NearUnsigned;
 }
-/** Explicit trusted deployment configuration; this unsigned builder does not select an account parent. */
+/** Explicit deployment from NEAR_ESCROW_CONTRACTS for the selected network. */
 export interface ArrasStorageOptions extends NearStorageOptions { escrowContract: string }
 export const NEAR_ARRAS_STORAGE_DEPOSIT = '50000000000000000000000'; // 0.05 NEAR; about five payments
 export const NEAR_USDC_STORAGE_DEPOSIT = '1250000000000000000000'; // 0.00125 NEAR
@@ -42,6 +42,9 @@ function storage(o: NearStorageOptions, receiverId: string, registrationOnly: bo
 export function buildArrasStorageDeposit(options: ArrasStorageOptions): NearStorageTransaction {
   const o = { ...options };
   if (o.network !== 'near:mainnet' && o.network !== 'near:testnet') throw new Error('Unsupported NEAR network');
+  if (!NEAR_ESCROW_CONTRACTS[o.network].includes(o.escrowContract)) {
+    throw new Error(`escrowContract: not a registered Arras escrow for ${o.network}`);
+  }
   return storage(o, o.escrowContract, false, NEAR_ARRAS_STORAGE_DEPOSIT);
 }
 /** Register in native USDC; refund any surplus rather than topping up an FT registration. */
