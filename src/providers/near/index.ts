@@ -809,3 +809,7 @@ export class NEARProvider implements WalletAdapter {
 }
 
 export default NEARProvider;
+
+export * from './nep413';
+export * from './storage';
+export * from './events';

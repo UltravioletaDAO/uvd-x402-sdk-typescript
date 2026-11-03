@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2.109.0] - 2026-11-02
+
+### Added
+
+- Offline NEAR golden-flow helpers on `uvd-x402-sdk/near`: local-key `signExactNearDelegate` (one USDC `ft_transfer`, one yocto, at most 30 TGas), and NEP-413 `signNep413` with exact Borsh preimage support and refusal of `intents.near` recipients. Exact and escrow share the NEP-366 serializer.
+- `parseArrasEvents`: typed Arras v1 NEP-297 batches for all eleven contract events, including failed withdrawals and administrative updates. Foreign, malformed and unknown-version logs are skipped; atomic amounts and timestamps stay decimal strings.
+- `buildArrasStorageDeposit` and `buildUsdcStorageDeposit`: unsigned payer-funded NEP-145 transactions. Arras retains the surplus for payment storage (0.05 NEAR default); USDC requests registration only (0.00125 NEAR default). Callers can supply the live queried deposit and explicit Arras deployment.
+- Shared fixed vectors for the official NEP-413 example, independent Unicode/optional callback checks, exact delegates and constructed Rust events, plus an offline TS/Python conformance runner.
+
+### Fixed
+
+- O-258: wait for npm registry propagation with increasing retries over about five minutes, including transient network failures. The tag job allows ten minutes for registry polling and GitHub API work; a tag still requires the published version and matching `gitHead`.
+
 ## [2.108.0] - 2026-11-02
 
 ### Added

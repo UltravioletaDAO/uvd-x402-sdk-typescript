@@ -2,6 +2,7 @@
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { encodeBase58 } from 'ethers';
+import { fullMatch, uint, account, concat, le, str, unbase58 } from './encoding';
 
 export type NearEscrowNetwork = 'near:mainnet' | 'near:testnet';
 /** Numbers must be safe integers; use decimal strings or bigint for nanoseconds and u128. */
@@ -22,7 +23,7 @@ export interface PaymentIdParams extends EscrowMsgParams {
 }
 export interface NearLocalSigner {
   readonly publicKey: Uint8Array;
-  /** Sign the NEP-366 SHA-256 digest directly, without a NEP-413 envelope. */
+  /** Sign the supplied SHA-256 digest directly. The calling helper supplies its domain prefix. */
   sign(digest: Uint8Array): Uint8Array | Promise<Uint8Array>;
 }
 export interface NearEscrowDelegateOptions {
@@ -79,57 +80,11 @@ export const NEAR_ESCROW_CONTRACTS: Readonly<Record<NearEscrowNetwork, readonly 
 /** NEAR's ACCESS_KEY_NONCE_RANGE_MULTIPLIER: a delegate needs nonce < block height * 10^6. */
 const NONCE_RANGE_MULTIPLIER = 1_000_000n;
 
-// Signed values must match in full, without trimming or normalization.
-function fullMatch(pattern: RegExp, value: string): boolean {
-  return pattern.exec(value)?.[0] === value;
-}
-
-function uint(value: NearUnsigned, bits: number, name: string): bigint {
-  if ((typeof value !== 'bigint' && typeof value !== 'number' && typeof value !== 'string') ||
-      (typeof value === 'number' && !Number.isSafeInteger(value)) ||
-      (typeof value === 'string' && !fullMatch(/^(0|[1-9][0-9]*)$/, value))) {
-    throw new Error(`${name}: expected an exact unsigned integer`);
-  }
-  const n = BigInt(value);
-  if (n < 0n || n >= 1n << BigInt(bits)) throw new Error(`${name}: out of u${bits} range`);
-  return n;
-}
-function account(value: string, name: string): void {
-  if (typeof value !== 'string' || value.length < 2 || value.length > 64 ||
-      !fullMatch(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, value)) throw new Error(`${name}: invalid NEAR account`);
-}
 function hex(value: string, size: number, name: string): Uint8Array {
   if (typeof value !== 'string' || value.length !== size * 2 || !fullMatch(/^[0-9a-f]+$/, value)) {
     throw new Error(`${name}: expected ${size} bytes of lowercase hex without 0x`);
   }
   return Uint8Array.from(value.match(/../g)!, (v) => parseInt(v, 16));
-}
-function concat(...parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, p) => sum + p.length, 0));
-  let at = 0;
-  for (const part of parts) { out.set(part, at); at += part.length; }
-  return out;
-}
-function le(n: bigint, size: number): Uint8Array {
-  return Uint8Array.from({ length: size }, (_, i) => Number(n >> BigInt(i * 8) & 255n));
-}
-function str(s: string): Uint8Array {
-  const bytes = new TextEncoder().encode(s);
-  return concat(le(BigInt(bytes.length), 4), bytes);
-}
-function unbase58(value: string): Uint8Array {
-  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  if (!value || value.length > 128) throw new Error('Invalid base58 length');
-  let n = 0n;
-  for (const c of value) {
-    const digit = alphabet.indexOf(c);
-    if (digit < 0) throw new Error('Invalid base58 character');
-    n = n * 58n + BigInt(digit);
-  }
-  const bytes: number[] = [];
-  while (n > 0n) { bytes.push(Number(n & 255n)); n >>= 8n; }
-  const zeros = value.match(/^1*/u)![0].length;
-  return concat(new Uint8Array(zeros), Uint8Array.from(bytes.reverse()));
 }
 function msgValues(p: EscrowMsgParams) {
   if (typeof p.operator_id !== 'string' || !fullMatch(/^[a-z0-9_-]{1,32}$/, p.operator_id)) {
@@ -186,6 +141,9 @@ function delegateOptions(o: NearEscrowDelegateOptions): void {
   if (!NEAR_ESCROW_CONTRACTS[o.network].includes(o.escrowContract)) {
     throw new Error(`escrowContract: not a registered Arras escrow for ${o.network}`);
   }
+  delegateNonce(o);
+}
+function delegateNonce(o: Pick<NearEscrowDelegateOptions, 'nonce' | 'maxBlockHeight'>): void {
   const nonce = uint(o.nonce, 64, 'nonce');
   if (nonce === 0n) throw new Error('nonce must be positive');
   const height = uint(o.maxBlockHeight, 64, 'maxBlockHeight');
@@ -220,7 +178,10 @@ export function validateEscrowAuthorizationDelegate(d: NearEscrowDelegate, o: Es
   const gas = uint(a.gas, 64, 'gas');
   if (gas < NEAR_ESCROW_MIN_GAS || gas > NEAR_ESCROW_MAX_GAS) throw new Error('FT gas outside 38..100 TGas');
 }
-async function signDelegate(o: NearEscrowDelegateOptions, d: NearEscrowDelegate): Promise<NearEscrowPayment> {
+type SigningContext = Pick<NearEscrowDelegateOptions, 'network' | 'signer'>;
+async function signDelegate(o: SigningContext, d: NearEscrowDelegate, scheme: 'exact'): Promise<NearExactPayment>;
+async function signDelegate(o: SigningContext, d: NearEscrowDelegate, scheme?: 'escrow'): Promise<NearEscrowPayment>;
+async function signDelegate(o: SigningContext, d: NearEscrowDelegate, scheme: 'escrow' | 'exact' = 'escrow'): Promise<NearEscrowPayment | NearExactPayment> {
   const network = o.network;
   const pk = new Uint8Array(o.signer.publicKey);
   if (pk.length !== 32) throw new Error('Expected 32-byte Ed25519 public key');
@@ -234,7 +195,7 @@ async function signDelegate(o: NearEscrowDelegateOptions, d: NearEscrowDelegate)
     throw new Error('Invalid Ed25519 delegate signature');
   }
   const signed = concat(bytes, Uint8Array.of(0), signature);
-  return { x402Version: 2, scheme: 'escrow', network,
+  return { x402Version: 2, scheme, network,
     payload: { signedDelegateAction: btoa(Array.from(signed, (b) => String.fromCharCode(b)).join('')) } };
 }
 export async function signEscrowAuthorization(options: EscrowAuthorizationOptions): Promise<NearEscrowPayment> {
@@ -285,4 +246,27 @@ export const withdrawFor = (o: NearEscrowDelegateOptions, account: string) => si
 /** v2 boundary only: no budget wire format or signing is defined until Arras v2 supplies its vectors. */
 export interface AuthorizeFromBudget {
   authorizeFromBudget(request: unknown): Promise<NearEscrowPayment>;
+}
+
+/** Local-key exact NEP-366 payment; uses the escrow serializer and raw digest signer. */
+export interface NearExactDelegateOptions extends Omit<NearEscrowDelegateOptions, 'escrowContract'> {
+  token: string;
+  payTo: string;
+  amount: NearUnsigned;
+}
+export interface NearExactPayment extends Omit<NearEscrowPayment, 'scheme'> { scheme: 'exact' }
+export async function signExactNearDelegate(options: NearExactDelegateOptions): Promise<NearExactPayment> {
+  const o = { ...options };
+  if (o.network !== 'near:mainnet' && o.network !== 'near:testnet') throw new Error('Unsupported NEAR network');
+  account(o.senderId, 'senderId'); account(o.payTo, 'payTo');
+  if (o.payTo === 'intents.near') throw new Error('intents.near is not an allowed recipient');
+  if (o.token !== NEAR_ESCROW_TOKENS[o.network]) throw new Error('token does not match network USDC');
+  delegateNonce(o);
+  const amount = uint(o.amount, 128, 'amount');
+  if (amount === 0n) throw new Error('amount must be positive');
+  const gas = uint(o.gas ?? 30_000_000_000_000n, 64, 'gas');
+  if (gas === 0n || gas > 30_000_000_000_000n) throw new Error('Exact gas must be positive and at most 30 TGas');
+  return signDelegate(o, { senderId: o.senderId, receiverId: o.token, nonce: o.nonce, maxBlockHeight: o.maxBlockHeight,
+    actions: [{ methodName: 'ft_transfer', args: JSON.stringify({ receiver_id: o.payTo, amount: amount.toString() }),
+      gas, deposit: 1n }] }, 'exact');
 }

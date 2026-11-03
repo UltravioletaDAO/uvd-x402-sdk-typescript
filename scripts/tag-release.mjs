@@ -10,7 +10,7 @@
  * - npm must have <name>@<version>, published from that commit: its gitHead, which npm records
  *   when it publishes from a git checkout, must be GITHUB_SHA. So no edit of the workflow (a dry
  *   run, another directory, an .npmrc) can get a tag for a version npm never received. A version
- *   just published may take a moment to show: the registry is read up to 5 times over ~75 s.
+ *   just published may take a moment to show: the registry is read with increasing waits for up to five minutes.
  * - Tag absent: creates the tag object and refs/tags/v<version> pointing at it.
  * - Tag already on that commit, lightweight or annotated: nothing to do, exit 0. A re-run of the
  *   job, or a tag made by hand before it, passes.
@@ -49,8 +49,10 @@ const sha = env.GITHUB_SHA ?? '';
 const repository = env.GITHUB_REPOSITORY ?? '';
 const apiUrl = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
 const registryUrl = (env.NPM_REGISTRY_URL || 'https://registry.npmjs.org').replace(/\/+$/, '');
-// Waits between registry reads: 1, 2, 4 and 8 times this, 75 s in all by default.
+// Increasing waits: 5, 10, 20, 40, 60, 60, 60, 45 seconds (300 s total).
+// A wall-clock deadline also bounds slow responses and network timeouts.
 const registryWait = Number(env.TAG_RELEASE_REGISTRY_WAIT_MS || 5000);
+const registryFactors = [0, 1, 2, 4, 8, 12, 12, 12, 9];
 const tag = `v${version}`;
 
 async function api(method, path, body) {
@@ -92,13 +94,22 @@ async function manifestAt(commit) {
 async function publishedFrom(name) {
   const url = `${registryUrl}/${name.replace('/', '%2f')}/${version}`;
   let last = '';
-  for (const factor of [0, 1, 2, 4, 8]) {
-    if (factor > 0) await new Promise((done) => setTimeout(done, factor * registryWait));
-    const response = await fetch(url, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(30_000),
-    });
-    const text = await response.text();
+  const deadline = Date.now() + 305_000;
+  for (const factor of registryFactors) {
+    if (factor > 0) await new Promise((done) => setTimeout(done, Math.min(factor * registryWait, Math.max(0, deadline - Date.now()))));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    let response, text;
+    try {
+      response = await fetch(url, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(Math.min(30_000, remaining)),
+      });
+      text = await response.text();
+    } catch {
+      last = 'registry network error or timeout';
+      continue;
+    }
     if (response.status !== 200) {
       last = `HTTP ${response.status}`;
       continue;
