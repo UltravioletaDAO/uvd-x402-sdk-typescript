@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [2.112.0] - 2026-11-04
+
+### Added
+
+- NEAR ERC-8004 helpers on `uvd-x402-sdk/near`: immutable mainnet/testnet identity, reputation and Arras verifier targets; configuration-driven storage budgets with SDK ceilings; wallet-selector builders and locally verified transaction signing.
+- Typed injectable views, strict successful-receipt events and register/feedback outcome parsers, including payment-backed feedback and verified summaries. The previous Arras registry API remains unchanged; Validation Registry is not exposed.
+- Twenty recorded public views and six historical transaction outcomes shared byte-for-byte with the Python SDK, a read-only recorder, offline boundary tests, guard mutations, and an Execution Market integration guide in `docs/near-erc8004.md`.
+
 ## [2.111.0] - 2026-11-03
 
 ### Added
