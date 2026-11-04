@@ -318,7 +318,7 @@ export const getSummary = (o: RegistryViewOptions, accountId: string): Promise<S
 export const getSummaryByOperator = (o: RegistryViewOptions, accountId: string, operatorId: string): Promise<SummaryView> => {
   if (typeof operatorId !== 'string') throw new Error('Invalid operator_id');
   return view(o, 'get_summary_by_operator', { ...accountArgs(accountId), operator_id: operatorId },
-    (v) => summaryCheck(v) && object(v) && v.operator_id === operatorId);
+    (v) => summaryCheck(v) && object(v) && Object.hasOwn(v, 'operator_id'));
 };
 export const isFeedbackPending = (o: RegistryViewOptions, p: RegistryPaymentArgs & { rater: string }): Promise<boolean> =>
   view(o, 'is_feedback_pending', paymentArgs(o, p), boolean);

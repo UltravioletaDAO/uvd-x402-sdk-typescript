@@ -361,3 +361,44 @@ describe('additional boundary and descriptor shape checks', () => {
     expect(r.displayText('a\u115f\u1160\u17b4\u17b5\u3164\uffa0b')).toBe('ab');
   });
 });
+
+describe('mutation regressions: specific guards and complete decoded rows', () => {
+  it('reports network and method validation errors, not a later incidental failure', async () => {
+    expect(() => r.buildRegistryRegister({ ...identity, network: 'near' } as any)).toThrow('Unsupported NEAR network');
+    const tx = r.buildRevokeFeedback({ ...common, ...payment }); params(tx).methodName = 'delete_account' as any;
+    await expect(r.signRegistryTransaction(tx, signer, 1, blockHash)).rejects.toThrow('Unknown registry method');
+  });
+  it('rejects unsuccessful HTTP responses even if the body has a valid view', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ result: response(config) }) })));
+    await expect(r.getConfig(common)).rejects.toThrow('NEAR RPC HTTP 503');
+    for (const body of [{ error: { code: -1 }, result: response(config) }, {}, null]) {
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => body })));
+      await expect(r.getConfig(common)).rejects.toThrow('Invalid NEAR RPC response');
+    }
+    vi.stubGlobal('fetch', vi.fn(() => { throw new Error('network forbidden'); }));
+  });
+  it('requires null rather than undefined in nullable fields of in-memory rows', () => {
+    for (const field of ['tag1', 'tag2', 'feedback_uri', 'feedback_hash', 'revoked_at']) {
+      expect(() => r.summarizeFeedback([{ ...row, [field]: undefined }], payment.escrow, 'em')).toThrow('Invalid FeedbackView');
+    }
+  });
+  it('validates the optional operator field type and requires it on operator summaries', async () => {
+    await expect(r.getSummaryByOperator(withRpc({ ...summary, operator_id: 1 }), 'aa', 'em')).rejects.toThrow('shape');
+    await expect(r.getSummaryByOperator(withRpc({ ...summary, operator_id: null }), 'aa', 'em')).rejects.toThrow('shape');
+  });
+  it('refuses malformed call_function bytes explicitly', async () => {
+    for (const response of [null, {}, { result: {} }, { result: [-1] }, { result: [256] }, { result: [0.5] }, { result: ['123'] }]) {
+      await expect(r.getConfig({ ...common, rpc: async () => response })).rejects.toThrow('Invalid call_function response');
+    }
+  });
+  it('rejects the entire page/event batch when any row is malformed', async () => {
+    await expect(r.listAgents(withRpc([agent, {}]))).rejects.toThrow('shape');
+    await expect(r.listFeedback(withRpc([row, {}]), 'aa')).rejects.toThrow('shape');
+    const parsed = vectors.events[0].parsed;
+    expect(r.parseRegistryEvents(['EVENT_JSON:' + JSON.stringify({ ...parsed, data: [parsed.data[0], {}] })])).toEqual([]);
+    expect(r.parseRegistryEvents(['WRONG_JSON:' + JSON.stringify(parsed)])).toEqual([]);
+  });
+  it('checks the alphabet before decoding base64', () => {
+    expect(() => r.parseGiveFeedbackOutcome({ status: { SuccessValue: 'b nVsbA==' } })).toThrow('Invalid base64');
+  });
+});

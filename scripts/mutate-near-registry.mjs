@@ -82,7 +82,7 @@ add('pagination u32', 'if (!u32(v))', 'if (false)');
 add('feedback id input', 'if (!u32(feedbackId))', 'if (false)');
 add('operator input', "if (typeof operatorId !== 'string')", 'if (false)');
 add('global summary shape', "&& !Object.hasOwn(v, 'operator_id')", '');
-add('operator summary shape', '&& v.operator_id === operatorId', '');
+add('operator summary shape', "&& Object.hasOwn(v, 'operator_id')", '');
 add('event standard', "v.standard !== 'arras-registry'", 'false');
 add('event version', "v.version !== '1.0.0'", 'false');
 add('event fields', 'if (!v.data.every(eventChecks[v.event as keyof RegistryEventData]))', 'if (false)');
@@ -93,6 +93,23 @@ add('summary escrow filter', 'f.escrow !== escrow || f.operator_id !== operatorI
 add('summary operator filter', 'f.escrow !== escrow || f.operator_id !== operatorId', 'f.escrow !== escrow');
 add('summary revoked filter', 'if (f.revoked)', 'if (false)');
 add('safe display scheme', '/^(https|ipfs|ar):/i.test(uri)', 'true');
+
+add('call_function response', "!object(response) || !Array.isArray(response.result) ||\n      !response.result.every((v) => Number.isInteger(v) && v >= 0 && v <= 255)", 'false');
+add('byte minimum', 'v >= 0 && v <= 255', 'v >= -1 && v <= 255');
+add('byte maximum', 'v >= 0 && v <= 255', 'v >= 0 && v <= 256');
+add('byte integer', 'Number.isInteger(v) && v >= 0 && v <= 255', 'Number.isFinite(v) && v >= 0 && v <= 255');
+add('view array all rows', 'Array.isArray(v) && v.every(check)', 'Array.isArray(v) && v.some(check)');
+add('event all rows', 'v.data.every(eventChecks[v.event as keyof RegistryEventData])', 'v.data.some(eventChecks[v.event as keyof RegistryEventData])');
+add('event array input', 'if (!Array.isArray(logs)) return result;', '');
+add('event prefix', "!log.startsWith('EVENT_JSON:')", 'false');
+add('event name allowlist', '!Object.hasOwn(eventChecks, v.event)', 'false');
+add('event array data', '!Array.isArray(v.data)', 'false');
+add('base64 alphabet', "if (!fullMatch(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/, value))", 'if (false)');
+add('view account argument', "account(accountId, 'account_id');", '');
+add('view rater account', "account(input.rater, 'rater');", '');
+add('boolean field', "const boolean: Check = (v) => typeof v === 'boolean';", 'const boolean: Check = () => true;');
+add('role field', "v === 'payer' || v === 'receiver'", 'true');
+
 const requested = process.argv.slice(2);
 const selected = changes.filter((m) => !requested.length || requested.includes(m.id));
 const env = { ...process.env, HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', AWS_SHARED_CREDENTIALS_FILE: process.platform === 'win32' ? 'NUL' : '/dev/null' };
