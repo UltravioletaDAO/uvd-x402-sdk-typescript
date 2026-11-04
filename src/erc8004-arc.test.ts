@@ -1,5 +1,5 @@
 /**
- * Arc joins ERC-8004 (2.98.0), and it is the ONLY thing that moves.
+ * Arc joins ERC-8004 (2.98.0); Robinhood joins after 2.111.0.
  *
  * Payments on Arc shipped in 2.92.0; ERC-8004 on Arc did not, although the
  * facilitator serves it (identity and reputation on both networks since
@@ -112,10 +112,10 @@ describe('Arc on the relayed feedback rail', () => {
   });
 });
 
-describe('nothing but Arc moved since 2.97.0', () => {
-  it('adds exactly arc and arc-testnet to the table', () => {
+describe('existing registries remain unchanged since 2.97.0', () => {
+  it('adds exactly Arc and Robinhood mainnets and testnets to the table', () => {
     const added = Object.keys(ERC8004_CONTRACTS).filter((n) => !(n in CONTRACTS_2_97_0));
-    expect(added.sort()).toEqual(['arc', 'arc-testnet']);
+    expect(added.sort()).toEqual(['arc', 'arc-testnet', 'robinhood', 'robinhood-testnet']);
   });
 
   it('removes nothing from the table', () => {

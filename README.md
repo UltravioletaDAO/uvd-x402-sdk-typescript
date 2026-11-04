@@ -23,7 +23,7 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 - **React & Wagmi**: First-class integrations
 - **Signing Wallet Adapters**: EnvKeyAdapter (server/CLI), OWSWalletAdapter (Open Wallet Standard vault, Node), or bring your own
 - **ERC-8128 Signed Requests**: Authenticate HTTP requests with a wallet (RFC 9421 + EIP-191) — no API keys
-- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 23 networks (21 EVM + 2 Solana)
+- **ERC-8004 Trustless Agents**: On-chain reputation and identity across 25 networks (23 EVM + 2 Solana)
 - **Escrow & Refunds**: Hold payments with dispute resolution
 - **Advanced Escrow**: Full escrow lifecycle (authorize, release, refund, charge) with SigningWalletAdapter support
 - **Escrow Pre-Auth**: Sign-on-assignment `X-Payment-Auth` builder (`buildEscrowPreAuth`) — vector-pinned parity with the Python SDK and Execution Market
@@ -1383,19 +1383,33 @@ response.
 
 ## ERC-8004 Trustless Agents
 
-Build verifiable on-chain reputation for AI agents and services. Supports **23 networks** (21 EVM + 2 Solana).
+Build verifiable on-chain reputation for AI agents and services. Supports **25 networks** (23 EVM + 2 Solana).
 
 > Name Base as `'base'`. The old `'base-mainnet'` spelling is rejected by the facilitator
 > (`400 Invalid network`); the SDK now rewrites it for you, but new code should use `'base'`.
 
 On EVM networks, agent IDs are sequential numbers. On Solana, agent IDs are base58 pubkey strings. The `AgentId` type (`number | string`) handles both.
 
-### EVM Networks (21)
+### EVM Networks (23)
 
-ethereum, base, polygon, arbitrum, optimism, celo, bsc, monad, avalanche, scroll, skale-base, arc, ethereum-sepolia, base-sepolia, polygon-amoy, arbitrum-sepolia, optimism-sepolia, celo-sepolia, avalanche-fuji, skale-base-sepolia, arc-testnet
+ethereum, base, polygon, arbitrum, optimism, celo, bsc, monad, avalanche, scroll, skale-base, arc, ethereum-sepolia, base-sepolia, polygon-amoy, arbitrum-sepolia, optimism-sepolia, celo-sepolia, avalanche-fuji, skale-base-sepolia, arc-testnet, robinhood, robinhood-testnet
 
 Arc (`arc`, `arc-testnet`) since 2.98.0, with the canonical registries on both; see
 [ERC-8004 on Arc](docs/networks/arc.md#erc-8004-on-arc-2980).
+
+Robinhood Chain accepts `robinhood` / `eip155:4663` and
+`robinhood-testnet` / `eip155:46630` in `Erc8004Client` methods. Both spellings
+resolve through `getContracts` and `isAvailable`; requests use the short name.
+`ERC8004_CONTRACTS` is indexed by short name.
+
+| Network | Identity registry | Reputation registry | Validation registry |
+| --- | --- | --- | --- |
+| Robinhood (4663) | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` | `0x8004Cc8439f36fd5F9F049D9fF86523Df6dAAB58` |
+| Robinhood testnet (46630) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` | `0x8004B663056A597Dffe9eCcC1965A193B7388713` | Not configured (unconfirmed) |
+
+These registry deployments were measured on 2026-11-04. They do not establish a
+FeedbackDelegate deployment: neither Robinhood network is advertised by
+`supportsRelayedFeedback`. Robinhood x402r escrow is not available.
 
 ### Solana Networks (2)
 

@@ -23,32 +23,33 @@ const TESTNET_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const TESTNET_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const TESTNET_VALIDATION = '0x8004Cb1BF31DAf7788923b405b754f57acEB4272';
 
-// Exactly what GET /feedback -> supportedNetworks returns: all 23, in its
-// order, read from facilitator 2.39.0 on 2026-09-23.
-const FACILITATOR_NETWORKS = [
+// Original GET /feedback -> supportedNetworks snapshot (facilitator 2.39.0,
+// 2026-09-23), extended with the Robinhood deployments measured 2026-11-04.
+const REGISTERED_NETWORKS = [
   'ethereum', 'base', 'polygon', 'arbitrum', 'optimism', 'celo', 'bsc',
   'monad', 'avalanche', 'scroll', 'skale-base', 'arc',
   'ethereum-sepolia', 'base-sepolia', 'polygon-amoy', 'arbitrum-sepolia',
   'optimism-sepolia', 'celo-sepolia', 'avalanche-fuji', 'skale-base-sepolia',
   'arc-testnet',
   'solana', 'solana-devnet',
+  'robinhood', 'robinhood-testnet',
 ];
 
 const EVM_MAINNETS = [
   'ethereum', 'base', 'polygon', 'arbitrum', 'optimism', 'celo', 'bsc',
-  'monad', 'avalanche', 'scroll', 'arc',
+  'monad', 'avalanche', 'scroll', 'arc', 'robinhood',
 ];
 
 describe('ERC-8004 network table', () => {
-  it('covers every network the facilitator serves', () => {
-    const missing = FACILITATOR_NETWORKS.filter((n) => !(n in ERC8004_CONTRACTS));
+  it('covers every declared deployment', () => {
+    const missing = REGISTERED_NETWORKS.filter((n) => !(n in ERC8004_CONTRACTS));
     expect(missing).toEqual([]);
   });
 
-  it('invents no network the facilitator would reject', () => {
+  it('contains only declared networks and the deprecated alias', () => {
     // 'base-mainnet' is the one deliberate extra: a deprecated alias.
     const extra = Object.keys(ERC8004_CONTRACTS).filter(
-      (n) => !FACILITATOR_NETWORKS.includes(n)
+      (n) => !REGISTERED_NETWORKS.includes(n)
     );
     expect(extra).toEqual(['base-mainnet']);
   });
@@ -59,7 +60,7 @@ describe('ERC-8004 network table', () => {
   });
 
   it('leaves every other name untouched', () => {
-    for (const n of FACILITATOR_NETWORKS) {
+    for (const n of REGISTERED_NETWORKS) {
       expect(wireNetwork(n)).toBe(n);
     }
   });
