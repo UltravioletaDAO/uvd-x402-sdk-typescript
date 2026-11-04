@@ -40,11 +40,13 @@ signer, escrow and payment ID and attaches exactly one yoctoNEAR.
 
 The defaults are 17,510,000,000,000,000,000,000 yoctoNEAR for register/update and
 18,640,000,000,000,000,000,000 for feedback. Query `getConfig` for current required
-deposits and pass them explicitly. Builders reject amounts below these defaults;
-update conservatively reserves the full register amount, although the contract
-can accept less when storage growth is smaller. Surplus storage deposits are
+deposits and pass them explicitly. Register and feedback reject amounts below their
+defaults. Update accepts any deposit from 1 yoctoNEAR, with REGISTER_DEPOSIT as its
+default; the contract checks the actual storage growth charge. Update checks a zero
+deposit (E06) before URI (E01) and metadata (E02). Surplus storage deposits are
 refunded by the contract. Gas defaults to 30 TGas, or 100 TGas for feedback (60 TGas
-minimum). Gas arguments use integer gas units, deposits use integer yoctoNEAR.
+minimum). Zero gas for register/update/revoke and gas above 300 TGas raise ordinary
+SDK errors; E17 is reserved for feedback below 60 TGas. Gas arguments use integer gas units, deposits use integer yoctoNEAR.
 
 Validation mirrors the contract: URI 512 ASCII bytes with an RFC 3986 scheme and
 nonempty content; metadata 1–1024 UTF-8 bytes without ASCII control characters;
@@ -91,7 +93,8 @@ Views use `{network, registryContract?, rpc?}` as their first argument:
 The injected async `rpc(method, params)` returns the JSON-RPC **result** object,
 e.g. `{result: [123, ...]}` for `call_function`, rather than the outer JSON-RPC
 envelope. Without injection the helpers use fetch against the selected NEAR RPC.
-Every view decodes UTF-8 JSON and checks all required fields; invalid shapes fail.
+All nine views return promises, including for invalid inputs: `.catch(...)` handles
+validation and transport errors. Every view decodes UTF-8 JSON and checks all required fields; invalid shapes fail.
 U64/U128 fields remain exact decimal strings. Pagination indexes/limits are u32;
 the contract caps a page to 50 entries. Fetch every page for a complete summary.
 
@@ -103,10 +106,18 @@ A successful callback rejection returns the full deposit. A panic fails executio
 a callback that fails unexpectedly has different refund behavior, so do not treat
 an unknown failure as a parsed rejection.
 
-`parseRegistryEvents` recognizes the four NEP-297 `arras-registry` 1.0.0 events.
-Like `parseArrasEvents`, it skips foreign, unknown or malformed logs and preserves
-valid batches. Logs do not authenticate an emitter: verify receipt executor and
-execution status before indexing events or interpreting rejection logs.
+`parseRegistryReceiptEvents(execution.receipts_outcome, network)` recognizes the four
+NEP-297 `arras-registry` 1.0.0 events only in receipts whose `outcome.executor_id`
+belongs to `NEAR_REGISTRY_CONTRACTS[network]`. Other emitters are ignored even if
+their event JSON names the expected escrow and operator. Testnet currently has no
+trusted registry emitter. Malformed receipts/logs are skipped and valid batches
+retain their order. Supply receipts from a trusted RPC and verify execution status
+before indexing events.
+
+`parseRegistryEvents(logs)` parses the same envelopes without receipt context. It is
+safe only when the caller has already filtered receipts by `executor_id` for the
+selected network. Loose logs do not authenticate an emitter; this also applies to
+rejection logs passed to `parseGiveFeedbackOutcome`.
 
 ## Execution Market flow and trust
 

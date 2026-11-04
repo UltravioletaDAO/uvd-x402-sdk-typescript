@@ -133,7 +133,10 @@ jobs:
       - name: Vectors are the same file in both repos
         env:
           UVD_X402_PY_ROOT: ${{ github.workspace }}/.sibling/uvd-x402-sdk-python
-        run: node scripts/derive-erc8128-f3-3.mjs --check
+        run: |
+          node scripts/derive-erc8128-f3-3.mjs --check
+          node scripts/xlang/generate-near-registry-vectors.mjs --check
+          node scripts/xlang/check-near-registry-parity.mjs
 
       - name: Sign in each runtime, verify in the other
         env:

@@ -113,10 +113,11 @@ describe('registry builders: exact contract boundaries', () => {
   }
   it('enforces deposit defaults and exact u128s', () => {
     for (const build of [r.buildRegistryRegister, r.buildRegistryUpdate]) {
-      expect(() => build({ ...identity, deposit: BigInt(r.REGISTER_DEPOSIT) - 1n })).toThrow('ARRAS_REG_E05');
+      expect(params(build(identity)).deposit).toBe(r.REGISTER_DEPOSIT);
       expect(params(build({ ...identity, deposit: r.REGISTER_DEPOSIT })).deposit).toBe(r.REGISTER_DEPOSIT);
       expect(params(build({ ...identity, deposit: (1n << 128n) - 1n })).deposit).toBe(((1n << 128n) - 1n).toString());
     }
+    expect(() => r.buildRegistryRegister({ ...identity, deposit: BigInt(r.REGISTER_DEPOSIT) - 1n })).toThrow('ARRAS_REG_E05');
     expect(() => r.buildRegistryUpdate({ ...identity, deposit: 0 })).toThrow('ARRAS_REG_E06');
     for (const deposit of [BigInt(r.FEEDBACK_DEPOSIT) - 1n, -1, '01', '1\n', 1.5, Number.MAX_SAFE_INTEGER + 1, 1n << 128n, true]) {
       expect(() => r.buildGiveFeedback({ ...feedback, deposit } as any)).toThrow('ARRAS_REG_E16');
@@ -124,11 +125,22 @@ describe('registry builders: exact contract boundaries', () => {
     expect(params(r.buildGiveFeedback({ ...feedback, deposit: BigInt(r.FEEDBACK_DEPOSIT) + 1n })).deposit).toBe('18640000000000000000001');
     for (const deposit of [0, 2]) expect(() => r.buildRevokeFeedback({ ...common, ...payment, deposit })).toThrow('exactly 1 yocto');
   });
-  it('enforces gas at 60 TGas and the protocol maximum', () => {
-    for (const gas of ['59999999999999', 0, -1, '01', 1n << 64n, '300000000000001']) expect(() => r.buildGiveFeedback({ ...feedback, gas })).toThrow('ARRAS_REG_E17');
+  it('reserves E17 for the feedback gas minimum', () => {
+    for (const gas of ['59999999999999', 0]) expect(() => r.buildGiveFeedback({ ...feedback, gas })).toThrow('ARRAS_REG_E17');
     for (const gas of ['60000000000000', '300000000000000']) expect(params(r.buildGiveFeedback({ ...feedback, gas })).gas).toBe(gas);
-    expect(() => r.buildRegistryRegister({ ...identity, gas: 0 })).toThrow('ARRAS_REG_E17');
-    expect(params(r.buildRegistryRegister({ ...identity, gas: 1 })).gas).toBe('1');
+    for (const build of [r.buildRegistryRegister, r.buildRegistryUpdate, r.buildRevokeFeedback, r.buildGiveFeedback]) {
+      for (const gas of [-1, '01', 1n << 64n, '300000000000001', null]) {
+        const call = () => build({ ...identity, ...feedback, gas } as any);
+        expect(call).toThrow('gas');
+        expect(call).not.toThrow(r.RegistryValidationError);
+      }
+    }
+    for (const build of [r.buildRegistryRegister, r.buildRegistryUpdate, r.buildRevokeFeedback]) {
+      const call = () => build({ ...identity, ...feedback, gas: 0 });
+      expect(call).toThrow('gas must be positive');
+      expect(call).not.toThrow(r.RegistryValidationError);
+      for (const gas of ['1', '300000000000000']) expect(params(build({ ...identity, ...feedback, gas })).gas).toBe(gas);
+    }
   });
 });
 
@@ -255,14 +267,14 @@ describe('registry views with injectable RPC and complete shapes', () => {
   it('validates view inputs before RPC', async () => {
     const o = withRpc(null);
     for (const bad of [-1, 0x100000000, 0.5, '1', null]) {
-      await expect(async () => r.getFeedback(o, bad as any)).rejects.toThrow();
-      await expect(async () => r.listAgents(o, { limit: bad as any })).rejects.toThrow();
-      await expect(async () => r.listFeedback(o, 'aa', { from_index: bad as any })).rejects.toThrow();
+      await expect(r.getFeedback(o, bad as any)).rejects.toThrow();
+      await expect(r.listAgents(o, { limit: bad as any })).rejects.toThrow();
+      await expect(r.listFeedback(o, 'aa', { from_index: bad as any })).rejects.toThrow();
     }
     await expect(r.getConfig({ ...o, registryContract: 'other.near' })).rejects.toThrow();
-    await expect(async () => r.getAgent(o, 'BAD')).rejects.toThrow();
-    await expect(async () => r.getSummaryByOperator(o, 'aa', null as any)).rejects.toThrow();
-    await expect(async () => r.isFeedbackPending(o, { ...payment, rater: 'BAD' })).rejects.toThrow();
+    await expect(r.getAgent(o, 'BAD')).rejects.toThrow();
+    await expect(r.getSummaryByOperator(o, 'aa', null as any)).rejects.toThrow();
+    await expect(r.isFeedbackPending(o, { ...payment, rater: 'BAD' })).rejects.toThrow();
     expect(o.rpc).not.toHaveBeenCalled();
   });
   it('uses the default fetch transport and fails on HTTP/RPC errors (all mocked)', async () => {
@@ -341,7 +353,7 @@ describe('registry events, outcomes and display reputation', () => {
 describe('additional boundary and descriptor shape checks', () => {
   it('refuses monetary nulls and missing descriptor fields', async () => {
     expect(() => r.buildRegistryRegister({ ...identity, deposit: null } as any)).toThrow('E05');
-    expect(() => r.buildGiveFeedback({ ...feedback, gas: null } as any)).toThrow('E17');
+    expect(() => r.buildGiveFeedback({ ...feedback, gas: null } as any)).toThrow('gas');
     for (const field of ['gas', 'deposit']) {
       const tx = r.buildRegistryRegister(identity); delete (params(tx) as any)[field];
       await expect(r.signRegistryTransaction(tx, signer, 1, blockHash)).rejects.toThrow('gas and deposit strings');
@@ -406,4 +418,87 @@ describe('mutation regressions: specific guards and complete decoded rows', () =
 it('decodes config max_score as u8 rather than u32', async () => {
   expect(await r.getConfig(withRpc({ ...config, limits: { ...config.limits, max_score: 255 } }))).toBeTruthy();
   await expect(r.getConfig(withRpc({ ...config, limits: { ...config.limits, max_score: 256 } }))).rejects.toThrow('shape');
+});
+
+
+describe('round 1: contract parity and emitter trust', () => {
+  it('accepts update deposits from one yocto and checks E06 before E01/E02', async () => {
+    for (const deposit of ['1', (BigInt(r.REGISTER_DEPOSIT) - 1n).toString()]) {
+      const tx = r.buildRegistryUpdate({ ...identity, deposit });
+      expect(params(tx).deposit).toBe(deposit);
+      await expect(r.signRegistryTransaction(tx, signer, 1, blockHash)).resolves.toEqual(expect.any(String));
+    }
+    for (const args of [{ agent_uri: '', metadata: '' }, { agent_uri: identity.agent_uri, metadata: '' }]) {
+      expect(() => r.buildRegistryUpdate({ ...identity, ...args, deposit: '0' })).toThrow('ARRAS_REG_E06');
+      const tx = r.buildRegistryUpdate(identity);
+      params(tx).deposit = '0'; params(tx).args = args;
+      await expect(r.signRegistryTransaction(tx, signer, 1, blockHash)).rejects.toThrow('ARRAS_REG_E06');
+    }
+    expect(() => r.buildRegistryUpdate({ ...identity, agent_uri: '', metadata: '', deposit: '1' })).toThrow('ARRAS_REG_E01');
+    expect(() => r.buildRegistryUpdate({ ...identity, metadata: '', deposit: '1' })).toThrow('ARRAS_REG_E02');
+    for (const deposit of [-1, null, '01', 1n << 128n]) {
+      expect(() => r.buildRegistryUpdate({ ...identity, deposit } as any)).toThrow('ARRAS_REG_E06');
+    }
+  });
+  it('binds registry and escrow allowlists to the selected network', async () => {
+    const o = { ...withRpc(config), network: 'near:testnet' as const, registryContract: vectors.receiver_id };
+    expect(() => r.buildRegistryRegister({ ...identity, ...o })).toThrow('receiverId');
+    await expect(r.getConfig(o)).rejects.toThrow('receiverId');
+    await expect(r.isFeedbackPending({ ...o, registryContract: undefined }, { ...payment, rater: 'payer.near' })).rejects.toThrow('ARRAS_REG_E10');
+    expect(o.rpc).not.toHaveBeenCalled();
+  });
+  it('requires the exact registry config version', async () => {
+    await expect(r.getConfig(withRpc({ ...config, version: 'arras-registry-v2' }))).rejects.toThrow('shape');
+  });
+  const invalidViews: Array<[string, (o: r.RegistryViewOptions) => Promise<unknown>, string]> = [
+    ['getConfig', (o) => r.getConfig({ ...o, registryContract: 'other.near' }), 'receiverId'],
+    ['getAgent', (o) => r.getAgent(o, 'BAD'), 'account_id'],
+    ['listAgents', (o) => r.listAgents(o, { limit: -1 }), 'limit'],
+    ['getFeedback', (o) => r.getFeedback(o, -1), 'feedback_id'],
+    ['getFeedbackForPayment', (o) => r.getFeedbackForPayment(o, { ...payment, rater: 'BAD' }), 'rater'],
+    ['listFeedback', (o) => r.listFeedback(o, 'BAD'), 'account_id'],
+    ['getSummary', (o) => r.getSummary(o, 'BAD'), 'account_id'],
+    ['getSummaryByOperator', (o) => r.getSummaryByOperator(o, 'aa', null as any), 'operator_id'],
+    ['isFeedbackPending', (o) => r.isFeedbackPending(o, { ...payment, rater: 'BAD' }), 'rater'],
+  ];
+  it.each(invalidViews)('%s returns a catchable rejection for invalid inputs', (_name, call, message) => {
+    const o = withRpc(null);
+    return call(o).catch((error) => {
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toContain(message);
+      expect(o.rpc).not.toHaveBeenCalled();
+      return 'caught';
+    }).then((value) => expect(value).toBe('caught'));
+  });
+  it.each(Object.values(r.RegistryErrorCode).filter((code) => ![
+    r.RegistryErrorCode.E18, r.RegistryErrorCode.E20, r.RegistryErrorCode.E21, r.RegistryErrorCode.E22,
+    r.RegistryErrorCode.E23, r.RegistryErrorCode.E24, r.RegistryErrorCode.E25, r.RegistryErrorCode.E26,
+  ].includes(code)))('refuses panic-only code %s as a callback rejection', (code) => {
+    expect(() => r.parseGiveFeedbackOutcome({ value: null, logs: ['arras-registry:rechazo:' + code] })).toThrow('Malformed');
+  });
+  it.each(['arweave://x', 'ar+x://y', 'ipfs2://x', 'httpsx://x', 'https+evil://x'])('rejects display scheme prefix %s', (uri) => {
+    expect(r.safeLink(uri)).toBeNull();
+  });
+  it('authenticates receipt executor_id for the network before parsing event logs', () => {
+    const logs = vectors.events.map((e) => e.log);
+    const receipt = (executor_id: unknown) => ({ outcome: { executor_id, logs } });
+    const foreign = ['other.near', payment.escrow, vectors.receiver_id.toUpperCase(), vectors.receiver_id + ' ',
+      ' ' + vectors.receiver_id, vectors.receiver_id + '.evil', '', null, 1];
+    for (const id of foreign) expect(r.parseRegistryReceiptEvents([receipt(id)], common.network)).toEqual([]);
+    const trusted = receipt(vectors.receiver_id);
+    expect(r.parseRegistryReceiptEvents([receipt('other.near'), trusted, receipt(payment.escrow), trusted], common.network))
+      .toEqual([...vectors.events, ...vectors.events].map((e) => e.parsed));
+    expect(r.parseRegistryReceiptEvents([trusted], 'near:testnet')).toEqual([]);
+    expect(() => r.parseRegistryReceiptEvents([trusted], 'near' as any)).toThrow('Unsupported NEAR network');
+  });
+  it('skips malformed receipts and retains strict log parsing for trusted emitters', () => {
+    for (const receipts of [null, {}, 1, 'x']) expect(r.parseRegistryReceiptEvents(receipts, common.network)).toEqual([]);
+    const malformed = [null, 1, [], {}, { outcome: null }, { outcome: [] }, { outcome: {} }];
+    const trusted = (logs: unknown) => ({ outcome: { executor_id: vectors.receiver_id, logs } });
+    for (const logs of [null, undefined, 'EVENT_JSON:{}', [], ['EVENT_JSON:{', 'foreign']]) {
+      expect(r.parseRegistryReceiptEvents([...malformed, trusted(logs)], common.network)).toEqual([]);
+    }
+    expect(r.parseRegistryReceiptEvents([...malformed, trusted(['EVENT_JSON:{', vectors.events[0].log])], common.network))
+      .toEqual([vectors.events[0].parsed]);
+  });
 });

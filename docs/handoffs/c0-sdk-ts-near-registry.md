@@ -16,7 +16,8 @@ See `docs/near-registry.md` for usage, EM flow and the trust model.
 
 Builders perform the checks possible without chain state. Duplicate registration,
 missing identity, pending/duplicate feedback and actual storage cost remain contract
-checks. Update uses the register deposit floor conservatively. FullAccess permission,
+checks. Update accepts deposits from 1 yocto, defaults to REGISTER_DEPOSIT, and checks
+E06 before E01/E02. FullAccess permission,
 next nonce and recent block hash are caller responsibilities; the signer has no RPC.
 No transaction was submitted, and no contract or package was deployed/published.
 
@@ -38,9 +39,10 @@ feedback, and the four exact contract event strings with parsed envelopes.
 These are the dispatched inputs, without substitutions. Regenerate after a build
 with `node scripts/xlang/generate-near-registry-vectors.mjs`; use `--check` to assert
 no drift. Tests independently decode the Borsh transaction and verify signatures
-with Node Crypto. Cross-checking these new registry vectors against the parallel
-Python worker remains the coordinating session's task; the Python worker was not
-modified.
+with Node Crypto. `node scripts/xlang/check-near-registry-parity.mjs` compares the
+raw bytes against `tests/fixtures/near-registry.json` in `UVD_X402_PY_ROOT` (default:
+the sibling Python checkout). CI runs both the derivation and parity checks without
+skipping a missing or mismatched fixture. This round preserves the TS vector bytes.
 
 ## Verification and auto-refutation
 
@@ -67,7 +69,8 @@ run with Node 20; final counts and the pre-CI table are in the PR.
 
 `git merge-tree` against open Nano PR #65 (shared package.json) completed without
 conflicts. No other open SDK PR overlaps. Secret scanning of branch history and
-the three-dot diff passed. No subagents were used, per the specific assignment.
+the three-dot diff passed. The original implementation used no subagents. Round 1 includes the adversarial
+review required by its security-related assignment; results are recorded in the PR.
 
 ### Mutation inventory
 

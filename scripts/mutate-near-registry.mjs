@@ -12,10 +12,13 @@ function git(...args) {
 }
 if (git('status', '--porcelain').trim()) throw new Error('Commit changes before mutation testing');
 const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+const sources = new Map([[file, source]]);
 const changes = [];
-function add(name, before, after) {
-  if (source.split(before).length !== 2) throw new Error(`Mutation must match once: ${name}`);
-  changes.push({ id: `M${String(changes.length + 1).padStart(2, '0')}`, name, before, after });
+function add(name, before, after, target = file) {
+  if (!sources.has(target)) sources.set(target, readFileSync(target, 'utf8').replace(/\r\n/g, '\n'));
+  const original = sources.get(target);
+  if (original.split(before).length !== 2) throw new Error(`Mutation must match once: ${name}`);
+  changes.push({ id: `M${String(changes.length + 1).padStart(2, '0')}`, name, before, after, target, original });
 }
 add('URI maximum', 'value.length <= 512', 'value.length <= 513');
 add('URI scheme first character', '^[A-Za-z][A-Za-z0-9+.-]*:', '^[A-Za-z0-9][A-Za-z0-9+.-]*:');
@@ -51,11 +54,11 @@ add('tag2 call', "for (const field of ['tag1', 'tag2'] as const)", "for (const f
 add('feedback URI call', 'requireRule(validUri(input.feedback_uri),', 'requireRule(true,');
 add('feedback hash call', 'requireRule(validHash(input.feedback_hash),', 'requireRule(true,');
 add('exact revoke deposit', 'if (deposit !== 1n)', 'if (false)');
-add('update positive deposit', 'requireRule(deposit > 0n,', 'requireRule(true,');
+add('update positive deposit', 'requireRule(updateDeposit > 0n,', 'requireRule(true,');
 add('minimum storage/feedback deposit', 'deposit >= BigInt(minimum)', 'deposit >= BigInt(minimum) - 1n');
-add('minimum feedback gas', 'BigInt(MIN_GIVE_FEEDBACK_GAS) : 1n', 'BigInt(MIN_GIVE_FEEDBACK_GAS) - 1n : 1n');
-add('minimum other gas', 'BigInt(MIN_GIVE_FEEDBACK_GAS) : 1n', 'BigInt(MIN_GIVE_FEEDBACK_GAS) : 0n');
-add('maximum gas', 'gas <= 300_000_000_000_000n', 'gas <= 300_000_000_000_001n');
+add('minimum feedback gas', 'gas >= BigInt(MIN_GIVE_FEEDBACK_GAS)', 'gas >= BigInt(MIN_GIVE_FEEDBACK_GAS) - 1n');
+add('minimum other gas', 'gas < 1n', 'gas < 0n');
+add('maximum gas', 'gas > 300_000_000_000_000n', 'gas > 300_000_000_000_001n');
 add('signing receiver', "if (!net) throw new Error('receiverId: unregistered registry');", "if (!net) return 'unregistered';");
 add('one action', '!Array.isArray(actions) || actions.length !== 1', '!Array.isArray(actions)');
 add('action type', "action.type !== 'FunctionCall'", 'false');
@@ -111,18 +114,41 @@ add('boolean field', "const boolean: Check = (v) => typeof v === 'boolean';", 'c
 add('role field', "v === 'payer' || v === 'receiver'", 'true');
 
 add('config u8 max_score', 'u32(v) && (v as number) <= 255', 'u32(v)');
+// Refutator regressions: retain all M01-M92 above.
+add('receiver network binding', '!NEAR_REGISTRY_CONTRACTS[o.network].includes(id)', '!Object.values(NEAR_REGISTRY_CONTRACTS).flat().includes(id)');
+add('escrow network binding', 'NEAR_REGISTRY_ESCROWS[net].includes(value)', "NEAR_REGISTRY_ESCROWS['near:mainnet'].includes(value)");
+add('E19 is not a callback rejection', 'const rejectionCodes = [RegistryErrorCode.E18,', 'const rejectionCodes = [RegistryErrorCode.E19, RegistryErrorCode.E18,');
+add('display scheme exact delimiter', '/^(https|ipfs|ar):/i.test(uri)', '/^(https|ipfs|ar)/i.test(uri)');
+add('config exact version', "version: (v) => v === 'arras-registry-v1'", 'version: string');
+add('update deposit before identity validation',
+  "  if (updateDeposit !== undefined) requireRule(updateDeposit > 0n, RegistryErrorCode.E06);\n  const args = canonicalArgs(method, { ...input }, o.network);",
+  "  const args = canonicalArgs(method, { ...input }, o.network);\n  if (updateDeposit !== undefined) requireRule(updateDeposit > 0n, RegistryErrorCode.E06);");
+add('update has no register deposit floor', "} else if (method !== 'update') {", '} else {');
+add('zero gas SDK error', "throw new Error('gas must be positive')", 'throw new RegistryValidationError(RegistryErrorCode.E17)');
+add('maximum gas SDK error', "throw new Error('gas exceeds 300 TGas')", 'throw new RegistryValidationError(RegistryErrorCode.E17)');
+add('receipt array', 'if (!Array.isArray(receiptsOutcome)) return result;', '');
+add('receipt object', '!object(receipt) || !object(receipt.outcome)', '!object(receipt.outcome)');
+add('receipt outcome object', '!object(receipt) || !object(receipt.outcome)', '!object(receipt)');
+add('receipt emitter allowlist', '!NEAR_REGISTRY_CONTRACTS[net].includes(outcome.executor_id as string)', 'false');
+add('receipt emitter network binding', 'NEAR_REGISTRY_CONTRACTS[net].includes(outcome.executor_id as string)', 'Object.values(NEAR_REGISTRY_CONTRACTS).flat().includes(outcome.executor_id as string)');
+add('receipt network validation', '  network(net);', '');
+for (const name of ['getAgent', 'listAgents', 'getFeedback', 'getFeedbackForPayment', 'listFeedback', 'getSummary', 'getSummaryByOperator', 'isFeedbackPending']) {
+  add(`${name} rejects asynchronously`, `export const ${name} = async (`, `export const ${name} = (`);
+}
+add('update deposit check applies', 'if (updateDeposit !== undefined)', 'if (false)');
+add('cross-repo vector byte equality', '!ts.equals(py)', 'false', 'scripts/xlang/check-near-registry-parity.mjs');
 const requested = process.argv.slice(2);
 const selected = changes.filter((m) => !requested.length || requested.includes(m.id));
 const env = { ...process.env, HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', AWS_SHARED_CREDENTIALS_FILE: process.platform === 'win32' ? 'NUL' : '/dev/null' };
 delete env.AWS_PROFILE;
-function test() { return spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', 'src/providers/near/registry.test.ts'], { encoding: 'utf8', timeout: 120000, env }); }
+function test() { return spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', 'src/providers/near/registry.test.ts', 'scripts/xlang/check-near-registry-parity.test.ts'], { encoding: 'utf8', timeout: 120000, env }); }
 const baseline = test();
 if (baseline.status !== 0) throw new Error('Unmutated registry tests must pass: ' + baseline.stdout + baseline.stderr);
 const failures = [];
 for (const m of selected) {
   let result;
-  try { writeFileSync(file, source.replace(m.before, m.after)); result = test(); }
-  finally { git('checkout', '--', file); }
+  try { writeFileSync(m.target, m.original.replace(m.before, m.after)); result = test(); }
+  finally { git('checkout', '--', m.target); }
   const output = (result.stdout || '') + (result.stderr || '');
   const timeout = result.error?.code === 'ETIMEDOUT';
   const invalid = /Transform failed|Failed Suites/.test(output);

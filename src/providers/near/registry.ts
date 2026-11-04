@@ -72,7 +72,7 @@ function codedUint(value: NearUnsigned, bits: number, code: RegistryErrorCode): 
 export interface RegistryTarget { network: NearEscrowNetwork; registryContract?: string }
 export interface RegistryBuildOptions extends RegistryTarget {
   signerId: string;
-  /** YoctoNEAR from getConfig; never less than the SDK default. */
+  /** YoctoNEAR: register/feedback use getConfig floors; update accepts >= 1; revoke requires 1. */
   deposit?: NearUnsigned;
   /** Gas units, not TGas. give_feedback needs at least 60 TGas. */
   gas?: NearUnsigned;
@@ -129,20 +129,26 @@ function build(method: RegistryMethod, options: RegistryBuildOptions, input: Rec
   const o = { ...options };
   const receiverId = receiver(o);
   account(o.signerId, 'signerId');
+  // update checks the attached deposit before URI/metadata (E06 -> E01 -> E02).
+  const updateDeposit = method === 'update'
+    ? codedUint(o.deposit === undefined ? REGISTER_DEPOSIT : o.deposit, 128, RegistryErrorCode.E06) : undefined;
+  if (updateDeposit !== undefined) requireRule(updateDeposit > 0n, RegistryErrorCode.E06);
   const args = canonicalArgs(method, { ...input }, o.network);
   const depositCode = method === 'give_feedback' ? RegistryErrorCode.E16 : RegistryErrorCode.E05;
   const minimum = method === 'give_feedback' ? FEEDBACK_DEPOSIT : REGISTER_DEPOSIT;
-  const deposit = codedUint(o.deposit === undefined ? (method === 'revoke_feedback' ? '1' : minimum) : o.deposit, 128, depositCode);
+  const deposit = updateDeposit ?? (method === 'revoke_feedback'
+    ? uint(o.deposit === undefined ? '1' : o.deposit, 128, 'deposit')
+    : codedUint(o.deposit === undefined ? minimum : o.deposit, 128, depositCode));
   if (method === 'revoke_feedback') {
     if (deposit !== 1n) throw new Error('revoke_feedback deposit must be exactly 1 yocto');
-  } else {
-    if (method === 'update') requireRule(deposit > 0n, RegistryErrorCode.E06);
+  } else if (method !== 'update') {
     requireRule(deposit >= BigInt(minimum), depositCode);
   }
-  const gas = codedUint(o.gas === undefined ? (method === 'give_feedback' ? GIVE_FEEDBACK_GAS : REGISTRY_GAS) : o.gas, 64, RegistryErrorCode.E17);
-  requireRule(gas >= (method === 'give_feedback' ? BigInt(MIN_GIVE_FEEDBACK_GAS) : 1n), RegistryErrorCode.E17);
-  // NEAR protocol maximum for a normal transaction.
-  requireRule(gas <= 300_000_000_000_000n, RegistryErrorCode.E17);
+  const gas = uint(o.gas === undefined ? (method === 'give_feedback' ? GIVE_FEEDBACK_GAS : REGISTRY_GAS) : o.gas, 64, 'gas');
+  if (method === 'give_feedback') requireRule(gas >= BigInt(MIN_GIVE_FEEDBACK_GAS), RegistryErrorCode.E17);
+  else if (gas < 1n) throw new Error('gas must be positive');
+  // NEAR protocol maximum for a normal transaction; not a registry contract error.
+  if (gas > 300_000_000_000_000n) throw new Error('gas exceeds 300 TGas');
   return { signerId: o.signerId, receiverId, actions: [{ type: 'FunctionCall', params: {
     methodName: method, args, gas: gas.toString(), deposit: deposit.toString(),
   } }] };
@@ -300,27 +306,27 @@ function paymentArgs(o: RegistryViewOptions, input: RegistryPaymentArgs & { rate
   requireRule(validPaymentId(input.payment_id), RegistryErrorCode.E11); account(input.rater, 'rater');
   return { escrow: input.escrow, payment_id: input.payment_id, rater: input.rater };
 }
-export const getConfig = (o: RegistryViewOptions): Promise<RegistryConfigView> => view(o, 'get_config', {}, configCheck);
-export const getAgent = (o: RegistryViewOptions, accountId: string): Promise<AgentView | null> =>
+export const getConfig = async (o: RegistryViewOptions): Promise<RegistryConfigView> => view(o, 'get_config', {}, configCheck);
+export const getAgent = async (o: RegistryViewOptions, accountId: string): Promise<AgentView | null> =>
   view(o, 'get_agent', accountArgs(accountId), nullable(agentCheck));
-export const listAgents = (o: RegistryViewOptions, p: RegistryPage = {}): Promise<AgentView[]> =>
+export const listAgents = async (o: RegistryViewOptions, p: RegistryPage = {}): Promise<AgentView[]> =>
   view(o, 'list_agents', page(p), array(agentCheck));
-export const getFeedback = (o: RegistryViewOptions, feedbackId: number): Promise<FeedbackView | null> => {
+export const getFeedback = async (o: RegistryViewOptions, feedbackId: number): Promise<FeedbackView | null> => {
   if (!u32(feedbackId)) throw new Error('Invalid feedback_id');
   return view(o, 'get_feedback', { feedback_id: feedbackId }, nullable(feedbackCheck));
 };
-export const getFeedbackForPayment = (o: RegistryViewOptions, p: RegistryPaymentArgs & { rater: string }): Promise<FeedbackView | null> =>
+export const getFeedbackForPayment = async (o: RegistryViewOptions, p: RegistryPaymentArgs & { rater: string }): Promise<FeedbackView | null> =>
   view(o, 'get_feedback_for_payment', paymentArgs(o, p), nullable(feedbackCheck));
-export const listFeedback = (o: RegistryViewOptions, accountId: string, p: RegistryPage = {}): Promise<FeedbackView[]> =>
+export const listFeedback = async (o: RegistryViewOptions, accountId: string, p: RegistryPage = {}): Promise<FeedbackView[]> =>
   view(o, 'list_feedback', { ...accountArgs(accountId), ...page(p) }, array(feedbackCheck));
-export const getSummary = (o: RegistryViewOptions, accountId: string): Promise<SummaryView> =>
+export const getSummary = async (o: RegistryViewOptions, accountId: string): Promise<SummaryView> =>
   view(o, 'get_summary', accountArgs(accountId), (v) => summaryCheck(v) && object(v) && !Object.hasOwn(v, 'operator_id'));
-export const getSummaryByOperator = (o: RegistryViewOptions, accountId: string, operatorId: string): Promise<SummaryView> => {
+export const getSummaryByOperator = async (o: RegistryViewOptions, accountId: string, operatorId: string): Promise<SummaryView> => {
   if (typeof operatorId !== 'string') throw new Error('Invalid operator_id');
   return view(o, 'get_summary_by_operator', { ...accountArgs(accountId), operator_id: operatorId },
     (v) => summaryCheck(v) && object(v) && Object.hasOwn(v, 'operator_id'));
 };
-export const isFeedbackPending = (o: RegistryViewOptions, p: RegistryPaymentArgs & { rater: string }): Promise<boolean> =>
+export const isFeedbackPending = async (o: RegistryViewOptions, p: RegistryPaymentArgs & { rater: string }): Promise<boolean> =>
   view(o, 'is_feedback_pending', paymentArgs(o, p), boolean);
 
 export interface RegistryEventData {
@@ -337,7 +343,11 @@ const eventChecks: Record<keyof RegistryEventData, Check> = {
   feedback_given: record(feedbackFields), feedback_revoked: record({ feedback_id: u32, rater: accountCheck,
     ratee: accountCheck, escrow: accountCheck, payment_id: validPaymentId, revoked_at: u64 }),
 };
-/** Like parseArrasEvents: skip malformed/foreign/unknown logs; preserve valid batches. Authenticate receipt executor separately. */
+/**
+ * Skip malformed/foreign/unknown logs; preserve valid batches. Raw logs are safe only
+ * when the caller has already filtered receipts by executor_id for the selected network.
+ * Prefer parseRegistryReceiptEvents for transaction receipts_outcome from the RPC.
+ */
 export function parseRegistryEvents(logs: readonly unknown[]): RegistryEvent[] {
   const result: RegistryEvent[] = [];
   if (!Array.isArray(logs)) return result;
@@ -349,6 +359,19 @@ export function parseRegistryEvents(logs: readonly unknown[]): RegistryEvent[] {
         !Object.hasOwn(eventChecks, v.event) || !Array.isArray(v.data)) continue;
     if (!v.data.every(eventChecks[v.event as keyof RegistryEventData])) continue;
     result.push({ standard: 'arras-registry', version: '1.0.0', event: v.event, data: v.data } as RegistryEvent);
+  }
+  return result;
+}
+/** Parse RPC receipts_outcome, accepting only the selected network's registry emitters. */
+export function parseRegistryReceiptEvents(receiptsOutcome: unknown, net: NearEscrowNetwork): RegistryEvent[] {
+  network(net);
+  const result: RegistryEvent[] = [];
+  if (!Array.isArray(receiptsOutcome)) return result;
+  for (const receipt of receiptsOutcome) {
+    if (!object(receipt) || !object(receipt.outcome)) continue;
+    const outcome = receipt.outcome;
+    if (!NEAR_REGISTRY_CONTRACTS[net].includes(outcome.executor_id as string)) continue;
+    result.push(...parseRegistryEvents(outcome.logs as unknown[]));
   }
   return result;
 }

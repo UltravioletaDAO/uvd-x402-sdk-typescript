@@ -9,6 +9,11 @@
 - Arras registry v1 helpers on `uvd-x402-sdk/near`: offline wallet-selector builders, normal NEAR transaction signing, injectable typed views, feedback outcome codes and strict NEP-297 events. Mainnet targets `registry.arras-escrow.near` with `v1.arras-escrow.near`; testnet has no registered target.
 - Exact registry validation, deterministic reputation summaries by escrow/operator, and safe display helpers. Includes fixed argument/signature/event vectors, offline boundary tests, a mutation runner, and integration documentation in `docs/near-registry.md`.
 
+### Fixed
+
+- Registry update accepts deposits from 1 yoctoNEAR (default REGISTER_DEPOSIT), validating E06 before URI/metadata. All nine views reject promises for invalid inputs. E17 now denotes only the feedback 60 TGas minimum; other gas bounds use SDK errors.
+- `parseRegistryReceiptEvents` filters RPC receipt events by the selected network's registered executor. Raw-log parsing requires callers to authenticate the executor first. CI also compares registry vector bytes with the Python SDK.
+
 ## [2.110.0] - 2026-11-03
 
 ### Added
