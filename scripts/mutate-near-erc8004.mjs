@@ -54,7 +54,7 @@ add('view config budget check',"if (spec.method === 'get_config') validateContra
 add('identity view binding',"method === 'get_identity_registry' && value !== t.identity",'false');
 add('receipt status uniqueness','Object.keys(status).length === 1','Object.keys(status).length >= 1');
 add('receipt successful execution','!successful(r.outcome.status)','false');
-add('receipt emitter allowlist','o.executor_id !== t.identity && o.executor_id !== t.reputation','false');
+add('receipt log-array shape','if (!Array.isArray(o.logs)) continue;','if (false) continue;');
 add('event emitter role','o.executor_id !== t[spec.target]','false');
 add('event standard','v.standard !== spec.standard','false');
 add('event version',"v.version !== '1.0.0'",'false');

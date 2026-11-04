@@ -453,7 +453,7 @@ function receiptOutcomes(receipts: unknown, network: NearErc8004Network, target?
   return receipts.flatMap(r => {
     if (!s.object(r) || !s.object(r.outcome) || !successful(r.outcome.status)) return [];
     const o = r.outcome;
-    if (target ? o.executor_id !== t[target] : o.executor_id !== t.identity && o.executor_id !== t.reputation) return [];
+    if (target && o.executor_id !== t[target]) return [];
     return [o];
   });
 }

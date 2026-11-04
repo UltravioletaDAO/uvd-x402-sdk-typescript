@@ -537,3 +537,34 @@ describe('additional input and transport boundary regressions', () => {
     for(const value of ['YQ==\n','YQ=','YR==','YWJ=']) expect(()=>schema.unbase64(value)).toThrow();
   });
 });
+
+describe('isolated guard mutation regressions', () => {
+  it('rejects HTTP failure even when the body is a fully valid RPC success', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({result:bytes('1')}),{status:500}));
+    await expect(new r.NearErc8004Client({network:net}).view('nft_total_supply',{})).rejects.toThrow('HTTP');
+  });
+  it('rejects an otherwise valid RPC body above the wire-byte ceiling', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(' '.repeat(4*1048576)+JSON.stringify({result:bytes('1')})));
+    await expect(new r.NearErc8004Client({network:net}).view('nft_total_supply',{})).rejects.toThrow('byte limit');
+  });
+  it('rejects an otherwise valid decoded response above the payload-byte ceiling', async () => {
+    const rpc=async()=>({result:[...Buffer.from(' '.repeat(1048576)+'"1"')]});
+    await expect(new r.NearErc8004Client({network:net,rpc}).view('nft_total_supply',{})).rejects.toThrow('call_function');
+  });
+  it.each([-165,347,91.25,'91'])('does not coerce malformed byte %s into a valid JSON bracket', async first => {
+    const rpc=async()=>({result:[first,93]});
+    await expect(new r.NearErc8004Client({network:net,rpc}).view('nft_tokens',{})).rejects.toThrow('call_function');
+  });
+  it('rejects foreign view verifiers before RPC, even if the response would pass its schema', async () => {
+    const rpc=vi.fn(async()=>bytes({...sampleSummary,weight_sum:'1'}));
+    await expect(new r.NearErc8004Client({network:net,rpc}).getVerifiedSummary({agent_id:'0',verifier:'other.near'})).rejects.toThrow('Verifier');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+  it('validates optional NFT event memo and authorized_id fields', () => {
+    const valid={old_owner_id:'payer.near',new_owner_id:'worker.near',token_ids:['0']};
+    for(const patch of [{memo:1},{memo:'a'.repeat(257)},{authorized_id:'BAD'},{authorized_id:1}]) {
+      expect(r.parseNearErc8004ReceiptEvents([receipt(eventFor('nft_transfer',{...valid,...patch}))],net)).toEqual([]);
+    }
+    expect(r.parseNearErc8004ReceiptEvents([receipt(eventFor('nft_mint',{owner_id:'payer.near',token_ids:['0'],memo:1}))],net)).toEqual([]);
+  });
+});
