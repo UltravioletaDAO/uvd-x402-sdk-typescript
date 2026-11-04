@@ -9,9 +9,9 @@ function git(...args) {
 if (git('status','--porcelain').trim()) throw new Error('Commit changes before mutation testing');
 const source = new Map([main,schema].map(f => [f,readFileSync(f,'utf8').replace(/\r\n/g,'\n')]));
 const mutations = [];
-function add(label,before,after,file=main) {
+function add(label,before,after,file=main,id='M'+String(mutations.length+1).padStart(2,'0')) {
   if(source.get(file).split(before).length !== 2) throw new Error('Mutation must match once: '+label);
-  mutations.push({id:'M'+String(mutations.length+1).padStart(2,'0'),label,before,after,file});
+  mutations.push({id,label,before,after,file});
 }
 add('network allowlist',"network !== 'near:mainnet' && network !== 'near:testnet'",'false');
 add('config network binding','config.network !== net','false');
@@ -102,6 +102,46 @@ add('base64 decoded limit','unbase64(v).length <= max','true',schema);
 add('parallel feedback arrays',"(a as unknown[]).length === (v.clients as unknown[]).length",'true',schema);
 add('argument snapshot','const source = JSON.parse(JSON.stringify(input)) as Record<string, unknown>;','const source = input;');
 add('config snapshot','o.config = JSON.parse(JSON.stringify(o.config)) as NearErc8004Config;','');
+// Independent outcome fields and the new finality/network guards.
+add('feedback tag1 equality', "event.tag1 !== (parsed.args.tag1 ?? '')", 'false');
+add('feedback tag2 equality', "event.tag2 !== (parsed.args.tag2 ?? '')", 'false');
+add('feedback endpoint equality', "event.endpoint !== (parsed.args.endpoint ?? '')", 'false');
+add('feedback URI equality', "event.feedback_uri !== (parsed.args.feedback_uri ?? '')", 'false');
+add('feedback hash equality', "event.feedback_hash !== (parsed.args.feedback_hash ?? null)", 'false');
+add('feedback proof verifier equality', 'event.proof.verifier !== parsed.args.verifier', 'false');
+add('feedback proof identifier equality', 'event.proof.proof !== parsed.args.proof', 'false');
+add('outcome verifier network', 'parsed.args.verifier !== undefined && parsed.args.verifier !== targets(network).verifier', 'false');
+add('final execution status equality', "outcome.final_execution_status === 'FINAL'", 'true');
+add('explicit malformed finality is present', "!Object.hasOwn(outcome, 'final_execution_status')", 'outcome.final_execution_status == null');
+add('event API checks finality', '!finalExecution(outcome) || !successful(outcome.status)', '!successful(outcome.status)');
+add('outcome API checks finality', '!finalExecution(outcome) || !s.object(outcome.transaction)', '!s.object(outcome.transaction)');
+add('legacy outcome without finality', "!Object.hasOwn(outcome, 'final_execution_status')", 'false');
+add('URI storage bytes', 'BigInt(s.byteLength(args.new_uri as string))', '0n');
+add('metadata decoded bytes', 's.unbase64(args.metadata_value as string).length', '(args.metadata_value as string).length');
+add('storage safety yocto', 'recommended = 1n + byte * 256n', 'recommended = byte * 256n');
+
+// Preserve the external review IDs so its formerly surviving mutants can be replayed verbatim.
+const review = (id, label, before, after) => add(label, before, after, main, id);
+review('R01', 'proof feedback default 150 to 120 TGas', '(proof ? 150n : 60n)', '(proof ? 120n : 60n)');
+review('R02', 'plain feedback default 60 to 40 TGas', '(proof ? 150n : 60n)', '(proof ? 150n : 40n)');
+review('R03', 'ordinary default 30 to 300 TGas', 'gasDefault = 30n * TGAS', 'gasDefault = 300n * TGAS');
+review('R04', 'transfer-call default 50 to 300 TGas', 'gasDefault = 50n * TGAS', 'gasDefault = 300n * TGAS');
+review('R05', 'metadata omits 128 storage bytes', '128 + s.byteLength(args.metadata_key as string)', 's.byteLength(args.metadata_key as string)');
+review('R06', 'response budget 512 to 256 bytes', 'byte * 512n', 'byte * 256n');
+review('R07', 'approval budget 256 to 1 byte', 'byte * 256n', 'byte * 1n');
+review('R08', 'feedback agent correlation', 'event.agent_id !== parsed.args.agent_id', 'false');
+review('R09', 'proof verifier and identifier correlation', 'event.proof.verifier !== parsed.args.verifier || event.proof.proof !== parsed.args.proof', 'false');
+review('R10', 'feedback tag correlations', "event.tag1 !== (parsed.args.tag1 ?? '') || event.tag2 !== (parsed.args.tag2 ?? '')", 'false');
+review('R11', 'feedback endpoint URI and hash correlations', "event.endpoint !== (parsed.args.endpoint ?? '') || event.feedback_uri !== (parsed.args.feedback_uri ?? '') || event.feedback_hash !== (parsed.args.feedback_hash ?? null)", 'false');
+review('R12', 'feedback decimals correlation', 'event.value_decimals !== parsed.args.value_decimals', 'false');
+review('R13', 'rejected callback with new_feedback', 'rejections.length === 1 && events.length === 0', 'rejections.length === 1');
+review('R14', 'duplicate registered events', 'registered.length !== 1', 'registered.length === 0');
+review('R15', 'proof on plain feedback', 'parsed.args.verifier === undefined ? event.proof !== null', 'parsed.args.verifier === undefined ? false');
+review('R16', 'signer ignores caller clock', 'nowNs: options.nowNs', 'nowNs: undefined');
+review('R17', 'optimistic RPC finality', "finality: 'final'", "finality: 'optimistic'");
+review('R18', 'ignore verifier config gas floor', 'minGas = BigInt(c.verifier.min_gas_verify)', 'minGas = 1n');
+review('R19', 'ordinary default 30 to 31 TGas', 'gasDefault = 30n * TGAS', 'gasDefault = 31n * TGAS');
+review('R20', 'transfer-call default 50 to 51 TGas', 'gasDefault = 50n * TGAS', 'gasDefault = 51n * TGAS');
 const chosen = process.argv.slice(2);
 const selected = mutations.filter(m=>!chosen.length||chosen.includes(m.id));
 const env={...process.env,HTTP_PROXY:'http://127.0.0.1:9',HTTPS_PROXY:'http://127.0.0.1:9',NO_PROXY:'127.0.0.1,localhost'};

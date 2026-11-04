@@ -202,6 +202,16 @@ receipt status, executor, event standard/version and data shape. It recognizes
 `nft_transfer`, `new_feedback`, `feedback_revoked` and `response_appended`.
 `parseNearErc8004ReceiptEvents(receipts, network)` is available to indexers that
 already established final transaction success. It preserves receipt/log order.
+Transaction parsers require `final_execution_status === "FINAL"` whenever that
+field is present; older results without the field still require final success.
+Feedback outcome parsing requires any `args.verifier` to equal
+`NEAR_ERC8004_CONTRACTS[network].verifier`, including failed or rejected outcomes.
+
+An indexer counts a `new_feedback` event as verified only when `proof.verifier`
+equals `NEAR_ERC8004_CONTRACTS[network].verifier` and `proof.context` equals the
+expected context (`"em"` for Execution Market). A non-null proof alone is not
+sufficient; the event parser preserves other verifiers and contexts for callers
+to apply their own indexing policy.
 A pending wallet is superseded by later wallet metadata, transfers or pending
 wallet events, and expires at its deadline.
 

@@ -475,15 +475,18 @@ export function parseNearErc8004ReceiptEvents(receipts: unknown, network: NearEr
   }
   return events;
 }
+function finalExecution(outcome: Record<string, unknown>): boolean {
+  return !Object.hasOwn(outcome, 'final_execution_status') || outcome.final_execution_status === 'FINAL';
+}
 /** Preferred transaction API: also requires final SuccessValue, never a pending receipt id. */
 export function parseNearErc8004Events(outcome: unknown, network: NearErc8004Network): NearErc8004Event[] {
   targets(network);
-  if (!s.object(outcome) || !successful(outcome.status) || !s.object(outcome.status) || typeof outcome.status.SuccessValue !== 'string') return [];
+  if (!s.object(outcome) || !finalExecution(outcome) || !successful(outcome.status) || !s.object(outcome.status) || typeof outcome.status.SuccessValue !== 'string') return [];
   return parseNearErc8004ReceiptEvents(outcome.receipts_outcome, network);
 }
 function transaction(outcome: unknown, network: NearErc8004Network, allowed: NearErc8004Method[]) {
   const t = targets(network);
-  if (!s.object(outcome) || !s.object(outcome.transaction)) throw new Error('Expected final ERC-8004 transaction outcome');
+  if (!s.object(outcome) || !finalExecution(outcome) || !s.object(outcome.transaction)) throw new Error('Expected final ERC-8004 transaction outcome');
   const tx = outcome.transaction;
   s.check(tx.signer_id, s.accountCheck, 'transaction signer');
   if (!Array.isArray(tx.actions) || tx.actions.length !== 1 || !s.object(tx.actions[0]) || !s.object(tx.actions[0].FunctionCall)) throw new Error('Expected one FunctionCall outcome');
@@ -513,6 +516,7 @@ export type NearErc8004FeedbackOutcome = { status: 'accepted'; feedbackIndex: st
   { status: 'rejected'; code: NearErc8004RejectionCode } | { status: 'failed'; code: string | null; message: string };
 export function parseNearErc8004GiveFeedbackOutcome(outcome: unknown, network: NearErc8004Network): NearErc8004FeedbackOutcome {
   const parsed = transaction(outcome, network, ['give_feedback', 'give_feedback_with_proof']);
+  if (parsed.args.verifier !== undefined && parsed.args.verifier !== targets(network).verifier) throw new Error('Verifier is not registered for network');
   if (Object.hasOwn(parsed.status, 'Failure')) {
     if (Object.keys(parsed.status).length !== 1) throw new Error('Ambiguous transaction status');
     const message = JSON.stringify(parsed.status.Failure);

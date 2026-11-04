@@ -33,15 +33,15 @@ const proofKey = { verifier: targets.verifier, proof: 'payment-1', client_addres
 const bytes = (value: unknown) => ({ result: [...Buffer.from(JSON.stringify(value))] });
 const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64');
 const params = (tx: r.NearErc8004Transaction) => tx.actions[0].params;
-const txFixture = (method: string, network = net): any => structuredClone(vectors.find(v => v.network === network && v.transaction_hash && v.calls[method]).calls[method].result);
+const txFixture = (method: string, network: r.NearErc8004Network = net): any => structuredClone(vectors.find(v => v.network === network && v.transaction_hash && v.calls[method]).calls[method].result);
 const receipt = (event: unknown, executor_id = targets.identity, status: unknown = { SuccessValue: '' }) => ({ outcome: { executor_id, status, logs: ['EVENT_JSON:' + JSON.stringify(event)] } });
 beforeEach(() => vi.stubGlobal('fetch', vi.fn(() => { throw new Error('network forbidden'); })));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const calls: Array<[r.NearErc8004Method, any, any, string]> = [
   ['register', { agent_uri: 'ipfs://card', metadata: [{ metadata_key: 'name', metadata_value: 'YWJj' }] }, { agent_uri: 'ipfs://card', metadata: [{ metadata_key: 'name', metadata_value: 'YWJj' }] }, 'identity'],
-  ['set_agent_uri', { agent_id: '0', new_uri: '' }, { agent_id: '0', new_uri: '' }, 'identity'],
-  ['set_metadata', { agent_id: '0', metadata_key: 'name', metadata_value: '' }, { agent_id: '0', metadata_key: 'name', metadata_value: '' }, 'identity'],
+  ['set_agent_uri', { agent_id: '0', new_uri: 'ipfs://card' }, { agent_id: '0', new_uri: 'ipfs://card' }, 'identity'],
+  ['set_metadata', { agent_id: '0', metadata_key: 'name', metadata_value: '8J+YgA==' }, { agent_id: '0', metadata_key: 'name', metadata_value: '8J+YgA==' }, 'identity'],
   ['set_agent_wallet', { agent_id: '0', new_wallet: 'wallet.near', deadline: nowNs }, { agent_id: '0', new_wallet: 'wallet.near', deadline: nowNs }, 'identity'],
   ['accept_agent_wallet', { agent_id: '0' }, { agent_id: '0' }, 'identity'],
   ['unset_agent_wallet', { agent_id: '0' }, { agent_id: '0' }, 'identity'],
@@ -58,12 +58,42 @@ const calls: Array<[r.NearErc8004Method, any, any, string]> = [
 ];
 const wrapperNames = ['Register','SetAgentUri','SetMetadata','SetAgentWallet','AcceptAgentWallet','UnsetAgentWallet','NftTransfer','NftTransferCall','NftApprove','NftRevoke','NftRevokeAll','GiveFeedback','GiveFeedbackWithProof','RevokeFeedback','AppendResponse','VerifyFeedbackProof'];
 describe('wallet descriptors and dynamic storage budgets', () => {
-  it.each(calls)('%s exact args and receiver', (method, args, expected, target) => {
-    const tx = r.buildNearErc8004Transaction(method, common(), args);
-    expect(tx.signerId).toBe('payer.near'); expect(tx.receiverId).toBe((targets as any)[target]);
-    expect(params(tx).methodName).toBe(method); expect(JSON.stringify(params(tx).args)).toBe(JSON.stringify(expected));
-    const index = calls.findIndex(c => c[0] === method);
-    expect((r as any)['buildNearErc8004' + wrapperNames[index]]({ ...common(), ...args })).toEqual(tx);
+  describe.each(networks)('%s defaults', network => {
+    it.each(calls)('%s exact args, receiver, gas and deposit', (method, input, expected, target) => {
+      const t = r.NEAR_ERC8004_CONTRACTS[network], c = config(network);
+      const o = { ...common(), network, config: c };
+      const args = method === 'give_feedback_with_proof' ? { ...input, verifier: t.verifier } : input;
+      const expectedArgs = method === 'give_feedback_with_proof' ? { ...expected, verifier: t.verifier } : expected;
+      const byte = BigInt(c.identity.storage_byte_cost);
+      // These independent budgets fix every default, including decoded (not base64) metadata bytes.
+      const budgets: Record<r.NearErc8004Method, [bigint, bigint]> = {
+        register: [30n, BigInt(c.identity.register_deposit)],
+        set_agent_uri: [30n, 1n + byte * 11n], // UTF-8 bytes of ipfs://card
+        set_metadata: [30n, 1n + byte * (128n + 4n + 4n)], // name + decoded emoji
+        set_agent_wallet: [30n, 1n], accept_agent_wallet: [30n, 1n], unset_agent_wallet: [30n, 1n],
+        nft_transfer: [30n, 1n], nft_transfer_call: [50n, 1n], nft_approve: [30n, 1n + byte * 256n],
+        nft_revoke: [30n, 1n], nft_revoke_all: [30n, 1n],
+        give_feedback: [60n, BigInt(c.reputation.feedback_deposit)],
+        give_feedback_with_proof: [150n, BigInt(c.reputation.feedback_proof_deposit)],
+        revoke_feedback: [30n, 1n], append_response: [30n, 1n + byte * 512n],
+        verify_feedback_proof: [30n, 0n],
+      };
+      const tx = r.buildNearErc8004Transaction(method, o, args);
+      expect(tx.signerId).toBe('payer.near'); expect(tx.receiverId).toBe((t as any)[target]);
+      expect(params(tx)).toEqual({ methodName: method, args: expectedArgs,
+        gas: (budgets[method][0] * 1000000000000n).toString(), deposit: budgets[method][1].toString() });
+      expect(JSON.stringify(params(tx).args)).toBe(JSON.stringify(expectedArgs));
+      const index = calls.findIndex(c => c[0] === method);
+      expect((r as any)['buildNearErc8004' + wrapperNames[index]]({ ...o, ...args })).toEqual(tx);
+    });
+  });
+  it.each(networks)('%s budgets empty URI and metadata values', network => {
+    const c = config(network), o = { ...common(), network, config: c };
+    expect(params(r.buildNearErc8004SetAgentUri({ ...o, agent_id: '0', new_uri: '' })))
+      .toMatchObject({ gas: '30000000000000', deposit: '1', args: { agent_id: '0', new_uri: '' } });
+    expect(params(r.buildNearErc8004SetMetadata({ ...o, agent_id: '0', metadata_key: 'name', metadata_value: '' })))
+      .toMatchObject({ gas: '30000000000000', deposit: (1n + BigInt(c.identity.storage_byte_cost) * 132n).toString(),
+        args: { agent_id: '0', metadata_key: 'name', metadata_value: '' } });
   });
   it('uses each network and freezes every target table', () => {
     for (const network of networks) {
@@ -495,6 +525,93 @@ describe('strict successful receipt events and transaction outcomes', () => {
       call.args=b64({...args,[method==='register'?'agent_uri':'value']:method==='register'?'ipfs://different':'99'});expect(()=>parse(altered,net)).toThrow();
       call.method_name='nft_transfer';expect(()=>parse(altered,net)).toThrow();
     }
+  });
+  describe.each(networks)('%s outcome correlation', network => {
+    const t = r.NEAR_ERC8004_CONTRACTS[network];
+    function editFeedback(outcome: any, change: (data: any) => void) {
+      for (const rec of outcome.receipts_outcome) rec.outcome.logs = rec.outcome.logs.map((log: string) => {
+        if (!log.startsWith('EVENT_JSON:')) return log;
+        const event = JSON.parse(log.slice(11));
+        if (event.event === 'new_feedback') change(event.data[0]);
+        return 'EVENT_JSON:' + JSON.stringify(event);
+      });
+    }
+    it.each([
+      ['agent_id', '2'], ['value_decimals', 2], ['tag1', 'different'], ['tag2', 'different'],
+      ['endpoint', 'https://different.example'], ['feedback_uri', 'ipfs://different'], ['feedback_hash', 'ab'.repeat(32)],
+      ['proof.verifier', 'foreign.near'], ['proof.proof', 'different-payment'],
+    ])('rejects a schema-valid mismatch in %s', (field, value) => {
+      const outcome = txFixture('give_feedback_with_proof', network);
+      editFeedback(outcome, data => {
+        if (field.startsWith('proof.')) data.proof[field.slice(6)] = value;
+        else data[field] = value;
+      });
+      // Ensure this tests correlation, rather than the event schema discarding the changed row.
+      expect(r.parseNearErc8004Events(outcome, network).filter(e => e.event === 'new_feedback')).toHaveLength(1);
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toThrow('Feedback result/event mismatch');
+    });
+    it('rejects proof-bearing events for feedback submitted without a proof', () => {
+      const outcome = txFixture('give_feedback_with_proof', network), call = outcome.transaction.actions[0].FunctionCall;
+      const args = JSON.parse(Buffer.from(call.args, 'base64').toString());
+      delete args.verifier; delete args.proof; call.args = b64(args); call.method_name = 'give_feedback';
+      expect(r.parseNearErc8004Events(outcome, network).filter(e => e.event === 'new_feedback')).toHaveLength(1);
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toThrow('Feedback result/event mismatch');
+      editFeedback(outcome, data => { data.proof = null; });
+      expect(r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toEqual({ status: 'accepted', feedbackIndex: '1' });
+    });
+    it('rejects a callback rejection accompanied by new_feedback', () => {
+      const outcome = txFixture('give_feedback_with_proof', network);
+      outcome.status = { SuccessValue: b64(null) };
+      outcome.receipts_outcome.push({ outcome: { executor_id: t.reputation, status: { SuccessValue: b64(null) },
+        logs: ['erc8004:rechazo:E45_VERIFICADOR_FALLO'] } });
+      expect(r.parseNearErc8004Events(outcome, network).filter(e => e.event === 'new_feedback')).toHaveLength(1);
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toThrow();
+    });
+    it('rejects two otherwise matching registered events', () => {
+      const outcome = txFixture('register', network);
+      const registered = r.parseNearErc8004Events(outcome, network).find(e => e.event === 'registered')!;
+      outcome.receipts_outcome.push(receipt(registered, t.identity));
+      expect(r.parseNearErc8004Events(outcome, network).filter(e => e.event === 'registered')).toHaveLength(2);
+      expect(() => r.parseNearErc8004RegisterOutcome(outcome, network)).toThrow('Register result/event mismatch');
+    });
+    it.each(['foreign', 'other-network'])('rejects matching args/event from a %s verifier', kind => {
+      const verifier = kind === 'foreign' ? 'foreign.near' : r.NEAR_ERC8004_CONTRACTS[networks.find(n => n !== network)!].verifier;
+      const outcome = txFixture('give_feedback_with_proof', network), call = outcome.transaction.actions[0].FunctionCall;
+      call.args = b64({ ...JSON.parse(Buffer.from(call.args, 'base64').toString()), verifier });
+      editFeedback(outcome, data => { data.proof.verifier = verifier; });
+      expect(r.parseNearErc8004Events(outcome, network).filter(e => e.event === 'new_feedback')).toHaveLength(1);
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toThrow('Verifier is not registered for network');
+      // The same rule applies before returning synchronous failures or callback rejections.
+      outcome.status = { Failure: { error: 'out of gas' } };
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toThrow('Verifier is not registered for network');
+      outcome.status = { SuccessValue: b64(null) };
+      outcome.receipts_outcome = [{ outcome: { executor_id: t.reputation, status: { SuccessValue: b64(null) },
+        logs: ['erc8004:rechazo:E45_VERIFICADOR_FALLO'] } }];
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, network)).toThrow('Verifier is not registered for network');
+    });
+    it.each(['EXECUTED_OPTIMISTIC', 'EXECUTED', 'INCLUDED', 'INCLUDED_FINAL', 'NONE', 'final', 'FINAL ', '', null, 1, {}, undefined])(
+      'rejects an explicitly non-final execution status %j', status => {
+        for (const method of ['register', 'give_feedback_with_proof']) {
+          const outcome = txFixture(method, network); outcome.final_execution_status = status;
+          const parse = method === 'register' ? r.parseNearErc8004RegisterOutcome : r.parseNearErc8004GiveFeedbackOutcome;
+          expect(r.parseNearErc8004Events(outcome, network)).toEqual([]);
+          expect(() => parse(outcome, network)).toThrow('final');
+          if (method === 'give_feedback_with_proof') {
+            outcome.status = { Failure: { error: 'out of gas' } };
+            expect(() => parse(outcome, network)).toThrow('final');
+          }
+        }
+      });
+    it.each(['register', 'give_feedback_with_proof'])('accepts FINAL and an absent finality field for %s', method => {
+      const outcome = txFixture(method, network);
+      const parse = method === 'register' ? r.parseNearErc8004RegisterOutcome : r.parseNearErc8004GiveFeedbackOutcome;
+      const expected = method === 'register' ? '0' : { status: 'accepted', feedbackIndex: '1' };
+      expect(outcome.final_execution_status).toBe('FINAL');
+      expect(parse(outcome, network)).toEqual(expected);
+      delete outcome.final_execution_status;
+      expect(parse(outcome, network)).toEqual(expected);
+      expect(r.parseNearErc8004Events(outcome, network).length).toBeGreaterThan(0);
+    });
   });
   it('returns synchronous contract failures distinctly and accepts unproved feedback with a null proof', () => {
     const outcome=txFixture('give_feedback_with_proof');outcome.status={Failure:{error:'ERC8004_REP_E09: storage'}};
