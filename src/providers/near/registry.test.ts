@@ -481,7 +481,7 @@ describe('round 1: contract parity and emitter trust', () => {
   });
   it('authenticates receipt executor_id for the network before parsing event logs', () => {
     const logs = vectors.events.map((e) => e.log);
-    const receipt = (executor_id: unknown) => ({ outcome: { executor_id, logs } });
+    const receipt = (executor_id: unknown) => ({ outcome: { executor_id, logs, status: { SuccessValue: '' } } });
     const foreign = ['other.near', payment.escrow, vectors.receiver_id.toUpperCase(), vectors.receiver_id + ' ',
       ' ' + vectors.receiver_id, vectors.receiver_id + '.evil', '', null, 1];
     for (const id of foreign) expect(r.parseRegistryReceiptEvents([receipt(id)], common.network)).toEqual([]);
@@ -494,11 +494,77 @@ describe('round 1: contract parity and emitter trust', () => {
   it('skips malformed receipts and retains strict log parsing for trusted emitters', () => {
     for (const receipts of [null, {}, 1, 'x']) expect(r.parseRegistryReceiptEvents(receipts, common.network)).toEqual([]);
     const malformed = [null, 1, [], {}, { outcome: null }, { outcome: [] }, { outcome: {} }];
-    const trusted = (logs: unknown) => ({ outcome: { executor_id: vectors.receiver_id, logs } });
+    const trusted = (logs: unknown) => ({ outcome: { executor_id: vectors.receiver_id, logs, status: { SuccessValue: '' } } });
     for (const logs of [null, undefined, 'EVENT_JSON:{}', [], ['EVENT_JSON:{', 'foreign']]) {
       expect(r.parseRegistryReceiptEvents([...malformed, trusted(logs)], common.network)).toEqual([]);
     }
     expect(r.parseRegistryReceiptEvents([...malformed, trusted(['EVENT_JSON:{', vectors.events[0].log])], common.network))
       .toEqual([vectors.events[0].parsed]);
+  });
+});
+
+
+describe('round 2: only successful registry receipts produce events', () => {
+  const registered = vectors.events[0];
+  const receipt = (status: unknown, logs: unknown[] = [registered.log]) => ({
+    outcome: { executor_id: 'registry.arras-escrow.near', logs, ...(status === undefined ? {} : { status }) },
+  });
+  const lackBalance = { Failure: { ActionError: { index: 0, kind: { LackBalanceForState: {
+    account_id: 'registry.arras-escrow.near', amount: '1',
+  } } } } };
+  const outOfGas = { Failure: { ActionError: { index: 0, kind: { FunctionCallError: {
+    ExecutionError: 'Exceeded the prepaid gas.',
+  } } } } };
+
+  it.each([
+    ['SuccessValue', { SuccessValue: '' }],
+    ['SuccessValue with return data', { SuccessValue: 'bnVsbA==' }],
+    ['SuccessReceiptId', { SuccessReceiptId: '11111111111111111111111111111111' }],
+    ['SuccessReceiptId empty string', { SuccessReceiptId: '' }],
+  ])('accepts %s from the registered executor', (_name, status) => {
+    expect(registered.parsed.event).toBe('agent_registered');
+    expect(r.parseRegistryReceiptEvents([receipt(status)], common.network)).toEqual([registered.parsed]);
+    expect(r.parseRegistryReceiptEvents([receipt(status)], 'near:testnet')).toEqual([]);
+    expect(r.parseRegistryReceiptEvents([{
+      outcome: { ...receipt(status).outcome, executor_id: 'other.near' },
+    }], common.network)).toEqual([]);
+  });
+
+  const rejected: Array<[string, unknown]> = [
+    ['Failure LackBalanceForState', lackBalance],
+    ['Failure ExecutionError after emit', outOfGas],
+    ['Unknown', 'Unknown'],
+    ['missing status', undefined],
+    ['null status', null],
+    ['numeric SuccessValue', { SuccessValue: 1 }],
+    ['null SuccessValue', { SuccessValue: null }],
+    ['numeric SuccessReceiptId', { SuccessReceiptId: 1 }],
+    ['null SuccessReceiptId', { SuccessReceiptId: null }],
+    ['empty object', {}],
+    ['numeric status', 1],
+    ['boolean status', true],
+    ['success string', 'SuccessValue'],
+    ['array status', Object.assign([], { SuccessValue: '' })],
+    ['lowercase success key', { successValue: '' }],
+    ['whitespace in success key', { 'SuccessValue ': '' }],
+    ['unknown object variant', { Unknown: '' }],
+    ['Failure with SuccessValue', { ...lackBalance, SuccessValue: '' }],
+    ['Failure with SuccessReceiptId', { ...outOfGas, SuccessReceiptId: 'receipt' }],
+  ];
+  it.each(rejected)('ignores the entire receipt for %s', (_name, status) => {
+    expect(registered.parsed.event).toBe('agent_registered');
+    expect(r.parseRegistryReceiptEvents([receipt(status)], common.network)).toEqual([]);
+  });
+
+  it('keeps successful receipt and log order while discarding failed receipts entirely', () => {
+    const updated = vectors.events[1];
+    const successful = receipt({ SuccessValue: '' }, [updated.log, registered.log]);
+    expect(r.parseRegistryReceiptEvents([receipt(lackBalance), successful], common.network))
+      .toEqual([updated.parsed, registered.parsed]);
+    expect(r.parseRegistryReceiptEvents([
+      receipt(lackBalance, vectors.events.map((event) => event.log)), successful,
+      receipt(outOfGas, vectors.events.map((event) => event.log)),
+      receipt({ SuccessReceiptId: 'receipt' }), receipt('Unknown'), receipt(undefined),
+    ], common.network)).toEqual([updated.parsed, registered.parsed, registered.parsed]);
   });
 });

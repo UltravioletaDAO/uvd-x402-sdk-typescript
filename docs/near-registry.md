@@ -108,15 +108,18 @@ an unknown failure as a parsed rejection.
 
 `parseRegistryReceiptEvents(execution.receipts_outcome, network)` recognizes the four
 NEP-297 `arras-registry` 1.0.0 events only in receipts whose `outcome.executor_id`
-belongs to `NEAR_REGISTRY_CONTRACTS[network]`. Other emitters are ignored even if
+belongs to `NEAR_REGISTRY_CONTRACTS[network]` AND whose `outcome.status` is an
+object containing a string `SuccessValue` or `SuccessReceiptId`. The function skips
+the entire receipt for any `Failure`, `Unknown`, missing or malformed status, even
+if it emitted valid event logs before failing. Other emitters are ignored even if
 their event JSON names the expected escrow and operator. Testnet currently has no
-trusted registry emitter. Malformed receipts/logs are skipped and valid batches
-retain their order. Supply receipts from a trusted RPC and verify execution status
-before indexing events.
+trusted registry emitter. Malformed receipts/logs are skipped and successful
+batches retain their receipt and log order. Supply receipts from a trusted RPC.
 
 `parseRegistryEvents(logs)` parses the same envelopes without receipt context. It is
 safe only when the caller has already filtered receipts by `executor_id` for the
-selected network. Loose logs do not authenticate an emitter; this also applies to
+selected network and successful execution status. Loose logs cannot establish
+execution success or authenticate an emitter; this also applies to
 rejection logs passed to `parseGiveFeedbackOutcome`.
 
 ## Execution Market flow and trust

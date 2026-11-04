@@ -137,6 +137,20 @@ for (const name of ['getAgent', 'listAgents', 'getFeedback', 'getFeedbackForPaym
 }
 add('update deposit check applies', 'if (updateDeposit !== undefined)', 'if (false)');
 add('cross-repo vector byte equality', '!ts.equals(py)', 'false', 'scripts/xlang/check-near-registry-parity.mjs');
+// Round 2: append status regressions without removing M01-M117.
+const receiptStatusGuard = "!object(status) || Object.hasOwn(status, 'Failure') ||\n        (typeof status.SuccessValue !== 'string' && typeof status.SuccessReceiptId !== 'string')";
+add('receipt status filter', receiptStatusGuard, 'false');
+add('receipt Failure accepted', receiptStatusGuard,
+  "!object(status) || (!Object.hasOwn(status, 'Failure') && typeof status.SuccessValue !== 'string' && typeof status.SuccessReceiptId !== 'string')");
+add('receipt SuccessReceiptId rejected', receiptStatusGuard,
+  "!object(status) || Object.hasOwn(status, 'Failure') || typeof status.SuccessValue !== 'string'");
+add('receipt missing status accepted', receiptStatusGuard, `status !== undefined && (${receiptStatusGuard})`);
+add('receipt status object', receiptStatusGuard, receiptStatusGuard.replace('!object(status) || ', ''));
+add('receipt SuccessValue string', receiptStatusGuard, receiptStatusGuard.replace("typeof status.SuccessValue !== 'string'", 'status.SuccessValue === undefined'));
+add('receipt SuccessReceiptId string', receiptStatusGuard, receiptStatusGuard.replace("typeof status.SuccessReceiptId !== 'string'", 'status.SuccessReceiptId === undefined'));
+add('receipt Failure overrides success', receiptStatusGuard, receiptStatusGuard.replace("Object.hasOwn(status, 'Failure') ||", ''));
+add('receipt SuccessValue rejected', receiptStatusGuard,
+  "!object(status) || Object.hasOwn(status, 'Failure') || typeof status.SuccessReceiptId !== 'string'");
 const requested = process.argv.slice(2);
 const selected = changes.filter((m) => !requested.length || requested.includes(m.id));
 const env = { ...process.env, HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', AWS_SHARED_CREDENTIALS_FILE: process.platform === 'win32' ? 'NUL' : '/dev/null' };

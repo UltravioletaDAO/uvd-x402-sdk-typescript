@@ -345,7 +345,8 @@ const eventChecks: Record<keyof RegistryEventData, Check> = {
 };
 /**
  * Skip malformed/foreign/unknown logs; preserve valid batches. Raw logs are safe only
- * when the caller has already filtered receipts by executor_id for the selected network.
+ * when the caller has already filtered receipts by executor_id for the selected network
+ * and successful execution status.
  * Prefer parseRegistryReceiptEvents for transaction receipts_outcome from the RPC.
  */
 export function parseRegistryEvents(logs: readonly unknown[]): RegistryEvent[] {
@@ -362,7 +363,7 @@ export function parseRegistryEvents(logs: readonly unknown[]): RegistryEvent[] {
   }
   return result;
 }
-/** Parse RPC receipts_outcome, accepting only the selected network's registry emitters. */
+/** Parse RPC receipts_outcome, accepting only successful receipts from the selected network's registries. */
 export function parseRegistryReceiptEvents(receiptsOutcome: unknown, net: NearEscrowNetwork): RegistryEvent[] {
   network(net);
   const result: RegistryEvent[] = [];
@@ -371,6 +372,9 @@ export function parseRegistryReceiptEvents(receiptsOutcome: unknown, net: NearEs
     if (!object(receipt) || !object(receipt.outcome)) continue;
     const outcome = receipt.outcome;
     if (!NEAR_REGISTRY_CONTRACTS[net].includes(outcome.executor_id as string)) continue;
+    const status = outcome.status;
+    if (!object(status) || Object.hasOwn(status, 'Failure') ||
+        (typeof status.SuccessValue !== 'string' && typeof status.SuccessReceiptId !== 'string')) continue;
     result.push(...parseRegistryEvents(outcome.logs as unknown[]));
   }
   return result;

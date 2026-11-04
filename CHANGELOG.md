@@ -12,7 +12,7 @@
 ### Fixed
 
 - Registry update accepts deposits from 1 yoctoNEAR (default REGISTER_DEPOSIT), validating E06 before URI/metadata. All nine views reject promises for invalid inputs. E17 now denotes only the feedback 60 TGas minimum; other gas bounds use SDK errors.
-- `parseRegistryReceiptEvents` filters RPC receipt events by the selected network's registered executor. Raw-log parsing requires callers to authenticate the executor first. CI also compares registry vector bytes with the Python SDK.
+- `parseRegistryReceiptEvents` filters RPC receipt events by the selected network's registered executor AND successful execution status (`SuccessValue` or `SuccessReceiptId` strings). Failed, unknown, missing or malformed statuses discard the whole receipt, including logs emitted before a failure. Raw-log parsing requires callers to authenticate the executor and check execution success first. CI also compares registry vector bytes with the Python SDK.
 
 ## [2.110.0] - 2026-11-03
 
