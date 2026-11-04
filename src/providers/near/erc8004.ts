@@ -54,23 +54,29 @@ function configuredGas(v: unknown, min: bigint): void {
   s.check(v, s.u64, 'config gas');
   if (BigInt(v as string) < min || BigInt(v as string) > 300n * TGAS) throw new Error('Invalid config gas range');
 }
-function validateConfig(config: NearErc8004Config, net: NearErc8004Network): void {
+function validateContractConfig(kind: NearErc8004Contract, value: unknown, net: NearErc8004Network): void {
   const t = targets(net);
+  if (kind === 'identity') {
+    s.check(value, s.identityConfigCheck, 'identity config'); const c = value as NearErc8004IdentityConfig;
+    boundedAmount(c.register_deposit, NEAR_ERC8004_DEPOSIT_CAPS.register, 'register_deposit');
+    boundedAmount(c.storage_byte_cost, NEAR_ERC8004_DEPOSIT_CAPS.storageByte, 'storage_byte_cost');
+    configuredGas(c.min_gas_nft_transfer_call, 50n * TGAS);
+  } else if (kind === 'reputation') {
+    s.check(value, s.reputationConfigCheck, 'reputation config'); const c = value as NearErc8004ReputationConfig;
+    if (c.identity_registry !== t.identity) throw new Error('Config contract binding mismatch');
+    boundedAmount(c.feedback_deposit, NEAR_ERC8004_DEPOSIT_CAPS.feedback, 'feedback_deposit');
+    boundedAmount(c.feedback_proof_deposit, NEAR_ERC8004_DEPOSIT_CAPS.feedbackProof, 'feedback_proof_deposit');
+    configuredGas(c.min_gas_give_feedback, 40n * TGAS); configuredGas(c.min_gas_give_feedback_with_proof, 120n * TGAS);
+  } else {
+    s.check(value, s.verifierConfigCheck, 'verifier config'); const c = value as NearErc8004VerifierConfig;
+    if (c.escrow !== t.escrow) throw new Error('Config contract binding mismatch');
+    configuredGas(c.min_gas_verify, 25n * TGAS); configuredGas(c.gas_get_payment, 1n); configuredGas(c.gas_on_payment, 1n);
+  }
+}
+function validateConfig(config: NearErc8004Config, net: NearErc8004Network): void {
+  targets(net);
   if (!s.object(config) || config.network !== net) throw new Error('Config network mismatch');
-  s.check(config.identity, s.identityConfigCheck, 'identity config');
-  s.check(config.reputation, s.reputationConfigCheck, 'reputation config');
-  s.check(config.verifier, s.verifierConfigCheck, 'verifier config');
-  if (config.reputation.identity_registry !== t.identity || config.verifier.escrow !== t.escrow) throw new Error('Config contract binding mismatch');
-  boundedAmount(config.identity.register_deposit, NEAR_ERC8004_DEPOSIT_CAPS.register, 'register_deposit');
-  boundedAmount(config.identity.storage_byte_cost, NEAR_ERC8004_DEPOSIT_CAPS.storageByte, 'storage_byte_cost');
-  boundedAmount(config.reputation.feedback_deposit, NEAR_ERC8004_DEPOSIT_CAPS.feedback, 'feedback_deposit');
-  boundedAmount(config.reputation.feedback_proof_deposit, NEAR_ERC8004_DEPOSIT_CAPS.feedbackProof, 'feedback_proof_deposit');
-  configuredGas(config.identity.min_gas_nft_transfer_call, 50n * TGAS);
-  configuredGas(config.reputation.min_gas_give_feedback, 40n * TGAS);
-  configuredGas(config.reputation.min_gas_give_feedback_with_proof, 120n * TGAS);
-  configuredGas(config.verifier.min_gas_verify, 25n * TGAS);
-  configuredGas(config.verifier.gas_get_payment, 1n);
-  configuredGas(config.verifier.gas_on_payment, 1n);
+  for (const kind of ['identity', 'reputation', 'verifier'] as const) validateContractConfig(kind, config[kind], net);
 }
 export interface NearErc8004Metadata { metadata_key: string; metadata_value: string }
 export interface NearErc8004FeedbackArgs {
@@ -153,7 +159,7 @@ export function buildNearErc8004Transaction<M extends NearErc8004Method>(method:
   const spec = methods[method];
   const args = canonicalArgs(spec.required, spec.optional ?? {}, input);
   if (method === 'set_agent_wallet') {
-    const now = o.nowNs ?? (BigInt(Date.now()) * 1000000n).toString(); s.check(now, s.u64, 'nowNs');
+    const now = o.nowNs === undefined ? (BigInt(Date.now()) * 1000000n).toString() : o.nowNs; s.check(now, s.u64, 'nowNs');
     const deadline = BigInt(args.deadline as string);
     if (deadline < BigInt(now) || deadline > BigInt(now) + BigInt(o.config.identity.limits.max_deadline_delay_ns)) throw new Error('deadline outside five-minute window');
   }
@@ -186,7 +192,7 @@ export function buildNearErc8004Transaction<M extends NearErc8004Method>(method:
   }
   if (method === 'nft_transfer_call') { minGas = BigInt(c.identity.min_gas_nft_transfer_call); gasDefault = 50n * TGAS; }
   if (gasDefault < minGas) gasDefault = minGas;
-  const deposit = o.deposit ?? recommended.toString(), gas = o.gas ?? gasDefault.toString();
+  const deposit = o.deposit === undefined ? recommended.toString() : o.deposit, gas = o.gas === undefined ? gasDefault.toString() : o.gas;
   s.check(deposit, s.u128, 'deposit'); s.check(gas, s.u64, 'gas');
   if (BigInt(deposit) < minimum || BigInt(deposit) > cap) throw new Error('deposit outside permitted range');
   if (BigInt(gas) < minGas || BigInt(gas) > 300n * TGAS) throw new Error('gas outside permitted range');
@@ -318,8 +324,8 @@ const views: Record<ViewMethod, ViewSpec> = {
   is_authorized_or_owner: { target: 'identity', required: { spender: s.accountCheck, ...agent }, result: s.bool },
   check_agent: { target: 'identity', required: { ...agent, account_id: s.accountCheck }, result: s.nullable(s.agentCheck) },
   get_summary: { target: 'reputation', required: { ...agent, client_addresses: v => s.list(s.accountCheck)(v) && (v as unknown[]).length > 0 }, optional: { tag1: s.tag, tag2: s.tag }, result: s.summaryCheck },
-  read_feedback: { target: 'reputation', required: s.refFields, result: s.nullable(s.feedbackCheck) },
-  read_feedback_proof: { target: 'reputation', required: s.refFields, result: s.nullable(s.proofCheck) },
+  read_feedback: { target: 'reputation', required: { ...s.refFields, feedback_index: s.u64 }, result: s.nullable(s.feedbackCheck) },
+  read_feedback_proof: { target: 'reputation', required: { ...s.refFields, feedback_index: s.u64 }, result: s.nullable(s.proofCheck) },
   read_all_feedback: { target: 'reputation', required: agent, optional: { ...filterFields, include_revoked: s.bool }, result: s.allFeedbackCheck },
   get_response_count: { target: 'reputation', required: agent, optional: { client_address: s.accountCheck, feedback_index: s.u64, responders: s.list(s.accountCheck) }, result: s.u64 },
   get_clients: { target: 'reputation', required: agent, optional: pageFields, result: s.list(s.accountCheck), page: true },
@@ -378,6 +384,7 @@ export class NearErc8004Client {
       !response.result.every(v => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255)) throw new Error('Invalid call_function response');
     const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(response.result)));
     s.check(value, spec.result, `${method} response`);
+    if (spec.method === 'get_config') validateContractConfig(spec.target, value, this.network);
     if (method === 'get_identity_registry' && value !== t.identity) throw new Error('Identity registry binding mismatch');
     return value as NearErc8004ViewResults[M];
   }
@@ -511,7 +518,7 @@ export function parseNearErc8004GiveFeedbackOutcome(outcome: unknown, network: N
   }
   const value = returnValue(parsed.status);
   const logs = receiptOutcomes(parsed.outcome.receipts_outcome, network, 'reputation').flatMap(o => Array.isArray(o.logs) ? o.logs : []);
-  const rejections = logs.filter((v): v is string => typeof v === 'string' && v.startsWith('erc8004:rechazo:')).map(v => v.slice(15));
+  const rejections = logs.filter((v): v is string => typeof v === 'string' && v.startsWith('erc8004:rechazo:')).map(v => v.slice('erc8004:rechazo:'.length));
   const events = parseNearErc8004Events(outcome, network).filter(e => e.event === 'new_feedback');
   if (value === null && rejections.length === 1 && events.length === 0 && Object.values(NearErc8004RejectionCode).includes(rejections[0] as NearErc8004RejectionCode)) {
     return { status: 'rejected', code: rejections[0] as NearErc8004RejectionCode };
