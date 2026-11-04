@@ -203,7 +203,8 @@ receipt status, executor, event standard/version and data shape. It recognizes
 `parseNearErc8004ReceiptEvents(receipts, network)` is available to indexers that
 already established final transaction success. It preserves receipt/log order.
 Transaction parsers require `final_execution_status === "FINAL"` whenever that
-field is present; older results without the field still require final success.
+field is present; older results without the field retain the existing status
+and receipt checks.
 Feedback outcome parsing requires any `args.verifier` to equal
 `NEAR_ERC8004_CONTRACTS[network].verifier`, including failed or rejected outcomes.
 

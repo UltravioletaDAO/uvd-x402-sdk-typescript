@@ -46,47 +46,59 @@ an offline byte comparison. Neither tests nor CI regenerate from the network.
 
 ## Verification and auto-refutation
 
-The new suite currently has 276 passing offline tests. It covers every builder,
-view and event, config/amount/gas bounds, exact decimals and UTF-8, URI schemes and
-RFC characters, base64 canonicality, deadlines, accounts, network binding,
-receipt status, rejection provenance, and Borsh signatures.
+The suite has 350 passing offline tests. All 16 constructors fix exact default
+arguments, receiver, gas and deposit on both networks. Storage tests cover empty
+values and decoded metadata bytes. Each feedback correlation is tested with an
+otherwise valid authenticated event: agent, decimals, each tag, endpoint, URI,
+hash, verifier and proof identifier. Separate tests cover duplicate registered
+events, a rejection accompanied by new_feedback, and a proof on plain feedback.
 
-`scripts/mutate-near-erc8004.mjs` enumerates M01-M89. The first pass identified
-six test gaps in independently checking transport and optional-event fields;
-regressions now isolate these conditions. One redundant emitter filter was
-removed because each event already binds the exact network-specific executor.
-Each mutant runs with a 120-second timeout and is restored using git checkout.
-No subagents were used, following the task-specific restriction.
+When args.verifier is present, the feedback outcome parser requires exact equality
+with NEAR_ERC8004_CONTRACTS[network].verifier before returning accepted, rejected
+or failed. It does not normalize the account or infer its network from a suffix.
+Transaction parsers and the transaction event API require any present
+final_execution_status to equal FINAL. Missing fields remain compatible; null,
+undefined, empty, wrong-case, whitespace, non-string and intermediate values
+are rejected. Receipt-only consumers must establish finality themselves.
 
-The initial dependency installation lacked SQLite bindings and a Hedera module.
-After installation repair, the baseline with `CI=true` passed 3918 tests and
-failed only `src/adapters/ows.test.ts`: OWS has no Windows native binary. An earlier
-non-CI baseline run also showed an isolated existing `too_large` assertion in
-`src/backend/durable-evidence.test.ts`; it passed in the subsequent CI baseline.
-Final CI commands and results are recorded in the PR. Pre-CI command:
-`preci.py --repo . --base origin/main --ejecutar`.
+The indexing guide requires both the selected network's verifier and the expected
+proof context (em for Execution Market) before counting feedback as verified.
+The raw event API continues to expose schema-valid proofs for caller policies.
 
-No transactions were sent, no deployment or publication was performed, and no
-merge was made. On-chain ownership, proof availability, actual storage charges
-and pending callback state remain contract checks.
-
-The original 87 mutations all passed their second run. Two additional mutations
-cover detached argument/config snapshots before validation and signing.
+An independent adversarial reviewer found no P1/P2 issues. Its suggestion to
+preserve positive empty-URI and empty-metadata coverage was incorporated.
 
 ## Final verification
 
-Node 20.20.2, Python 3.11.4: typecheck, lint, ESM/CJS/declaration build and package
-smoke passed. The full offline CI-mode suite passed 4194 tests and retained only
-the baseline Windows OWS native-load failure (zero new failures). The 276 new
-tests pass. ESM and CJS package APIs replay both networks' configs and outcomes.
-Existing TS/Python runtime conformance passed 512 checks across nine phases; both
-existing registry fixture checks and the new ERC-8004 byte comparison passed.
-Gitleaks found no secrets in the three-point diff or the new commit history.
+Node 20.20.2, Python 3.11.4. npm ci, typecheck, lint, ESM/CJS/declaration build,
+package smoke and the local pre-CI passed. The full offline CI-mode suite passed
+4268 tests; base origin/main f15b429 passed 3918. Both have exactly one failing
+suite: src/adapters/ows.test.ts cannot load the unavailable Windows OWS native
+binary (@open-wallet-standard/core-win32-x64-msvc). There are zero new failures.
+SQLite was reinstalled under Node 20 before both final measurements.
 
-The final complete mutation run killed **89/89**, with no survivors, invalid
-mutants or timeout kills. The worktree was clean before and after restoration.
+Existing TS/Python conformance passed 512 checks across nine phases, using a fresh
+Python 3.11 environment and Python main f76c6d84a04a26909cc9f511d94b0f6fc2379aeb.
+ERC-8128 derivation, registry generation, the registry fixture pinned by CI and
+the ERC-8004 byte comparison all passed. The ERC-8004 fixture remains 212059 bytes
+with the SHA256 above; it was not regenerated. Release entries remain in 2.112.0.
+The latest origin/main was integrated before final checks (already up to date).
 
-| ID | Guard | Result |
+Pre-CI command: `preci.py --repo . --base origin/main --ejecutar`. The PR contains
+the complete job/command/result table and the pre-CI table. No transactions,
+deployment, publication or PR merge were performed.
+
+## Mutation inventory
+
+`scripts/mutate-near-erc8004.mjs` now enumerates M01-M105 and the external review's
+R01-R20. Every mutant was rerun: **125/125 killed**, with no survivors, invalid
+mutants or timeouts. Each process has a 120-second timeout and each mutation is
+restored with git checkout; the tree was clean before and after the run.
+M90-M96 isolate each formerly grouped correlation; M97-M102 isolate network and
+finality rules; M103-M105 cover storage defaults. R01-R20 retain the review IDs,
+including all 15 previously surviving mutations.
+
+| ID | Guard or default | Result |
 | --- | --- | --- |
 | M01 | network allowlist | KILLED |
 | M02 | config network binding | KILLED |
@@ -177,3 +189,39 @@ mutants or timeout kills. The worktree was clean before and after restoration.
 | M87 | parallel feedback arrays | KILLED |
 | M88 | argument snapshot | KILLED |
 | M89 | config snapshot | KILLED |
+| M90 | feedback tag1 equality | KILLED |
+| M91 | feedback tag2 equality | KILLED |
+| M92 | feedback endpoint equality | KILLED |
+| M93 | feedback URI equality | KILLED |
+| M94 | feedback hash equality | KILLED |
+| M95 | feedback proof verifier equality | KILLED |
+| M96 | feedback proof identifier equality | KILLED |
+| M97 | outcome verifier network | KILLED |
+| M98 | final execution status equality | KILLED |
+| M99 | explicit malformed finality is present | KILLED |
+| M100 | event API checks finality | KILLED |
+| M101 | outcome API checks finality | KILLED |
+| M102 | legacy outcome without finality | KILLED |
+| M103 | URI storage bytes | KILLED |
+| M104 | metadata decoded bytes | KILLED |
+| M105 | storage safety yocto | KILLED |
+| R01 | proof feedback default 150 to 120 TGas | KILLED |
+| R02 | plain feedback default 60 to 40 TGas | KILLED |
+| R03 | ordinary default 30 to 300 TGas | KILLED |
+| R04 | transfer-call default 50 to 300 TGas | KILLED |
+| R05 | metadata omits 128 storage bytes | KILLED |
+| R06 | response budget 512 to 256 bytes | KILLED |
+| R07 | approval budget 256 to 1 byte | KILLED |
+| R08 | feedback agent correlation | KILLED |
+| R09 | proof verifier and identifier correlation | KILLED |
+| R10 | feedback tag correlations | KILLED |
+| R11 | feedback endpoint URI and hash correlations | KILLED |
+| R12 | feedback decimals correlation | KILLED |
+| R13 | rejected callback with new_feedback | KILLED |
+| R14 | duplicate registered events | KILLED |
+| R15 | proof on plain feedback | KILLED |
+| R16 | signer ignores caller clock | KILLED |
+| R17 | optimistic RPC finality | KILLED |
+| R18 | ignore verifier config gas floor | KILLED |
+| R19 | ordinary default 30 to 31 TGas | KILLED |
+| R20 | transfer-call default 50 to 51 TGas | KILLED |
