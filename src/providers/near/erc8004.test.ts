@@ -568,3 +568,17 @@ describe('isolated guard mutation regressions', () => {
     expect(r.parseNearErc8004ReceiptEvents([receipt(eventFor('nft_mint',{owner_id:'payer.near',token_ids:['0'],memo:1}))],net)).toEqual([]);
   });
 });
+
+describe('snapshot before validation', () => {
+  it('reads argument accessors once and validates the exact detached value', () => {
+    let reads=0;
+    const args={get agent_uri(){reads++;return reads===1?'ipfs://card':'invalid uri';}};
+    const tx=r.buildNearErc8004Transaction('register',common(),args);
+    expect(reads).toBe(1);expect(params(tx).args).toEqual({agent_uri:'ipfs://card'});
+  });
+  it('reads config accessors once and consumes the validated detached quote', () => {
+    const o=common(),quote=o.config.identity.register_deposit;let reads=0;
+    Object.defineProperty(o.config.identity,'register_deposit',{enumerable:true,get(){reads++;return reads===1?quote:'999999999999999999999999';}});
+    const tx=r.buildNearErc8004Register(o);expect(reads).toBe(1);expect(params(tx).deposit).toBe(quote);
+  });
+});

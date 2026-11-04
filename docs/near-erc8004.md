@@ -29,7 +29,7 @@ import {
   parseNearErc8004RegisterOutcome,
 } from 'uvd-x402-sdk/near';
 
-const network = 'near:mainnet';
+const network = 'near:mainnet' as const;
 const client = new NearErc8004Client({ network });
 const config = await client.getConfig();
 const options = { network, config, signerId: executionMarketAccount };

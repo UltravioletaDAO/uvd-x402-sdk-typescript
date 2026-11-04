@@ -130,9 +130,10 @@ const methods: Record<NearErc8004Method, { target: NearErc8004Contract; required
 };
 function canonicalArgs(required: Fields, optional: Fields, input: unknown): Record<string, unknown> {
   if (!s.object(input) || Object.keys(input).some(k => !Object.hasOwn(required, k) && !Object.hasOwn(optional, k))) throw new Error('Unexpected ERC-8004 argument');
+  const source = JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
   const args: Record<string, unknown> = {};
-  for (const [k, check] of Object.entries(required)) { s.check(input[k], check, k); args[k] = input[k]; }
-  for (const [k, check] of Object.entries(optional)) if (input[k] != null) { s.check(input[k], check, k); args[k] = input[k]; }
+  for (const [k, check] of Object.entries(required)) { s.check(source[k], check, k); args[k] = source[k]; }
+  for (const [k, check] of Object.entries(optional)) if (source[k] != null) { s.check(source[k], check, k); args[k] = source[k]; }
   return JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
 }
 export interface NearErc8004BuildOptions {
@@ -154,6 +155,7 @@ export function normalizeNearErc8004Uri(uri: string): string {
 export function buildNearErc8004Transaction<M extends NearErc8004Method>(method: M, options: NearErc8004BuildOptions,
   input: NearErc8004MethodArgs[M]): NearErc8004Transaction {
   const o = { ...options }, t = targets(o.network);
+  o.config = JSON.parse(JSON.stringify(o.config)) as NearErc8004Config;
   validateConfig(o.config, o.network); account(o.signerId, 'signerId');
   if (!Object.hasOwn(methods, method)) throw new Error('Unknown ERC-8004 method');
   const spec = methods[method];

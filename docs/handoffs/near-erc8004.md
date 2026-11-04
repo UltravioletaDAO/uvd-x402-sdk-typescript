@@ -46,12 +46,12 @@ an offline byte comparison. Neither tests nor CI regenerate from the network.
 
 ## Verification and auto-refutation
 
-The new suite currently has 274 passing offline tests. It covers every builder,
+The new suite currently has 276 passing offline tests. It covers every builder,
 view and event, config/amount/gas bounds, exact decimals and UTF-8, URI schemes and
 RFC characters, base64 canonicality, deadlines, accounts, network binding,
 receipt status, rejection provenance, and Borsh signatures.
 
-`scripts/mutate-near-erc8004.mjs` enumerates M01-M87. The first pass identified
+`scripts/mutate-near-erc8004.mjs` enumerates M01-M89. The first pass identified
 six test gaps in independently checking transport and optional-event fields;
 regressions now isolate these conditions. One redundant emitter filter was
 removed because each event already binds the exact network-specific executor.
@@ -69,3 +69,6 @@ Final CI commands and results are recorded in the PR. Pre-CI command:
 No transactions were sent, no deployment or publication was performed, and no
 merge was made. On-chain ownership, proof availability, actual storage charges
 and pending callback state remain contract checks.
+
+The original 87 mutations all passed their second run. Two additional mutations
+cover detached argument/config snapshots before validation and signing.
