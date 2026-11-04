@@ -74,7 +74,39 @@ commit `9e5c4d2772d980074771d09f58f670e11f2dcc9d`, avoiding a circular merge
 dependency between the two open PRs. The 6784-byte TS fixture is unchanged; SHA256
 `80eeb72f0ee5a4a933b8592f88387d6c4a1f2234a97b02a1f94969878294be38`.
 
-### Mutation inventory
+### Round 2: successful receipt outcomes
+
+The receipt parser requires both the selected network's registered executor and
+an object status with a string SuccessValue or SuccessReceiptId. It skips the
+whole receipt for Failure (including a malformed mixed failure/success object),
+Unknown, absent or malformed status. Receipt and log order remain unchanged.
+Raw-log callers must establish both emitter provenance and execution success.
+
+Tests use the exact agent_registered event and registry.arras-escrow.near. There
+are 278 registry tests plus four byte-parity tests; existing executor regressions
+carry a successful status so emitter validation remains independently tested.
+The shared 6,784-byte fixture and Python fixture commit in CI are unchanged.
+
+PowerShell with Node 20.20.2 and Python 3.11.4: the CI=true base suite passes 3,636
+tests; this head passes 3,918. Both have the same OWS native-load failure on
+Windows, with zero new failing suites/tests. npm ci resolved the initial SQLite
+ABI failure. Typecheck, lint, ESM/CJS/types build and package smoke pass.
+The refutator's r1-proofs.mjs now gives 1 event for both success statuses and 0
+for both Failure cases, Unknown and missing status. Existing TS/Python runtime
+conformance passes 512 checks across nine phases in a fresh Python 3.11 venv.
+
+An independent adversarial subagent, required by the dispatch's security rule,
+checked 2,142 combinations of status, executor and network, all four events and
+mixed receipt order; no P1/P2. Its two documentation notes were addressed.
+Python receipt-status parity is coordinated in companion PR #81; its old head
+9868ee01 still accepts failed receipts, so the unchanged shared-fixture check is
+not evidence that this behavioral issue has been fixed there.
+
+All 126 mutations were killed (M01-M117 retained, M118-M126 added), with no
+survivors, invalid mutations or timeouts. Each process had a 120-second limit;
+the tree was clean before and after and every source edit was restored.
+
+## Mutation inventory
 
 | ID | Guard | Result |
 |---|---|---|
@@ -195,3 +227,12 @@ dependency between the two open PRs. The 6784-byte TS fixture is unchanged; SHA2
 | M115 | isFeedbackPending rejects asynchronously | KILLED |
 | M116 | update deposit check applies | KILLED |
 | M117 | cross-repo vector byte equality | KILLED |
+| M118 | receipt status filter | KILLED |
+| M119 | receipt Failure accepted | KILLED |
+| M120 | receipt SuccessReceiptId rejected | KILLED |
+| M121 | receipt missing status accepted | KILLED |
+| M122 | receipt status object | KILLED |
+| M123 | receipt SuccessValue string | KILLED |
+| M124 | receipt SuccessReceiptId string | KILLED |
+| M125 | receipt Failure overrides success | KILLED |
+| M126 | receipt SuccessValue rejected | KILLED |
