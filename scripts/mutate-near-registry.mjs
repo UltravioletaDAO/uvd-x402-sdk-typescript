@@ -11,7 +11,7 @@ function git(...args) {
   return p.stdout;
 }
 if (git('status', '--porcelain').trim()) throw new Error('Commit changes before mutation testing');
-const source = readFileSync(file, 'utf8');
+const source = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 const changes = [];
 function add(name, before, after) {
   if (source.split(before).length !== 2) throw new Error(`Mutation must match once: ${name}`);
