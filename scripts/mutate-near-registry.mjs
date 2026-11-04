@@ -110,6 +110,7 @@ add('view rater account', "account(input.rater, 'rater');", '');
 add('boolean field', "const boolean: Check = (v) => typeof v === 'boolean';", 'const boolean: Check = () => true;');
 add('role field', "v === 'payer' || v === 'receiver'", 'true');
 
+add('config u8 max_score', 'u32(v) && (v as number) <= 255', 'u32(v)');
 const requested = process.argv.slice(2);
 const selected = changes.filter((m) => !requested.length || requested.includes(m.id));
 const env = { ...process.env, HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', NO_PROXY: '127.0.0.1,localhost', AWS_SHARED_CREDENTIALS_FILE: process.platform === 'win32' ? 'NUL' : '/dev/null' };

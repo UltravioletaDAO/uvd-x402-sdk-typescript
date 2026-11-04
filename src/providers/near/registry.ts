@@ -256,7 +256,7 @@ const summaryCheck = record({ ...summaryFields, account_id: accountCheck, as_pay
 const configCheck = record({ version: (v) => v === 'arras-registry-v1', escrows: array(accountCheck), agents: u32,
   feedbacks: u32, register_deposit: u128, feedback_deposit: u128, min_gas_give_feedback: u64,
   limits: record({ max_agent_uri_len: u32, max_metadata_len: u32, max_feedback_uri_len: u32, max_tag_len: u32,
-    max_payment_id_len: u32, max_score: u32, max_list_limit: u32, pending_ttl_blocks: u64 }) });
+    max_payment_id_len: u32, max_score: (v) => u32(v) && (v as number) <= 255, max_list_limit: u32, pending_ttl_blocks: u64 }) });
 
 /** Return the JSON-RPC result (call_function response with result: number[]), not its outer envelope. */
 export type RegistryRpc = (method: string, params: Record<string, unknown>) => Promise<unknown>;

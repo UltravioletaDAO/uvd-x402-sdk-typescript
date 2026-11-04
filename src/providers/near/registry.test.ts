@@ -402,3 +402,8 @@ describe('mutation regressions: specific guards and complete decoded rows', () =
     expect(() => r.parseGiveFeedbackOutcome({ status: { SuccessValue: 'b nVsbA==' } })).toThrow('Invalid base64');
   });
 });
+
+it('decodes config max_score as u8 rather than u32', async () => {
+  expect(await r.getConfig(withRpc({ ...config, limits: { ...config.limits, max_score: 255 } }))).toBeTruthy();
+  await expect(r.getConfig(withRpc({ ...config, limits: { ...config.limits, max_score: 256 } }))).rejects.toThrow('shape');
+});
