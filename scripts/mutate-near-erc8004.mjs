@@ -23,7 +23,7 @@ add('config gas floor','BigInt(v as string) < min','false');
 add('config gas ceiling','BigInt(v as string) > 300n * TGAS','false');
 add('signer account',"account(o.signerId, 'signerId');",'');
 add('unknown args','Object.keys(input).some(k => !Object.hasOwn(required, k) && !Object.hasOwn(optional, k))','false');
-add('required argument checks','s.check(input[k], check, k); args[k] = input[k];','args[k] = input[k];');
+add('required argument checks','for (const [k, check] of Object.entries(required)) { s.check(input[k], check, k);','for (const [k, check] of Object.entries(required)) {');
 add('optional argument checks','if (input[k] != null) { s.check(input[k], check, k);','if (input[k] != null) {');
 add('deadline expired','deadline < BigInt(now)','false');
 add('deadline maximum','deadline > BigInt(now) + BigInt(o.config.identity.limits.max_deadline_delay_ns)','false');
