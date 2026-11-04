@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.111.0] - 2026-11-03
+
+### Added
+
+- Arras registry v1 helpers on `uvd-x402-sdk/near`: offline wallet-selector builders, normal NEAR transaction signing, injectable typed views, feedback outcome codes and strict NEP-297 events. Mainnet targets `registry.arras-escrow.near` with `v1.arras-escrow.near`; testnet has no registered target.
+- Exact registry validation, deterministic reputation summaries by escrow/operator, and safe display helpers. Includes fixed argument/signature/event vectors, offline boundary tests, a mutation runner, and integration documentation in `docs/near-registry.md`.
+
 ## [2.110.0] - 2026-11-03
 
 ### Added
@@ -83,7 +90,7 @@
 - `uvd-x402-sdk/batch-settlement` (new subpath, `src/batch-settlement.ts`): the BUYER side of the x402 `batch-settlement` scheme on EVM (coinbase/x402 `specs/schemes/batch-settlement/scheme_batch_settlement_evm.md`), ported from the Python SDK's `uvd_x402_sdk.batch_settlement`. `computeChannelId` (the chain-bound EIP-712 hash of a `ChannelConfig`), `signVoucher` (the cumulative `Voucher`), `erc3009DepositNonce` (`keccak256(abi.encode(bytes32 channelId, uint256 salt))`), `buildDepositPayload` (ERC-3009 `ReceiveWithAuthorization` to the deposit collector `0x4020806089470a89826cB9fB1f4059150b550004` plus the first voucher), `buildVoucherPayload`, `paymentPayload` (the x402 v2 envelope), `paymentHeader` (the `PAYMENT-SIGNATURE` value) and `BatchSettlementClient` (`createPayment` decides deposit or voucher; `confirm` records a paid response). It signs through anything with `signTypedData(typedDataJson)`, so `EnvKeyAdapter`, `OWSWalletAdapter` and a remote wallet all work; no key is loaded by the module. Channel state lives in a `ChannelStorage` whose `get`/`set` may return promises: `MemoryChannelStorage`, or `FileChannelStorage` (one JSON file, written to a temporary file beside it and renamed over it; `node:fs` is loaded on its first use, not when the module is imported). It is not exported from the root entry, which browser bundles import.
 - Money rules, the Python SDK's: one deposit is capped by `maxDeposit` (default `DEFAULT_MAX_DEPOSIT`, `1_000_000` atomic units); the seller's `extra.minDeposit` is a target and is ignored below `amount`; a deposit the next voucher needs above the cap throws `BatchSettlementError` with nothing signed; only `scheme: 'batch-settlement'`, only `eip155:*` networks and only `assetTransferMethod` absent or `'eip3009'` are signed (`'permit2'` throws); `extra.receiverAuthorizer` must be a non-zero address and `extra.withdrawDelay` within 900..2592000. `confirm` writes previous cumulative + `chargedAmount` and never copies the seller's `channelState`: a `chargedAmount` above the request's `amount`, or a `channelState.chargedCumulativeAmount` other than the buyer's own sum, leaves the state as it was and resolves to `false`. Amounts are bigints.
 - Delegated payers (EIP-7702): `new BatchSettlementClient(wallet, { delegationResolver })` (and `buildDepositPayload(..., { delegationResolver })`) wraps the deposit's ERC-3009 `ReceiveWithAuthorization` for ERC-1271 when the payer is an Alchemy SMA 7702 account, through the same `replaySafeTypedData` + `wrapSignature` of `src/erc7702.ts` that `buildEscrowPreAuth` uses, as the Python SDK does from 0.100.0. The resolver is the SDK's `DelegationResolver` (`(address, network) -> target | true | false | null`, sync or async): `true` with no target or a target in `SMA_WRAP_TARGETS` wraps; `false` or any other target (a plain-ECDSA 1271 delegate such as Execution Market's `FeedbackDelegate`) signs plain; `null` or a resolver that throws (the chain could not be read) throws `BatchSettlementError` instead of guessing. Without a resolver the payer is taken as a plain EOA, as before. Vouchers are never wrapped (the channel's `payerAuthorizer` is verified by ECDSA).
-- `paymentHeader` gives the Python SDK's bytes: compact JSON with every character above `~` written as a JSON escape (`json.dumps` with `ensure_ascii`), so a token named `USD₮0` produces the same header in both SDKs.
+- `paymentHeader` gives the Python SDK's bytes: compact JSON with every character above `~` written as a JSON escape (`json.dumps` with `ensure_ascii`), so a token named `USDâ‚®0` produces the same header in both SDKs.
 
 ### Not in this release
 
@@ -101,7 +108,7 @@
 
 ### Fixed
 
-- `EnvKeyAdapter.signTypedData`, `wagmiLifecycleSigner` and `OWSWalletAdapter.signTypedData`, which take typed data as a JSON string, read an integer of 22 to 78 digits written as a JSON number with every digit, as Python's `json` reads it, where `JSON.parse` rounds it. A `LifecycleOrder` whose 32-byte `salt` is written as 77 bare digits, as the Python SDK wrote it before 0.80.0, is now signed, with the signature the Python SDK makes for the same text. 2.102.0 refused it (`INVALID_CONFIG`, `typed data message.paymentInfo.salt is the JSON number 7.76…e+76`), and before that it was signed rounded, over a different struct. 22 digits is where JavaScript stops writing plain digits: a number below 1e21 that a JavaScript hop already rounded comes back in up to 21 of them (`JSON.stringify(JSON.parse('1234567890123456789'))` is `1234567890123456800`), so those digits may not be the ones the producer wrote. Other writers print a rounded double in full, in 22 digits or more: its exact value (`BigInt(n).toString()`, Python's `int(f)`, Java's `new BigDecimal(d)`) or its shortest digits followed by zeros (`toLocaleString`, `Intl.NumberFormat`, Java's `toPlainString()`). So a literal that is exactly a double, or that has at most 17 significant digits followed by zeros, is not read as more exact than a double either; a random 32-byte salt is neither but with odds of about 1 in 10**60, while 10**21 and -(2**255) are. An integer field holding a number past 2**53 - 1 of up to 21 digits, or shaped like a double, is still refused, as in 2.102.0, and so is one written with an exponent or a fraction (`7.757…e+76`) or with more than 78 digits (2**256 - 1 has 78), always with the field named. Everything else reads as `JSON.parse` reads it: a text with no integer of 22 to 78 digits is parsed by `JSON.parse` itself; otherwise two equal keys keep the last value, `__proto__` is an own key, a plain property added to `Object.prototype` is never read into the value, a value that is not a string is read as `String(value)`, and anything that is not JSON throws a `SyntaxError`. The wallet client behind `wagmiLifecycleSigner` gets such an integer as a bigint, viem's type for a uint. `OWSWalletAdapter` hands OWS each `types` field as `{ name, type }` only, what ethers hashes, so a key it does not read never reaches `JSON.stringify`. Typed data given as an object (`buildLifecycleTypedData`, `buildLifecycleAuth`, `lifecycleAuthFromSignature` and every other path 2.102.0 guards) is refused as before: there `JSON.parse` rounded the number before the SDK saw it.
+- `EnvKeyAdapter.signTypedData`, `wagmiLifecycleSigner` and `OWSWalletAdapter.signTypedData`, which take typed data as a JSON string, read an integer of 22 to 78 digits written as a JSON number with every digit, as Python's `json` reads it, where `JSON.parse` rounds it. A `LifecycleOrder` whose 32-byte `salt` is written as 77 bare digits, as the Python SDK wrote it before 0.80.0, is now signed, with the signature the Python SDK makes for the same text. 2.102.0 refused it (`INVALID_CONFIG`, `typed data message.paymentInfo.salt is the JSON number 7.76â€¦e+76`), and before that it was signed rounded, over a different struct. 22 digits is where JavaScript stops writing plain digits: a number below 1e21 that a JavaScript hop already rounded comes back in up to 21 of them (`JSON.stringify(JSON.parse('1234567890123456789'))` is `1234567890123456800`), so those digits may not be the ones the producer wrote. Other writers print a rounded double in full, in 22 digits or more: its exact value (`BigInt(n).toString()`, Python's `int(f)`, Java's `new BigDecimal(d)`) or its shortest digits followed by zeros (`toLocaleString`, `Intl.NumberFormat`, Java's `toPlainString()`). So a literal that is exactly a double, or that has at most 17 significant digits followed by zeros, is not read as more exact than a double either; a random 32-byte salt is neither but with odds of about 1 in 10**60, while 10**21 and -(2**255) are. An integer field holding a number past 2**53 - 1 of up to 21 digits, or shaped like a double, is still refused, as in 2.102.0, and so is one written with an exponent or a fraction (`7.757â€¦e+76`) or with more than 78 digits (2**256 - 1 has 78), always with the field named. Everything else reads as `JSON.parse` reads it: a text with no integer of 22 to 78 digits is parsed by `JSON.parse` itself; otherwise two equal keys keep the last value, `__proto__` is an own key, a plain property added to `Object.prototype` is never read into the value, a value that is not a string is read as `String(value)`, and anything that is not JSON throws a `SyntaxError`. The wallet client behind `wagmiLifecycleSigner` gets such an integer as a bigint, viem's type for a uint. `OWSWalletAdapter` hands OWS each `types` field as `{ name, type }` only, what ethers hashes, so a key it does not read never reaches `JSON.stringify`. Typed data given as an object (`buildLifecycleTypedData`, `buildLifecycleAuth`, `lifecycleAuthFromSignature` and every other path 2.102.0 guards) is refused as before: there `JSON.parse` rounded the number before the SDK saw it.
 
 ### Tests
 
@@ -138,7 +145,7 @@ Merged after the 2.104.2 bump (#51) and published in 2.104.2: npm's 2.104.2 was 
 ### Fixed
 
 - `ESCROW_CONTRACTS[143].usdc` (Monad, `uvd-x402-sdk/backend`) is written in its EIP-55 checksum, `0x754704Bc059F8C67012fEd69BC8A327a5aafb603`, the spelling of Execution Market's network registry. It was `0x754704Bc059F8C67012fEd69BC8a327a5aafb603`, which `ethers.getAddress` rejects. Same address: `buildEscrowPreAuth` lowercased every table address before checksumming it, so what it signed does not change; it no longer lowercases, and a table row with a wrong checksum would throw instead of being repaired.
-- `buildEscrowPreAuth` refuses a network config whose `payment_info_typehash` is not AuthCaptureEscrow's PaymentInfo typehash, the new `ESCROW_PAYMENT_INFO_TYPEHASH` (exported from the root; `0xae68ac7c…6591`, equal to the backend's `PAYMENT_INFO_TYPEHASH`), as the Python SDK's `build_escrow_pre_auth` does. Case, an `0x` / `0X` prefix and surrounding spaces aside; any other value, or a value that is not a string, throws `X402Error` `INVALID_CONFIG` before any delegation lookup and with nothing signed. Before, the config's value went into the nonce as given, and a different one produced a nonce that is not the escrow's `getHash`.
+- `buildEscrowPreAuth` refuses a network config whose `payment_info_typehash` is not AuthCaptureEscrow's PaymentInfo typehash, the new `ESCROW_PAYMENT_INFO_TYPEHASH` (exported from the root; `0xae68ac7câ€¦6591`, equal to the backend's `PAYMENT_INFO_TYPEHASH`), as the Python SDK's `build_escrow_pre_auth` does. Case, an `0x` / `0X` prefix and surrounding spaces aside; any other value, or a value that is not a string, throws `X402Error` `INVALID_CONFIG` before any delegation lookup and with nothing signed. Before, the config's value went into the nonce as given, and a different one produced a nonce that is not the escrow's `getHash`.
 
 - `buildEscrowPreAuth` refuses a `min_fee_bps` above the operator's static fee, `OPERATOR_FEE_BPS` (1300), as the Python SDK does from 0.97.0: `X402Error` `INVALID_CONFIG`, with nothing signed. 0 to 1300 sign as before.
 
@@ -180,7 +187,7 @@ Merged after the 2.104.2 bump (#51) and published in 2.104.2: npm's 2.104.2 was 
 - Every 402 this SDK builds carries `accepts`, one entry per payment requirement, also when there is only one: `createHonoMiddleware`, `createFetchPaywall`, `create402Response` and `createPaymentMiddleware`, which answers with it. x402 puts the terms in `accepts` in both versions, and the SDK wrote it only in v2 and only for two or more requirements. So the README setup (`createHonoMiddleware` with one `skale-base` accept), every v1 402 (the `createPaymentMiddleware` default included) and a v2 402 with one requirement had no `accepts`: a reader that looks for it found no payment terms. A v2 402 lists every requirement, written as before (`amount`, CAIP-2 network). A v1 402 lists the requirement it already had at the top level, the same object as the flat fields (`maxAmountRequired`, the v1 network: a plain name where the registry has one), and only that one. A Hono seller pinned to v1 with several accepts never showed the others in its 402, and `X402Client`, which takes the cheapest offer listed whatever chain its wallet is on, would move to one of them, or fail on it. The flat fields stay beside `accepts`, written in the version the body declares.
 - `createHonoMiddleware` and `createFetchPaywall`, with no `x402Version` pinned, advertise v2 for a single accept whose network has a CAIP-2 form, also when it is written as a name (`skale-base` goes out as `eip155:1187947933`, `hedera` as `hedera:mainnet`). It advertised v1 for those. A single accept on a network with no CAIP-2 form stays v1 (now with `accepts`): XRPL (`xrpl`, `xrpl-testnet`, the alias `xrpl-mainnet`) and names the chain registry does not know. The one exception is a name of an `Object.prototype` member: the registry lookup reads inherited keys, so `constructor` goes out v2 as `undefined:Object`, the string every v2 402 on `main` already wrote for it. Two or more accepts are v2, as before. `x402Version: 1`, pinned, stays v1, with the first accept, the one the body showed before, in `accepts`.
 - Every v2 402 carries the `PAYMENT-REQUIRED` header: base64 of the x402 v2 PaymentRequired, `{ x402Version: 2, resource: { url, description, mimeType }, accepts, extensions? }`, each accept in the v2 shape only (`scheme`, `network`, `amount`, `asset`, `payTo`, `maxTimeoutSeconds`, `extra`). x402 v2 carries the terms in that header, and its reference client (`@x402/core`) reads the body only for v1, so it could read no v2 402 from this SDK: the v2 402 of `createHonoMiddleware` and `createFetchPaywall`, and `create402Response` (with `createPaymentMiddleware`) given `x402Version: 2`. `extensions` given to `create402Response` go in it too. An accept whose network has no CAIP-2 form (XRPL) cannot be written in v2 and stays in the body only; with none left, there is no header. A header longer than 8 KiB (a large `extensions`) is left out, because Node's HTTP client, `fetch` included, refuses a response whose headers pass 16 KiB in all; the body carries the terms as before. The body does not change. A v1 402 has no header: the reference client reads its body.
-- EURC on Avalanche (`0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD`) signs with the EIP-712 name `Euro Coin`, the one the contract has. The registry said `EURC` from the day EURC was added (2025-12-20) through 2.102.0, so every EURC authorization signed on Avalanche, by `EVMProvider.signPayment` and by `X402Client.createPayment`, was under a domain the contract does not have, and the contract rejects it. The Python SDK and the facilitator already said `Euro Coin`. Read on 2026-10-10 with `eth_call`: `name()` is `Euro Coin`, `version()` is `2`, and `DOMAIN_SEPARATOR()` (`0x094e957a…f4b1`, block 97214492) is the hash of that domain and not of the one with `EURC`. Base's EURC (`0x60a3…db42`) does say `EURC` on-chain and is unchanged.
+- EURC on Avalanche (`0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD`) signs with the EIP-712 name `Euro Coin`, the one the contract has. The registry said `EURC` from the day EURC was added (2025-12-20) through 2.102.0, so every EURC authorization signed on Avalanche, by `EVMProvider.signPayment` and by `X402Client.createPayment`, was under a domain the contract does not have, and the contract rejects it. The Python SDK and the facilitator already said `Euro Coin`. Read on 2026-10-10 with `eth_call`: `name()` is `Euro Coin`, `version()` is `2`, and `DOMAIN_SEPARATOR()` (`0x094e957aâ€¦f4b1`, block 97214492) is the hash of that domain and not of the one with `EURC`. Base's EURC (`0x60a3â€¦db42`) does say `EURC` on-chain and is unchanged.
 
 ### Changed
 
@@ -216,7 +223,7 @@ Merged after the 2.104.2 bump (#51) and published in 2.104.2: npm's 2.104.2 was 
 
 ### Fixed
 
-- A uint that arrives as a JSON number above `Number.MAX_SAFE_INTEGER` (2**53 - 1) is refused. It is never signed or hashed rounded. `JSON.parse` turns such a number into the nearest double, so a 32-byte `salt` written as a number came out as 7.76e+76 (for `0xab…ab`). The SDK then signed `BigInt()` of that double: a different `LifecycleOrder`, which the facilitator answers with `bad_signature`, and no error anywhere. The new error names the field, e.g. `paymentInfo.salt is the JSON number 7.76…e+76, larger in magnitude than Number.MAX_SAFE_INTEGER (2**53 - 1): JSON.parse has already rounded it…`. A decimal or 0x-hex string, or a bigint, carries any width and is accepted as before. The guard covers:
+- A uint that arrives as a JSON number above `Number.MAX_SAFE_INTEGER` (2**53 - 1) is refused. It is never signed or hashed rounded. `JSON.parse` turns such a number into the nearest double, so a 32-byte `salt` written as a number came out as 7.76e+76 (for `0xabâ€¦ab`). The SDK then signed `BigInt()` of that double: a different `LifecycleOrder`, which the facilitator answers with `bad_signature`, and no error anywhere. The new error names the field, e.g. `paymentInfo.salt is the JSON number 7.76â€¦e+76, larger in magnitude than Number.MAX_SAFE_INTEGER (2**53 - 1): JSON.parse has already rounded itâ€¦`. A decimal or 0x-hex string, or a bigint, carries any width and is accepted as before. The guard covers:
   - `buildLifecycleTypedData` and `buildLifecycleAuth`: `amount` (`INVALID_AMOUNT`), `deadline`, every uint of `paymentInfo`, and the domain's `chainId` (`INVALID_CONFIG`).
   - `lifecycleAuthFromSignature`: a document whose integer fields crossed JSON as such numbers (`INVALID_CONFIG`).
   - `EnvKeyAdapter.signTypedData` and `wagmiLifecycleSigner`, which read typed data from a JSON string. Both now refuse before the wallet is asked, by the declared types: every `uintN` / `intN` of `message`, nested structs and arrays included, plus `domain.chainId`. `message` is walked as the root struct ethers signs and, when `primaryType` names another struct, as that one too: viem, wagmi and `eth_signTypedData_v4` sign the struct `primaryType` names. A number in a field the types do not declare is not hashed and is left alone. Before, ethers already refused such a value in `EnvKeyAdapter`, but as `overflow`, without naming the field. `OWSWalletAdapter` already refused; its message now says the value was rounded.
@@ -267,7 +274,7 @@ Merged after the 2.104.2 bump (#51) and published in 2.104.2: npm's 2.104.2 was 
 - `MAX_SEARCH_LEN` is still exported and still 128; it now documents the cap of older facilitators (up to 2.46.1, and some 2.47.0 builds). `getResourceByUrl()` still searches with the URL's first 128 characters (or `maxSearchLen`, if lower), so the lookup works against old and new facilitators, and it no longer cuts a character in half (an astral character at the cut was sent as U+FFFD).
 - `listResources()` (and `iterateResources()`, on every page) takes five optional routing filters: `maxPriceUsd`, `method`, `hasInputSchema`, `kind` and `excludeHost`. They need facilitator 2.48.0 or later (some 2.47.0 builds have them and some do not). A facilitator without them (every one up to 2.46.1) answers each, as any query parameter it does not know, with a 400 that names it, so each filter is sent only when passed, and a call that passes none sends exactly the query it sent before. A value that is passed is sent (`maxPriceUsd: 0` and `hasInputSchema: false` included) or refused before the request, never dropped; `null` counts as not passed. Each is checked by the rule the facilitator parses it with (x402-rs `parse_max_price_usd`, `parse_method`, `parse_kind`, `parse_exclude_hosts`, the same in 2.48.0 and 2.49.0), so no value the client sends is one the facilitator answers with a 400:
   - `maxPriceUsd`: a number `>= 0`, sent in decimal notation. `String(1e-7)` is `"1e-7"`, which the facilitator refuses; it goes out as `0.0000001` (and `1e21` as 22 digits), the same number. One that takes more than 32 characters that way (`1e-31`, `1e32`) is refused.
-  - `method`: `GET`, `POST`, `PUT` or `PATCH` (`METHOD_FILTERS`), in any case and with spaces around it, sent uppercased. `HEAD`, `DELETE`, `OPTIONS` and anything else are refused, and so are letters outside ASCII (`toUpperCase()` turns `'poſt'` into `'POST'`; the facilitator does not).
+  - `method`: `GET`, `POST`, `PUT` or `PATCH` (`METHOD_FILTERS`), in any case and with spaces around it, sent uppercased. `HEAD`, `DELETE`, `OPTIONS` and anything else are refused, and so are letters outside ASCII (`toUpperCase()` turns `'poÅ¿t'` into `'POST'`; the facilitator does not).
   - `kind`: `api` or `content`, in any case, sent lowercased; anything else is refused.
   - `excludeHost`: a host name, or up to 20 separated by commas, each read as the facilitator reads it (the host of `http://<host>/`): sent lowercased, IDN as punycode, without a trailing dot, each once. A scheme, path, port (`localhost:8080`, `[::1]:8080`), credentials, query, fragment or whitespace is refused, as is a 21st host even when it repeats one (the facilitator counts before removing duplicates).
 
@@ -350,7 +357,7 @@ Merged after the 2.104.2 bump (#51) and published in 2.104.2: npm's 2.104.2 was 
 
 ## [2.98.0] - 2026-09-23
 
-- ERC-8004 on Arc. `arc` and `arc-testnet` are now `Erc8004Network`s, and `ERC8004_CONTRACTS` carries the canonical registries for both: identity, reputation and validation. On `arc` these are `0x8004A169…a432`, `0x8004BAa1…9b63` and `0x8004Cc84…AB58`; on `arc-testnet`, `0x8004A818…BD9e`, `0x8004B663…8713` and `0x8004Cb1B…4272`. These are the addresses the facilitator names in `ARC_MAINNET_CONTRACTS` / `ARC_TESTNET_CONTRACTS`. Each was read on-chain on 2026-09-23: an EIP-1967 proxy with the same implementation as Base / Base Sepolia, and `getVersion()` = 2.0.0.
+- ERC-8004 on Arc. `arc` and `arc-testnet` are now `Erc8004Network`s, and `ERC8004_CONTRACTS` carries the canonical registries for both: identity, reputation and validation. On `arc` these are `0x8004A169â€¦a432`, `0x8004BAa1â€¦9b63` and `0x8004Cc84â€¦AB58`; on `arc-testnet`, `0x8004A818â€¦BD9e`, `0x8004B663â€¦8713` and `0x8004Cb1Bâ€¦4272`. These are the addresses the facilitator names in `ARC_MAINNET_CONTRACTS` / `ARC_TESTNET_CONTRACTS`. Each was read on-chain on 2026-09-23: an EIP-1967 proxy with the same implementation as Base / Base Sepolia, and `getVersion()` = 2.0.0.
 - `arc` joins `RELAYED_FEEDBACK_NETWORKS`, so `supportsRelayedFeedback('arc')` is `true`. Its v4 `FeedbackDelegate` is `0x955Cc9fB9aB95FC0821ae74197D273dde5dA84f1` (facilitator 2.38.0+), and the rating is recorded under the rater's address. `arc-testnet` stays out: the facilitator serves ERC-8004 reads there, but `POST /feedback/evm/prepare` answers 400 because no delegate is deployed.
 - No other network changed. `src/erc8004-arc.test.ts` pins the three exported lists as 2.97.0 built them: the 2.97.0 table entries must stay byte-identical, the only additions to the table are `arc` / `arc-testnet`, the only addition to the relayed rail is `arc`, and the Solana rail is untouched.
 - Docs: the README's ERC-8004 network list is 23 (21 EVM + 2 Solana). It had also been missing `scroll`, and it named Base `base-mainnet`, a spelling the facilitator rejects. `docs/networks/arc.md` gains an ERC-8004 section with the measurements.
@@ -372,14 +379,14 @@ Merged after the 2.104.2 bump (#51) and published in 2.104.2: npm's 2.104.2 was 
 - Document recovery limits, merchant propagation and the pending live EURC acceptance.
 
 
-## 2.95.0 — 2026-09-17
+## 2.95.0 â€” 2026-09-17
 
 Hedera mainnet/testnet payment policy is native USDC only. HBAR and custom token offers are rejected before signing; HBAR remains the sponsor fee currency.
 
 Migration: replace HBAR requirements with the network-specific USDC token and six-decimal atomic amounts. There is no automatic currency conversion. Historical transaction evidence is retained. Arc USDC/EURC support is unchanged.
 
 
-## 2.94.0 — 2026-09-17
+## 2.94.0 â€” 2026-09-17
 
 - Register EURC for Arc mainnet/testnet with six-decimal euro units and EIP-712 EURC/2.
 - Add signature/domain isolation tests and explicit atomic merchant examples.
@@ -399,25 +406,25 @@ version in the subject, e.g. `feat(stats): ... (v2.46.0)`).
 
 ## [2.91.0] - 2026-09-13
 
-**La autorización EIP-3009 vive 300 s en todas las redes, y ahora se puede
+**La autorizaciÃ³n EIP-3009 vive 300 s en todas las redes, y ahora se puede
 cambiar.** Hasta 2.90.0 la ventana (`validBefore = now + N`) era 300 s en Base y
 **60 s en las otras once redes EVM**, escrita dos veces y sin forma de
-sobreescribirla. Un vendedor que liquida async (verificar → entregar → liquidar)
-tenía que cerrar el `settle` en esos 60 s, menos los 6 s de gracia del
-facilitador, o la autorización expiraba sola y el vendedor revocaba un acceso
-que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
+sobreescribirla. Un vendedor que liquida async (verificar â†’ entregar â†’ liquidar)
+tenÃ­a que cerrar el `settle` en esos 60 s, menos los 6 s de gracia del
+facilitador, o la autorizaciÃ³n expiraba sola y el vendedor revocaba un acceso
+que sÃ­ se pagÃ³. Es el flujo de MeshRelay Turnstile. Issue #2.
 
 ### Changed
 
 - **Default de 300 s en todas las redes EVM** (antes 300 en Base, 60 en el
   resto). 300 no es a ojo, y tampoco es algo que el facilitador publique como
-  suyo: su `/supported` no trae ningún timeout. Es el timeout que anuncia por
+  suyo: su `/supported` no trae ningÃºn timeout. Es el timeout que anuncia por
   default el lado **vendedor de este mismo SDK**
-  (`DEFAULT_PAYMENT_TIMEOUT_SECONDS`, `src/backend/index.ts:1520`), así que
+  (`DEFAULT_PAYMENT_TIMEOUT_SECONDS`, `src/backend/index.ts:1520`), asÃ­ que
   comprador y vendedor de `uvd-x402-sdk` coinciden sin configurar nada. Es lo
-  que anuncia MeshRelay Turnstile, el vendedor async que destapó el problema
+  que anuncia MeshRelay Turnstile, el vendedor async que destapÃ³ el problema
   (`turnstile/payments.js:121` y `:357`, meshrelay `d4015a2`). Y es el fallback
-  que el catálogo del facilitador le pone a una entrada que omite el campo
+  que el catÃ¡logo del facilitador le pone a una entrada que omite el campo
   (`DEFAULT_MAX_TIMEOUT_SECS`, x402-rs `src/discovery_price.rs:143`, `d8a3360`).
   El facilitador solo rechaza ventanas **cortas**: `assert_time` (x402-rs
   `src/chain/evm.rs:1782-1810`) exige `valid_before >= now + 6 s`, en verify y
@@ -426,34 +433,34 @@ que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
 - **`X402Client.fetch()` firma la ventana que declara el vendedor.** Si el 402
   trae `maxTimeoutSeconds`, la ventana es ese valor acotado a `[1, 3600]`; si no
   lo trae, la del cliente (default 300). Antes el comprador ignoraba el campo, y
-  un vendedor que anunciara más de 300 recibía una firma que vencía antes de su
+  un vendedor que anunciara mÃ¡s de 300 recibÃ­a una firma que vencÃ­a antes de su
   propio `settle`.
-- **Una config inválida se rechaza al construir el cliente**, no en el primer
+- **Una config invÃ¡lida se rechaza al construir el cliente**, no en el primer
   pago: `new X402Client({ validitySeconds: -300 })` lanza `INVALID_CONFIG`.
 
 ### Added
 
 - **`validitySeconds`** en `PaymentInfo` (por pago) y en `X402ClientConfig`
-  (default del cliente). Precedencia: el pago, después el cliente, después 300.
+  (default del cliente). Precedencia: el pago, despuÃ©s el cliente, despuÃ©s 300.
   Un valor que no es un entero positivo se rechaza con `INVALID_CONFIG` **antes**
   de firmar, en vez de caer en silencio al default.
 - **Techo de 3600 s (`MAX_VALIDITY_SECONDS`)**, que es el default del SDK Python
-  y lo más largo que firma hoy cualquier SDK de la casa. Existe porque
+  y lo mÃ¡s largo que firma hoy cualquier SDK de la casa. Existe porque
   `PaymentInfo` tiene la forma de un 402 parseado: quien le pase la respuesta del
-  vendedor tal cual a `createPayment()` estaría dejando que **el vendedor** elija
-  cuánto vive la autorización del pagador. Una ventana de un año es un derecho de
-  cobro en pie: el comprador la da por vencida y se liquida meses después.
-  El facilitador no pone techo —solo rechaza ventanas cortas—, y por eso lo pone
+  vendedor tal cual a `createPayment()` estarÃ­a dejando que **el vendedor** elija
+  cuÃ¡nto vive la autorizaciÃ³n del pagador. Una ventana de un aÃ±o es un derecho de
+  cobro en pie: el comprador la da por vencida y se liquida meses despuÃ©s.
+  El facilitador no pone techo â€”solo rechaza ventanas cortasâ€”, y por eso lo pone
   el SDK del pagador.
 - **`X402PaymentOffer.maxTimeoutSeconds`**: `parse402` mapea el campo del 402 al
-  tipo (antes solo quedaba dentro de `raw`). Un valor que no es un número finito
+  tipo (antes solo quedaba dentro de `raw`). Un valor que no es un nÃºmero finito
   cuenta como no declarado: la oferta sigue siendo legible y aplica la ventana
   del cliente.
-- **Sección «Validity window» en el README**, con los tres lugares de donde sale
+- **SecciÃ³n Â«Validity windowÂ» en el README**, con los tres lugares de donde sale
   la ventana y la precedencia.
 - **`DEFAULT_VALIDITY_SECONDS`**, **`MAX_VALIDITY_SECONDS`**,
   **`resolveValiditySeconds()`** y **`clampValiditySeconds()`** exportados
-  (`src/utils/validity.ts`): una sola definición que leen los dos caminos de
+  (`src/utils/validity.ts`): una sola definiciÃ³n que leen los dos caminos de
   firma, `X402Client.createPayment()` y `EVMProvider.signPayment()`. Un test
   verifica que los dos firman la misma ventana, red por red.
 
@@ -468,8 +475,8 @@ que sí se pagó. Es el flujo de MeshRelay Turnstile. Issue #2.
 ## [2.90.0] - 2026-09-11
 
 **El primer clic en "Pagar" ya abre la billetera.** `usePayment().pay()` era un
-`useCallback` cerrado sobre el `isConnected` del render que lo creó: un handler
-que hacía `await connect()` y enseguida `pay()` usaba el `pay` de antes de que
+`useCallback` cerrado sobre el `isConnected` del render que lo creÃ³: un handler
+que hacÃ­a `await connect()` y enseguida `pay()` usaba el `pay` de antes de que
 existiera la billetera, tiraba "Wallet not connected", y solo el segundo clic,
 ya re-renderizado, firmaba. Medido con Rabby en un consumidor real.
 
@@ -483,37 +490,37 @@ ya re-renderizado, firmaba. Medido con Rabby en un consumidor real.
 
 - **`docs/fricciones-al-montar-un-cobro.md`**: doce fricciones medidas al montar
   un cobro completo con este SDK (gateway en Lambda + panel React), con lo que
-  cambiaría en cada una y lo que sí funcionó a la primera. Entre ellas: `pay()`
+  cambiarÃ­a en cada una y lo que sÃ­ funcionÃ³ a la primera. Entre ellas: `pay()`
   manda dos headers (`X-PAYMENT` y `PAYMENT-SIGNATURE`) y un preflight sin
   `payment-signature` da "Failed to fetch" sin rastro; un rechazo del
   facilitador no deja log si el consumidor no lo escribe, y fuera de Base la
-  firma vence en 60 s; desde 2.88 Solana entra por `import()` dinámico y hay que
+  firma vence en 60 s; desde 2.88 Solana entra por `import()` dinÃ¡mico y hay que
   marcar `@solana/web3.js` y `@solana/spl-token` como `external` en esbuild.
 
 ## [2.89.0] - 2026-09-10
 
-**La decisión de comprar se toma contra la oferta en la mano, no contra el
-catálogo.** Un listado es lo que alguien dijo de su propio precio; el `402` que
-vuelve del request es la oferta, y pueden diferir legítimamente. Así que ahora la
-decisión se evalúa contra **la oferta concreta**, siempre, antes de firmar. Es el
-mismo contrato que el facilitador fijó en Rust (`x402-reqwest`, release 2.25.0),
+**La decisiÃ³n de comprar se toma contra la oferta en la mano, no contra el
+catÃ¡logo.** Un listado es lo que alguien dijo de su propio precio; el `402` que
+vuelve del request es la oferta, y pueden diferir legÃ­timamente. AsÃ­ que ahora la
+decisiÃ³n se evalÃºa contra **la oferta concreta**, siempre, antes de firmar. Es el
+mismo contrato que el facilitador fijÃ³ en Rust (`x402-reqwest`, release 2.25.0),
 escrito una sola vez para que un comprador en cualquiera de los dos lenguajes
 niegue los mismos pagos por las mismas causas nombradas.
 
-**Nada cambia para quien no escribe una política.** `X402Client` sin `policy`
-sostiene `PurchasePolicy.permissive()`, porque este SDK no tenía presupuesto antes
-de esta versión y encenderlo en silencio rechazaría pagos que los consumidores
-hacen hoy. La asimetría es a propósito: quien se sienta a **escribir** una política
+**Nada cambia para quien no escribe una polÃ­tica.** `X402Client` sin `policy`
+sostiene `PurchasePolicy.permissive()`, porque este SDK no tenÃ­a presupuesto antes
+de esta versiÃ³n y encenderlo en silencio rechazarÃ­a pagos que los consumidores
+hacen hoy. La asimetrÃ­a es a propÃ³sito: quien se sienta a **escribir** una polÃ­tica
 se lleva el default seguro.
 
 ### Added
 
-- **`PurchasePolicy`** (`src/policy.ts`) — los cinco campos del contrato:
+- **`PurchasePolicy`** (`src/policy.ts`) â€” los cinco campos del contrato:
 
   | campo | tipo | significado |
   |---|---|---|
-  | `perPayment(asset, amount)` | `bigint`, unidades atómicas | máximo de UN pago en ese activo |
-  | `cumulative(asset, amount)` | `bigint`, unidades atómicas | máximo total mientras viva la política |
+  | `perPayment(asset, amount)` | `bigint`, unidades atÃ³micas | mÃ¡ximo de UN pago en ese activo |
+  | `cumulative(asset, amount)` | `bigint`, unidades atÃ³micas | mÃ¡ximo total mientras viva la polÃ­tica |
   | `spent(asset)` | `bigint` | lo ya registrado; **solo lo mueve `recordSpend`** |
   | `onlyPay([...])` | direcciones | destinatarios permitidos, canonicalizados **por familia** |
   | `allowUnlistedAssets()` | booleano, **false por defecto** | si se puede pagar un activo sin techo declarado |
@@ -534,199 +541,199 @@ se lleva el default seguro.
   });
   ```
 
-- **Orden de evaluación fijo, y es parte del contrato**, porque la PRIMERA causa que
+- **Orden de evaluaciÃ³n fijo, y es parte del contrato**, porque la PRIMERA causa que
   falla es la que se reporta y quien llama ramifica sobre ella:
 
-  `no-readable-offer` → `offer-expired` → `recipient-not-permitted` →
-  `asset-not-budgeted` → `per-payment-limit` → `cumulative-limit`
+  `no-readable-offer` â†’ `offer-expired` â†’ `recipient-not-permitted` â†’
+  `asset-not-budgeted` â†’ `per-payment-limit` â†’ `cumulative-limit`
 
   Los seis son un vocabulario **cerrado** en kebab (`PolicyRefusalCode`), tipado
-  como unión literal, para ramificar sin parsear inglés. No hay `other`: una negativa
+  como uniÃ³n literal, para ramificar sin parsear inglÃ©s. No hay `other`: una negativa
   que quien llama no puede interpretar es una negativa que va a tapar. Cada una lleva
-  los números que la causaron (`requested`, `allowed`, `spent`, `wouldTotal`, `asset`,
+  los nÃºmeros que la causaron (`requested`, `allowed`, `spent`, `wouldTotal`, `asset`,
   `payTo`, `validUntil`, `now`, `offered[]`).
 
-- **`PolicyRefusedError`** — extiende `X402Error` con código `POLICY_REFUSED`, así
-  que un consumidor que ya atrapa `X402Error` sigue atrapándolo; la causa tipada está
-  en `err.refusal` y su código estable en `err.refusal.code`.
+- **`PolicyRefusedError`** â€” extiende `X402Error` con cÃ³digo `POLICY_REFUSED`, asÃ­
+  que un consumidor que ya atrapa `X402Error` sigue atrapÃ¡ndolo; la causa tipada estÃ¡
+  en `err.refusal` y su cÃ³digo estable en `err.refusal.code`.
 
 - **Vigencia de oferta: `offerValidUntil(extensions)`** lee
   `extensions["offer-receipt/1"].info.validUntil` en segundos Unix, y
-  **`OFFER_VALIDITY_EXTENSION`** es esa clave, definida una sola vez. La versión va
-  EN la clave porque el transporte de offer-and-receipt todavía puede cambiar, y un
-  valor leído de una clave sin versión no podría compararse con nada después. Una
+  **`OFFER_VALIDITY_EXTENSION`** es esa clave, definida una sola vez. La versiÃ³n va
+  EN la clave porque el transporte de offer-and-receipt todavÃ­a puede cambiar, y un
+  valor leÃ­do de una clave sin versiÃ³n no podrÃ­a compararse con nada despuÃ©s. Una
   clave que no reconocemos se ignora: eso significa "sin vencimiento declarado", que
-  es distinto de "venció".
+  es distinto de "venciÃ³".
 
-- **`decideOnChallenge(policy, challenge, offer, { now })`** — los seis pasos, en un
-  solo lugar, **sin stack de red**. Toma el desafío COMPLETO a propósito: pasar las
-  ofertas solas es exactamente lo que tiró el `validUntil` del vendedor al piso en
+- **`decideOnChallenge(policy, challenge, offer, { now })`** â€” los seis pasos, en un
+  solo lugar, **sin stack de red**. Toma el desafÃ­o COMPLETO a propÃ³sito: pasar las
+  ofertas solas es exactamente lo que tirÃ³ el `validUntil` del vendedor al piso en
   Rust durante un commit entero con todos los tests en verde, y una firma que toma
-  las partes invita a repetirlo. Una decisión que solo se puede ejercer manejando un
-  cliente HTTP real es una decisión que nadie testea.
+  las partes invita a repetirlo. Una decisiÃ³n que solo se puede ejercer manejando un
+  cliente HTTP real es una decisiÃ³n que nadie testea.
 
-- **`X402FetchOptions.advertised`** — lo que decía el catálogo, para que la
+- **`X402FetchOptions.advertised`** â€” lo que decÃ­a el catÃ¡logo, para que la
   divergencia se reporte en `approval.versusQuote` (`not-compared` | `matches` |
   `amount-differs` | `different-asset`). **Nunca decide nada.**
 
-- **`X402FetchOptions.onPaid`** — se llama cuando el reintento volvió con algo que no
-  es otro `402`, o sea cuando el vendedor aceptó el pago. Es el lugar donde quien
-  llama hace `recordSpend`. Nada es automático acá: **evaluar no gasta**.
+- **`X402FetchOptions.onPaid`** â€” se llama cuando el reintento volviÃ³ con algo que no
+  es otro `402`, o sea cuando el vendedor aceptÃ³ el pago. Es el lugar donde quien
+  llama hace `recordSpend`. Nada es automÃ¡tico acÃ¡: **evaluar no gasta**.
 
 ### Changed
 
 - **`accepts` es una LISTA, y una entrada ilegible ya no hunde la lista.** Un vendedor
-  que ofrecía algo pagable **al lado de** un esquema que este build no implementa
-  quedaba sin ofertas usables, y quien compraba nunca se enteraba de que había una
-  oferta perfectamente pagable ahí mismo. Ahora las legibles se conservan y las otras
-  se cuentan **por nombre de esquema**, así que la negativa dice qué ofreció el
+  que ofrecÃ­a algo pagable **al lado de** un esquema que este build no implementa
+  quedaba sin ofertas usables, y quien compraba nunca se enteraba de que habÃ­a una
+  oferta perfectamente pagable ahÃ­ mismo. Ahora las legibles se conservan y las otras
+  se cuentan **por nombre de esquema**, asÃ­ que la negativa dice quÃ© ofreciÃ³ el
   vendedor:
 
   ```
   no offer in this challenge is one this build can pay; offered: ["batch-settlement","agent-pay"]
   ```
 
-  Descubrir el servicio sigue funcionando aunque comprarlo automáticamente no.
+  Descubrir el servicio sigue funcionando aunque comprarlo automÃ¡ticamente no.
 
 - **Tres hechos que antes eran un solo error.** `client.fetch()` ahora distingue "el
-  vendedor no mandó ofertas" (sigue siendo `NO_ACCEPTABLE_PAYMENT`, sin cambio) de
-  "mandó ofertas que no sabemos leer" (`POLICY_REFUSED` / `no-readable-offer`, con los
-  nombres de esquema) y de "mandó ofertas pagables". El primer mensaje era justo el
-  que manda a alguien a buscar un bug en su propio código.
+  vendedor no mandÃ³ ofertas" (sigue siendo `NO_ACCEPTABLE_PAYMENT`, sin cambio) de
+  "mandÃ³ ofertas que no sabemos leer" (`POLICY_REFUSED` / `no-readable-offer`, con los
+  nombres de esquema) y de "mandÃ³ ofertas pagables". El primer mensaje era justo el
+  que manda a alguien a buscar un bug en su propio cÃ³digo.
 
-- **`maxAmount` queda intacto** y sigue corriendo **antes** de la política: quien puso
-  un techo y ninguna política conserva exactamente el comportamiento que tenía.
+- **`maxAmount` queda intacto** y sigue corriendo **antes** de la polÃ­tica: quien puso
+  un techo y ninguna polÃ­tica conserva exactamente el comportamiento que tenÃ­a.
 
-- **El `scheme` de la oferta ahora decide, y antes no decidía nada.** `parse402` solo
-  exigía monto, payee y red, así que una oferta **bien formada** pidiendo
-  `batch-settlement` se leía como pagable y después se **firmaba como `exact`**: un
-  pago ofrecido al vendedor bajo un esquema que nunca pidió. Ahora hay dos conjuntos,
+- **El `scheme` de la oferta ahora decide, y antes no decidÃ­a nada.** `parse402` solo
+  exigÃ­a monto, payee y red, asÃ­ que una oferta **bien formada** pidiendo
+  `batch-settlement` se leÃ­a como pagable y despuÃ©s se **firmaba como `exact`**: un
+  pago ofrecido al vendedor bajo un esquema que nunca pidiÃ³. Ahora hay dos conjuntos,
   y son dos preguntas distintas:
 
-  - **`KNOWN_SCHEMES`** — el vocabulario compartido con los otros dos SDK: `exact`,
+  - **`KNOWN_SCHEMES`** â€” el vocabulario compartido con los otros dos SDK: `exact`,
     `upto`, `escrow`, `commerce`, `fhe-transfer`. Los mismos cinco del enum cerrado
     `Scheme` de `x402-rs` y de `KNOWN_SCHEMES` en Python. Un esquema fuera de esos
-    cinco no lo sabe nombrar ninguna implementación del stack.
-  - **`CLIENT_PAYABLE_SCHEMES`** — de esos, los que **este** camino de comprador
-    puede firmar: `exact`, y nada más, porque el constructor de payload estampa
-    `scheme: 'exact'` en todo lo que produce. `escrow` y `commerce` están del lado
-    **vendedor**; `upto` y `fhe-transfer` no están.
+    cinco no lo sabe nombrar ninguna implementaciÃ³n del stack.
+  - **`CLIENT_PAYABLE_SCHEMES`** â€” de esos, los que **este** camino de comprador
+    puede firmar: `exact`, y nada mÃ¡s, porque el constructor de payload estampa
+    `scheme: 'exact'` en todo lo que produce. `escrow` y `commerce` estÃ¡n del lado
+    **vendedor**; `upto` y `fhe-transfer` no estÃ¡n.
 
   **Reconocer un esquema no es poder pagarlo**, y colapsar los dos conjuntos en uno
   reabre el agujero exacto: con los cinco como pagables, una oferta `escrow` bien
   formada se vuelve a firmar como `exact`. Las dos situaciones terminan igual para
-  quien llama — la entrada queda afuera y se cuenta por su nombre de esquema — y
+  quien llama â€” la entrada queda afuera y se cuenta por su nombre de esquema â€” y
   `no-readable-offer` dice "no offer in this challenge is one this build **can
   pay**", que es el marco de las dos.
 
 - **BREAKING (comprador): un `accepts` sin `scheme` ahora es ilegible, no `exact`.**
-  Rust exige el campo, así que allá un desafío sin él no deserializa; un comprador
-  que adivinara `exact` firmaría bajo un esquema que el vendedor nunca nombró — el
+  Rust exige el campo, asÃ­ que allÃ¡ un desafÃ­o sin Ã©l no deserializa; un comprador
+  que adivinara `exact` firmarÃ­a bajo un esquema que el vendedor nunca nombrÃ³ â€” el
   mismo agujero que firmar uno nombrado que no podemos presentar, pero sin la
   evidencia. Se cuenta (`unreadableCount`) sin nombre, porque no tiene ninguno que
   reportar.
 
-  Es **asimétrico a propósito** con el lado vendedor de este mismo SDK, donde un
+  Es **asimÃ©trico a propÃ³sito** con el lado vendedor de este mismo SDK, donde un
   `scheme` ausente se lee como `exact` (`src/backend/index.ts`: "'exact' is the
   default, not an override"). Un vendedor es indulgente con lo que acepta; un
   comprador es estricto con lo que firma. Todos los fixtures de la suite declaran
-  `scheme`, así que nada acá se rompió — pero un vendedor real que lo omita se vuelve
+  `scheme`, asÃ­ que nada acÃ¡ se rompiÃ³ â€” pero un vendedor real que lo omita se vuelve
   impagable por este camino, y eso es observable.
 
-- **La política ya no puede aprobar un activo y firmar otro.** `evaluate()` juzga el
+- **La polÃ­tica ya no puede aprobar un activo y firmar otro.** `evaluate()` juzga el
   `asset` de la oferta, pero `createPayment()` firma el token al que resuelve
   `tokenType` en esa cadena, y lee el precio con **los decimales de ese** token. Con
-  USDC en los dos lados coinciden, que es por lo que nunca se vio. No tienen por qué:
-  un vendedor cotizando en otro token daba aprobación sobre el activo A y firma sobre
-  el activo B, y quien llamaba creía tener un presupuesto que nunca se aplicó.
+  USDC en los dos lados coinciden, que es por lo que nunca se vio. No tienen por quÃ©:
+  un vendedor cotizando en otro token daba aprobaciÃ³n sobre el activo A y firma sobre
+  el activo B, y quien llamaba creÃ­a tener un presupuesto que nunca se aplicÃ³.
 
   Ahora una oferta que nombra un activo distinto al de `tokenType` se **rechaza**
   (`NO_ACCEPTABLE_PAYMENT`, con los dos addresses en el mensaje), en vez de
-  re-apuntarse en silencio: con qué token pagar es decisión de quien llama, y
-  adivinarlo del `402` del vendedor es cómo una wallet termina firmando por un token
-  que nadie eligió. Corre **después** de la política, así que un activo no
-  presupuestado sigue reportándose como `asset-not-budgeted`, que es la causa útil. La
-  comparación es canonicalizada, así que un USDC en minúscula frente al registro en
+  re-apuntarse en silencio: con quÃ© token pagar es decisiÃ³n de quien llama, y
+  adivinarlo del `402` del vendedor es cÃ³mo una wallet termina firmando por un token
+  que nadie eligiÃ³. Corre **despuÃ©s** de la polÃ­tica, asÃ­ que un activo no
+  presupuestado sigue reportÃ¡ndose como `asset-not-budgeted`, que es la causa Ãºtil. La
+  comparaciÃ³n es canonicalizada, asÃ­ que un USDC en minÃºscula frente al registro en
   checksum no es un desalineo.
 
-### Notas — las reglas que no se negocian
+### Notas â€” las reglas que no se negocian
 
-1. **Evaluar no gasta.** Firmar puede fallar y una liquidación puede rechazarse; un
-   límite que contara intentos dejaría a quien llama sin dinero que nunca gastó.
-   `recordSpend` es una llamada aparte, después de que la liquidación resolvió.
-2. **La política no se ensancha desde dentro de una evaluación.** No hay método que
-   suba un techo: todos los builders devuelven una política NUEVA y dejan la receptora
+1. **Evaluar no gasta.** Firmar puede fallar y una liquidaciÃ³n puede rechazarse; un
+   lÃ­mite que contara intentos dejarÃ­a a quien llama sin dinero que nunca gastÃ³.
+   `recordSpend` es una llamada aparte, despuÃ©s de que la liquidaciÃ³n resolviÃ³.
+2. **La polÃ­tica no se ensancha desde dentro de una evaluaciÃ³n.** No hay mÃ©todo que
+   suba un techo: todos los builders devuelven una polÃ­tica NUEVA y dejan la receptora
    igual de estricta. Un test lo fija.
-3. **No se pide confirmación humana** si la política ya cubre la operación. Una
-   divergencia respecto del listado **no es, por sí sola, una negativa**: si la oferta
-   cuesta más que lo que decía el catálogo pero entra en una política que el operador
-   ya autorizó, se paga. Parar a preguntar convertiría cada repricing ordinario en un
+3. **No se pide confirmaciÃ³n humana** si la polÃ­tica ya cubre la operaciÃ³n. Una
+   divergencia respecto del listado **no es, por sÃ­ sola, una negativa**: si la oferta
+   cuesta mÃ¡s que lo que decÃ­a el catÃ¡logo pero entra en una polÃ­tica que el operador
+   ya autorizÃ³, se paga. Parar a preguntar convertirÃ­a cada repricing ordinario en un
    alto, y un agente que se detiene ante el comercio normal es un agente que nadie
-   puede dejar corriendo. **No hay gancho de confirmación en este camino.**
-4. **Un activo distinto no es el mismo precio**: no se comparan números entre activos,
+   puede dejar corriendo. **No hay gancho de confirmaciÃ³n en este camino.**
+4. **Un activo distinto no es el mismo precio**: no se comparan nÃºmeros entre activos,
    y el mismo address en otra red es **otro** activo. Un presupuesto en USDC no era
-   presupuesto para ningún otro token, y el firmante EVM lo hubiera firmado igual,
+   presupuesto para ningÃºn otro token, y el firmante EVM lo hubiera firmado igual,
    porque toma el dominio EIP-712 del `extra` del propio vendedor y firma para un
    token y una red que nunca vio. Por eso `asset-not-budgeted` corre **antes** de los
-   techos: a quien llama hay que decirle "presupuestá ese activo", no "subí un techo
+   techos: a quien llama hay que decirle "presupuestÃ¡ ese activo", no "subÃ­ un techo
    que no existe".
 5. **El nombre de red no decide por su caja.** `'Base'` y `'base'` son una red
    escrita de dos formas, nunca dos redes: la clave del activo pliega la red a
-   minúscula. Dejar la caja adentro falla cerrado (`asset-not-budgeted`, así que
-   ningún pago sale mal) pero tropieza al operador con una mayúscula, y la negativa
-   apuntaría al presupuesto en vez de al typo. La **dirección** conserva su trato por
+   minÃºscula. Dejar la caja adentro falla cerrado (`asset-not-budgeted`, asÃ­ que
+   ningÃºn pago sale mal) pero tropieza al operador con una mayÃºscula, y la negativa
+   apuntarÃ­a al presupuesto en vez de al typo. La **direcciÃ³n** conserva su trato por
    familia.
-6. **La dirección se canonicaliza por familia, nunca con `toLowerCase()`.** Hex se
-   pliega; base58 (Solana, XRPL) se compara **exacto**. Bajar una dirección base58 no
-   produce la misma dirección escrita distinto, produce una cadena que no es una
-   dirección: una lista blanca escrita con la grafía del vendedor no coincidiría nunca
-   y todo pago legítimo a ese payee se rechazaría. Y en la dirección peligrosa, dos
-   direcciones base58 distintas pueden plegarse a la misma minúscula, lo que dejaría
+6. **La direcciÃ³n se canonicaliza por familia, nunca con `toLowerCase()`.** Hex se
+   pliega; base58 (Solana, XRPL) se compara **exacto**. Bajar una direcciÃ³n base58 no
+   produce la misma direcciÃ³n escrita distinto, produce una cadena que no es una
+   direcciÃ³n: una lista blanca escrita con la grafÃ­a del vendedor no coincidirÃ­a nunca
+   y todo pago legÃ­timo a ese payee se rechazarÃ­a. Y en la direcciÃ³n peligrosa, dos
+   direcciones base58 distintas pueden plegarse a la misma minÃºscula, lo que dejarÃ­a
    entrar a una que nadie puso en la lista.
 7. **`validUntil` ilegible = ausente, NUNCA cero.** "El vendedor dijo algo que no
-   pudimos leer" no puede convertirse en "esta oferta venció en 1970". Un string, un
-   float, un negativo o algo más grande que `MAX_SAFE_INTEGER`: todos ausentes.
-8. **`validUntil === now` todavía vale**: es el último instante en que la oferta está
+   pudimos leer" no puede convertirse en "esta oferta venciÃ³ en 1970". Un string, un
+   float, un negativo o algo mÃ¡s grande que `MAX_SAFE_INTEGER`: todos ausentes.
+8. **`validUntil === now` todavÃ­a vale**: es el Ãºltimo instante en que la oferta estÃ¡
    en pie.
 9. **Una copia gasta de la misma bolsa.** Un cliente se copia por request; si cada
-   copia llevara su propio total, un límite acumulado no significaría nada.
-10. **Estado corrupto reporta el TECHO, nunca cero.** Si algo dejó la bolsa en un valor
-   que no es un bigint sano, `spent()` devuelve el límite acumulado: para el dinero, la
-   dirección segura es negarse, nunca permitir.
-11. **Aritmética en `bigint`, nunca `number`.** Las unidades atómicas de un token de 18
+   copia llevara su propio total, un lÃ­mite acumulado no significarÃ­a nada.
+10. **Estado corrupto reporta el TECHO, nunca cero.** Si algo dejÃ³ la bolsa en un valor
+   que no es un bigint sano, `spent()` devuelve el lÃ­mite acumulado: para el dinero, la
+   direcciÃ³n segura es negarse, nunca permitir.
+11. **AritmÃ©tica en `bigint`, nunca `number`.** Las unidades atÃ³micas de un token de 18
     decimales pasan `Number.MAX_SAFE_INTEGER` con 0.01 de token, y un techo comparado
     como float es un techo que redondea. Un monto que no se puede leer se compara como
-    el valor más grande representable, así que falla todos los techos en vez de pasar
+    el valor mÃ¡s grande representable, asÃ­ que falla todos los techos en vez de pasar
     como cero.
 
-**Lo que esta versión NO trae** (y el facilitador tampoco, a propósito): verificación
-de firma de `offer-receipt` — está el transporte y la vigencia, no la firma ni la
-autoridad del firmante, que necesita un modelo de identidad del vendedor que todavía
-no existe —, vinculación por input, y contabilidad de `upto`.
+**Lo que esta versiÃ³n NO trae** (y el facilitador tampoco, a propÃ³sito): verificaciÃ³n
+de firma de `offer-receipt` â€” estÃ¡ el transporte y la vigencia, no la firma ni la
+autoridad del firmante, que necesita un modelo de identidad del vendedor que todavÃ­a
+no existe â€”, vinculaciÃ³n por input, y contabilidad de `upto`.
 
 Requiere facilitador 2.25.0+ para que el vendedor declare vigencia; sin eso, una
-oferta sin `validUntil` simplemente no tiene vencimiento declarado y todo lo demás de
-la política funciona igual.
+oferta sin `validUntil` simplemente no tiene vencimiento declarado y todo lo demÃ¡s de
+la polÃ­tica funciona igual.
 
 ## [2.88.0] - 2026-09-07
 
-**La autoría real de una calificación en Solana: el rater firma, el facilitador
-paga.** `submitFeedback()` escribe la calificación con la llave del
-**facilitador** en la cuenta 0 — que el programa declara
-`[signer, writable] client (feedback author)` —, así que la cadena registra al
-facilitador como autor, y el facilitador es el único que puede revocarla. En EVM
-eso se arregló con EIP-7702 y un `FeedbackDelegate`. En Solana no hace falta
-nada de eso: una transacción lleva varias firmas de forma nativa, así que el
+**La autorÃ­a real de una calificaciÃ³n en Solana: el rater firma, el facilitador
+paga.** `submitFeedback()` escribe la calificaciÃ³n con la llave del
+**facilitador** en la cuenta 0 â€” que el programa declara
+`[signer, writable] client (feedback author)` â€”, asÃ­ que la cadena registra al
+facilitador como autor, y el facilitador es el Ãºnico que puede revocarla. En EVM
+eso se arreglÃ³ con EIP-7702 y un `FeedbackDelegate`. En Solana no hace falta
+nada de eso: una transacciÃ³n lleva varias firmas de forma nativa, asÃ­ que el
 rater firma como `client` y el facilitador se queda de fee payer. El riel ya
-está desplegado (facilitador v2.16.0, medido hoy en
+estÃ¡ desplegado (facilitador v2.16.0, medido hoy en
 `GET /api-docs/openapi.json`); lo que faltaba era el cliente.
 
 ### Added
 
 - **`prepareSolanaFeedback()` / `submitSolanaFeedback()`** contra
   `POST /feedback/solana/prepare` y `/submit`. `prepare` no escribe nada y no
-  cuesta nada: devuelve la transacción **sin firmar** (base64 del bincode) cuya
-  cuenta `client` es el rater, más `feePayer`, `blockhash` y
+  cuesta nada: devuelve la transacciÃ³n **sin firmar** (base64 del bincode) cuya
+  cuenta `client` es el rater, mÃ¡s `feePayer`, `blockhash` y
   `lastValidBlockHeight`. El rater la firma con su llave ed25519 y `submit` la
   co-firma como fee payer y la manda.
 
@@ -744,21 +751,21 @@ está desplegado (facilitador v2.16.0, medido hoy en
   });
   ```
 
-  Los parámetros de `feedback` **no son redundantes** en `submit`: el
+  Los parÃ¡metros de `feedback` **no son redundantes** en `submit`: el
   facilitador re-deriva el mensaje a partir de ellos y del blockhash que viaja
-  en la transacción, y se niega a co-firmar cualquier cosa que no sea byte por
-  byte la que él armó. Firmar blobs arbitrarios convertiría la llave del fee
-  payer en un oráculo de firma público — un solo `system_program::transfer`
-  vaciaría la wallet con la firma del facilitador encima.
+  en la transacciÃ³n, y se niega a co-firmar cualquier cosa que no sea byte por
+  byte la que Ã©l armÃ³. Firmar blobs arbitrarios convertirÃ­a la llave del fee
+  payer en un orÃ¡culo de firma pÃºblico â€” un solo `system_program::transfer`
+  vaciarÃ­a la wallet con la firma del facilitador encima.
 
-- **`SOLANA_FEEDBACK_NETWORKS` / `supportsSolanaFeedback()`** — `solana` y
+- **`SOLANA_FEEDBACK_NETWORKS` / `supportsSolanaFeedback()`** â€” `solana` y
   `solana-devnet`, las dos que el facilitador sirve en vivo.
 
   **Es una lista propia, y `solana` NUNCA entra a `RELAYED_FEEDBACK_NETWORKS`.**
   Esa otra nombra las cadenas donde hay un `FeedbackDelegate` desplegado y
   verificado on-chain, y es la que arma la URL `/feedback/evm/prepare`: meter
-  `solana` ahí manda la calificación a la ruta EVM —400— y además afirma un
-  delegate que nunca se desplegó y que no falta. Un test nuevo fija que las dos
+  `solana` ahÃ­ manda la calificaciÃ³n a la ruta EVM â€”400â€” y ademÃ¡s afirma un
+  delegate que nunca se desplegÃ³ y que no falta. Un test nuevo fija que las dos
   listas no se tocan, y el que ya fijaba la lista de delegates
   (`relayed-feedback.test.ts`) sigue verde sin tocarlo.
 
@@ -767,15 +774,15 @@ está desplegado (facilitador v2.16.0, medido hoy en
 
 ### Notas
 
-- **Poné `score`.** Es opcional en el wire y el ATOM Engine ignora un feedback
-  sin score: la transacción sale bien, el registro queda en el agente, y la
-  reputación se queda en cero (`had_impact=false`). No es retroactivo — omitilo
-  solo si lo que querés es un registro que a propósito no puntúa.
+- **PonÃ© `score`.** Es opcional en el wire y el ATOM Engine ignora un feedback
+  sin score: la transacciÃ³n sale bien, el registro queda en el agente, y la
+  reputaciÃ³n se queda en cero (`had_impact=false`). No es retroactivo â€” omitilo
+  solo si lo que querÃ©s es un registro que a propÃ³sito no puntÃºa.
 - `prepare` entrega una ventana, no un permiso permanente: pasado
-  `lastValidBlockHeight` la red descarta la transacción, no se escribe ni se
+  `lastValidBlockHeight` la red descarta la transacciÃ³n, no se escribe ni se
   cobra nada, y reenviar exige un `prepare` nuevo porque el blockhash que el
-  rater firmó ya venció.
-- `rater` es obligatorio y es una pubkey base58; una dirección `0x` se rechaza
+  rater firmÃ³ ya venciÃ³.
+- `rater` es obligatorio y es una pubkey base58; una direcciÃ³n `0x` se rechaza
   con 400. Es el punto entero del endpoint.
 
 Requiere facilitador v2.16.0+.
@@ -783,30 +790,30 @@ Requiere facilitador v2.16.0+.
 ## [2.87.0] - 2026-09-06
 
 **El publisher puede firmar la orden de `release` en su propio browser.** La
-2.86.0 dejó una sola forma de firmar — `buildLifecycleAuth`, con un adaptador
-inyectado que inventa su propio nonce y su propio deadline —, y esa forma no
-sirve para un browser: el publisher firma un documento que el backend ya armó y
-devuelve una firma, nada más. Esta versión abre esa costura en dos y prueba que
+2.86.0 dejÃ³ una sola forma de firmar â€” `buildLifecycleAuth`, con un adaptador
+inyectado que inventa su propio nonce y su propio deadline â€”, y esa forma no
+sirve para un browser: el publisher firma un documento que el backend ya armÃ³ y
+devuelve una firma, nada mÃ¡s. Esta versiÃ³n abre esa costura en dos y prueba que
 las dos mitades producen **los mismos bytes**.
 
 ### Added
 
-- **`lifecycleAuthFromSignature(typedData, signature, signer)` — la otra mitad.**
-  Toma el documento que `buildLifecycleTypedData` devolvió, la firma que la
+- **`lifecycleAuthFromSignature(typedData, signature, signer)` â€” la otra mitad.**
+  Toma el documento que `buildLifecycleTypedData` devolviÃ³, la firma que la
   wallet dio, y arma el bloque `{ signer, deadline, nonce, signature }` que va
   en `payload.lifecycleAuth`.
 
-  `deadline` y `nonce` **no son parámetros**: se leen de `typedData.message`,
-  que es el documento que realmente se hasheó. Tomarlos del llamador dejaría
-  que el bloque declare un nonce que la firma nunca comprometió — un
+  `deadline` y `nonce` **no son parÃ¡metros**: se leen de `typedData.message`,
+  que es el documento que realmente se hasheÃ³. Tomarlos del llamador dejarÃ­a
+  que el bloque declare un nonce que la firma nunca comprometiÃ³ â€” un
   `bad_signature` que nadie ve, porque las dos mitades se ven bien por
   separado.
 
-  La firma **no se recupera acá**. Los payers de este SDK incluyen cuentas
+  La firma **no se recupera acÃ¡**. Los payers de este SDK incluyen cuentas
   delegadas ERC-7702 y wallets de contrato que validan por ERC-1271
-  (`src/erc7702.ts:8`), cuyas firmas no hacen `ecrecover` a su dirección:
-  `ethers.verifyTypedData` rechazaría justo las buenas. La recuperación —y el
-  chequeo de rol que la acompaña— es del facilitador, contra la cadena.
+  (`src/erc7702.ts:8`), cuyas firmas no hacen `ecrecover` a su direcciÃ³n:
+  `ethers.verifyTypedData` rechazarÃ­a justo las buenas. La recuperaciÃ³n â€”y el
+  chequeo de rol que la acompaÃ±aâ€” es del facilitador, contra la cadena.
 
   ```ts
   // backend
@@ -826,10 +833,10 @@ las dos mitades producen **los mismos bytes**.
 - **`releaseViaFacilitator` / `refundViaFacilitator` aceptan `{ lifecycleAuth }`**
   ya firmado, como alternativa **excluyente** a `{ lifecycleSigner }`. El bloque
   viaja tal cual: nada se vuelve a derivar ni a "normalizar", porque cualquiera
-  de las dos cosas cambiaría bytes que el browser ya comprometió.
+  de las dos cosas cambiarÃ­a bytes que el browser ya comprometiÃ³.
 
   Pasar los dos juntos **lanza**. No es una preferencia que se resuelva por
-  precedencia: significa que el llamador cree que van a viajar dos órdenes
+  precedencia: significa que el llamador cree que van a viajar dos Ã³rdenes
   distintas, y solo una puede.
 
 - **`LifecycleTypedData`** exportado como tipo. Es un tipo de **wire**: el
@@ -840,29 +847,29 @@ las dos mitades producen **los mismos bytes**.
 - **`buildLifecycleTypedData` es la superficie del browser, y ya no exige
   `deadline` ni `nonce`.** Omitidos, toma los mismos defaults que
   `buildLifecycleAuth` (`now + 600` y 32 bytes frescos), resueltos en **un solo
-  lugar** para las dos entradas — así un backend no tiene que escribir su propio
+  lugar** para las dos entradas â€” asÃ­ un backend no tiene que escribir su propio
   generador de nonces, que es exactamente el paso donde se reusa uno y el
   facilitador contesta `replayed`.
 
-  Pasarlos explícitos sigue haciendo lo de siempre; el vector de paridad con
-  Python los pasa y no se movió un byte.
+  Pasarlos explÃ­citos sigue haciendo lo de siempre; el vector de paridad con
+  Python los pasa y no se moviÃ³ un byte.
 
 ### Notas para quien integre desde un browser
 
 Tres cosas que el frontend tiene que respetar, o la orden no verifica:
 
 1. El `paymentInfo`, el `payer` y el `amount` firmados tienen que ser **los que
-   el backend envía**. Si se recalcula cualquiera de los tres antes del
+   el backend envÃ­a**. Si se recalcula cualquiera de los tres antes del
    `/settle`, es `bad_signature`. Hay un test que lo fija
    (`src/backend/lifecycle-wiring.test.ts`, *an order signed for a DIFFERENT
    amount than the one sent does not recover*).
 2. La orden vive **600 segundos**. Armar el documento en el momento de firmar,
-   no al pintar la página.
+   no al pintar la pÃ¡gina.
 3. Un nonce por orden, y `buildLifecycleTypedData` ya lo genera fresco.
 
 `lifecycleDeadline` se ignora al lado de un `lifecycleAuth`: la orden ya trae
-el deadline con el que se firmó, y chequear acá un reloj que no es el que firmó
-solo agregaría un rechazo local a algo que el facilitador hoy acepta.
+el deadline con el que se firmÃ³, y chequear acÃ¡ un reloj que no es el que firmÃ³
+solo agregarÃ­a un rechazo local a algo que el facilitador hoy acepta.
 
 ## [2.86.0] - 2026-09-06
 
@@ -874,11 +881,11 @@ byte-for-byte, mirrored rather than reinvented.
 
 ### Added
 
-- **`buildLifecycleAuth()` — the EIP-712 order the facilitator verifies.**
+- **`buildLifecycleAuth()` â€” the EIP-712 order the facilitator verifies.**
   Both lifecycle actions move funds that are ALREADY deposited, so neither
   carries an ERC-3009 signature: there is no transfer left to authorize. That
-  left the other half of the question unanswered — *who is entitled to ask for
-  the move* — and the de-facto answer was "whoever calls". On 2026-08-30 a
+  left the other half of the question unanswered â€” *who is entitled to ask for
+  the move* â€” and the de-facto answer was "whoever calls". On 2026-08-30 a
   third party probed exactly that: five calls with a fabricated `paymentInfo`,
   two of them mined, gas spent.
 
@@ -900,13 +907,13 @@ byte-for-byte, mirrored rather than reinvented.
 
 - **`releaseViaFacilitator` / `refundViaFacilitator` accept a third argument**,
   `{ lifecycleSigner, lifecycleDeadline }`. **Without it the request goes out
-  byte-for-byte as before** — pinned whole in
+  byte-for-byte as before** â€” pinned whole in
   `src/backend/lifecycle-wiring.test.ts`, because every caller in production
   today passes no signer.
 
 - **`wagmiLifecycleSigner()`** wraps a wagmi/viem wallet client. It exists
   because a lifecycle domain has **no `verifyingContract`**, so this SDK's
-  payment `WalletClient` type — which requires one — cannot sign these orders.
+  payment `WalletClient` type â€” which requires one â€” cannot sign these orders.
 
 - **`buildLifecycleTypedData()`**, `LIFECYCLE_ORDER_TYPES` and the constants,
   for callers that need the raw document.
@@ -929,7 +936,7 @@ and the payer may never refund early (that is the chargeback). Anything else is
    hex string without `0x` read as decimal is a different digest and a mute
    `bad_signature` whose only symptom is that no order ever verifies.
 2. **The signed `amount` is the amount SENT.** Signing `maxAmount` and
-   submitting a partial never verifies — and the partial is the normal case of
+   submitting a partial never verifies â€” and the partial is the normal case of
    a stream, which emits one order and one nonce per delta.
 3. **`deadline` has a 900 s ceiling.** The default signs `now + 600`: signing
    the full 900 lets a facilitator clock five seconds behind decide the verdict
@@ -939,11 +946,11 @@ and the payer may never refund early (that is the chargeback). Anything else is
 
 - **Byte parity with Python**, pinned by `src/lifecycle-auth.vectors.json` and
   by phase 8 of the cross-language conformance run, where both runtimes sign
-  the same four orders live and the signatures are compared byte to byte —
+  the same four orders live and the signatures are compared byte to byte â€”
   and to the vector `lifecycle_auth.rs` fixes. `390 checks across 8 phases`.
 - **Against the live facilitator** (`escrowLifecycleAuth: log`): an order
   signed by this SDK logged `verdict="ok" role=payer` at
-  `2026-09-06T15:47:17.670Z`. No funds and no gas were involved — base-sepolia
+  `2026-09-06T15:47:17.670Z`. No funds and no gas were involved â€” base-sepolia
   with a deliberately invalid `tokenCollector`, so the gate runs and logs and
   `validate_addresses` then kills the request before a transaction exists.
 
@@ -960,14 +967,14 @@ is the TypeScript half of that parity, mirrored rather than reinvented.
 - **A price written in USD is refused on a chain that does not settle in
   dollars, instead of being billed in the native asset.**
   `buildPaymentRequirements({ amount: '10.00', chainName: 'xrpl' })` returned
-  `maxAmountRequired: '10000000'` — measured — which on XRPL is **10 XRP**, not
+  `maxAmountRequired: '10000000'` â€” measured â€” which on XRPL is **10 XRP**, not
   ten dollars.
 
   The bug is **unit, not scale**, which is why `decimals` never rescued it.
   Scaling a price by the token's decimals turns dollars into base units only
   when one whole unit IS one dollar; that holds for all 23 stablecoin networks
   and fails for a chain settling in its own floating asset. XRP genuinely has
-  six decimals — and six decimals of XRP are still XRP.
+  six decimals â€” and six decimals of XRP are still XRP.
 
   The contradiction lived inside this repo: `PaymentInfo.amount` was documented
   as USD while the SDK's own XRPL provider read the same field as whole XRP
@@ -978,7 +985,7 @@ is the TypeScript half of that parity, mirrored rather than reinvented.
   byte unchanged) now marks native XRP as unpegged, and the SDK **refuses**
   rather than converting at a rate nobody agreed to. The message names the
   asset, states what the old code would have charged, and points at
-  `GET /supported` — refusing without saying where to look only moves the dead
+  `GET /supported` â€” refusing without saying where to look only moves the dead
   end one layer up.
 
   `generatePaymentOptions()` **skips** the unpriceable pair instead of throwing:
@@ -1000,7 +1007,7 @@ is the TypeScript half of that parity, mirrored rather than reinvented.
 - **`chainToCAIP2()` no longer manufactures an identifier out of an alias.** It
   resolves through the registry first, so an alias answers with the canonical
   chain's id. Without this the new alias fell into the
-  `${networkType}:${name}` fallback and produced `xrpl:xrpl-mainnet` — a string
+  `${networkType}:${name}` fallback and produced `xrpl:xrpl-mainnet` â€” a string
   no facilitator accepts that nonetheless **passes the colon test every v2 guard
   in this SDK uses**. A fabricated id is worse than a missing one: the missing
   one is refused loudly, the fabricated one ships.
@@ -1009,7 +1016,7 @@ is the TypeScript half of that parity, mirrored rather than reinvented.
 
 - **Phase 7 of the cross-language conformance run: the price.** Phases 1-6
   compare how the two SDKs *shape* a request and never once asked what either
-  would *charge* — which is how both languages billed `$10.00` as 10 XRP with
+  would *charge* â€” which is how both languages billed `$10.00` as 10 XRP with
   every check green. The run is now **367 checks across 7 phases** (was 347/6),
   and it is discriminating: with the guard removed it reports
   `ts=billed 10000000 py=refused`.
@@ -1019,7 +1026,7 @@ is the TypeScript half of that parity, mirrored rather than reinvented.
 - **XRPL still carries no CAIP-2 id, so a v2 body for it is refused rather than
   built.** The facilitator does publish `xrpl:0` / `xrpl:1`
   (`x402-rs/src/network.rs:613`), but the Python SDK deliberately withheld those
-  ids and the conformance run compares the two SDKs' envelope decisions live —
+  ids and the conformance run compares the two SDKs' envelope decisions live â€”
   adding them here alone was measured as
   `FAIL ... ts=built py=refused`. XRPL travels on v1, where it now carries the
   correct name. Adding the ids is a coordinated, two-SDK change; see
@@ -1034,18 +1041,18 @@ consume the fix.
 
 ### Added
 
-- **`buildUnavailableResponse()` — the no-verdict refusal, without a framework.**
+- **`buildUnavailableResponse()` â€” the no-verdict refusal, without a framework.**
   `verify` returns invalid for two different things: a payment that was
   REJECTED, and a facilitator that never reached a verdict (`retryable`).
   Answering `402` in the second case tells the buyer to sign a NEW
-  authorization while the first one is still live and still spendable — **the
+  authorization while the first one is still live and still spendable â€” **the
   buyer pays twice.** The correct answer is `503` + `Retry-After`, which asks
   for the SAME credential again.
 
   The SDK already got this right, but only inside two private functions, one
   per framework (`respondUnavailable` for Express, `honoUnavailable` for Hono).
-  An integrator writing the handler by hand — Lambda, a Next route, Fastify, a
-  bare `Response` — could reach neither, so they re-derived the rule, and
+  An integrator writing the handler by hand â€” Lambda, a Next route, Fastify, a
+  bare `Response` â€” could reach neither, so they re-derived the rule, and
   re-derived it wrong. It is now public, framework-agnostic data, and **both
   built-in middlewares build their reply from it**, so the two can no longer
   drift apart.
@@ -1062,7 +1069,7 @@ consume the fix.
 
 - **`X402Client.connect()` now routes SVM chains to the Phantom provider.**
   The registry declares Solana and Fogo as `networkType: 'svm'`, but `connect()`
-  switched on `case 'solana'` — a value no chain has ever carried. The branch was
+  switched on `case 'solana'` â€” a value no chain has ever carried. The branch was
   dead, so Solana fell through to `default:` and the caller got
   `"Unknown network type for chain solana"`, not even that branch's own message.
   `NetworkType` lists **both** `'svm'` and `'solana'`, which is why the compiler
@@ -1083,7 +1090,7 @@ consume the fix.
 - **The escrow fee bound had two sources that disagreed, and one of them could
   not open a deposit.** `escrow-preauth.ts` declares `OPERATOR_FEE_BPS = 1300`
   and refuses to sign a bound that cannot cover it; `AdvancedEscrowClient`
-  hardcoded `maxFeeBps: 800`. That is not a cheaper fee — `PaymentOperator`
+  hardcoded `maxFeeBps: 800`. That is not a cheaper fee â€” `PaymentOperator`
   compares `protocolFee + operatorFee` against the signed ceiling and reverts
   with `FeeBoundsIncompatible` **on the way in**, so against an operator
   charging 13% the escrow never opens and nobody is paid.
@@ -1097,11 +1104,11 @@ consume the fix.
   500 is `ProtocolFeeConfig.MAX_PROTOCOL_FEE_BPS`, the on-chain hard cap on the
   protocol's slice, read live on Base mainnet. Because the contract compares the
   SUM, that sum is the only bound guaranteed never to revert. `buildPaymentInfo`
-  now also throws when an override cannot cover the operator fee — where the
+  now also throws when an override cannot cover the operator fee â€” where the
   caller can still react, instead of on-chain after the payer signed.
 
   **This changes a signed value: `AdvancedEscrowClient`'s default `maxFeeBps`
-  goes 800 → 1800.** `maxFeeBps` is a ceiling, so this widens what the payer
+  goes 800 â†’ 1800.** `maxFeeBps` is a ceiling, so this widens what the payer
   accepts. It is the value this SDK already called canonical, and 800 could not
   transact at all against a 13% operator, but it is a money-path change and is
   called out here on purpose.
@@ -1111,12 +1118,12 @@ consume the fix.
 - **The `operator` addresses in `ESCROW_CONTRACTS` are factories, not
   operators.** Measured 2026-09-05 on Base mainnet, Base Sepolia and Arbitrum:
   they answer `ESCROW()` and `operators(bytes32)` and revert on
-  `FEE_CALCULATOR()`, `FEE_RECIPIENT()` and `release(...)` — the exact shape of
+  `FEE_CALCULATOR()`, `FEE_RECIPIENT()` and `release(...)` â€” the exact shape of
   `PaymentOperatorFactory`, which x402-rs `docs/X402R_MULTICHAIN_DEPLOYMENT.md`
   labels them as. A factory has no `release`/`charge`, so the direct on-chain
   paths cannot execute against these addresses as written. Resolve the real
   operator from the marketplace's escrow config and pass it via
-  `options.contracts`. **Documented, not fixed** — changing how the operator is
+  `options.contracts`. **Documented, not fixed** â€” changing how the operator is
   resolved is a money-path redesign, not a defect fix.
 
 - **The protocol fee is 0 bps today.** Base mainnet `ProtocolFeeConfig`
@@ -1136,13 +1143,13 @@ consume the fix.
 
 - **`generatePaymentOptions()` can offer more than one stablecoin per chain.**
   It emitted `chain.usdc` and nothing else, so a chain the registry knows two
-  stablecoins for still produced exactly one option — measured against the
+  stablecoins for still produced exactly one option â€” measured against the
   published 2.81.0 build, `generatePaymentOptions([base], '5')` returned 1
   entry while `base.tokens` listed `['usdc', 'eurc']`. tumblrfi calls it from
   `tokens.ts` and `x402.ts` believing it is multi-token; it never was.
 
   ```ts
-  // Dollars only — the default, and byte-for-byte what it did before.
+  // Dollars only â€” the default, and byte-for-byte what it did before.
   generatePaymentOptions([base], '5.00');
 
   // Dollars or euros, both genuinely accepted.
@@ -1150,7 +1157,7 @@ consume the fix.
   ```
 
   **The new `tokens` parameter is opt-in, and that is a money decision.** The
-  obvious fix — emit every token the registry knows — is a regression, not a
+  obvious fix â€” emit every token the registry knows â€” is a regression, not a
   fix: this array becomes the `accepts` of a `402`, so every entry is a
   currency the seller has publicly agreed to be paid in, at `amount` units of
   it. A seller who priced in dollars and silently started accepting `5` EURC
@@ -1159,7 +1166,7 @@ consume the fix.
   conversion between them, and the default stays `['usdc']`.
 
   Each token is priced in **its own** decimals rather than the chain's USDC
-  decimals — the same distinction that matters on BSC, where USDC has 18.
+  decimals â€” the same distinction that matters on BSC, where USDC has 18.
   A named token a chain does not have is skipped rather than invented.
 
   Verified unchanged for existing callers: over the 25 x402-enabled chains the
@@ -1169,7 +1176,7 @@ consume the fix.
 
 ### Added
 
-- **`X402Client.fetch()` — the buyer loop.** This client could sign a payment
+- **`X402Client.fetch()` â€” the buyer loop.** This client could sign a payment
   and never ask for one. The half that was missing is the one every consumer
   in the stack wrote by hand: probe the URL, read the `402`, pick an offer,
   sign, retry with the header. Python shipped it first (`client.fetch`); this
@@ -1185,7 +1192,7 @@ consume the fix.
   **`maxAmount` is a hard ceiling, and that is the point.** Each hand-rolled
   copy of this loop invented its own answer to "how much is too much", and the
   cheapest answer to write is *none*. A `402` asking for more than the ceiling
-  throws `PAYMENT_EXCEEDS_MAX` and signs nothing — the probe happened, the
+  throws `PAYMENT_EXCEEDS_MAX` and signs nothing â€” the probe happened, the
   paid retry did not. Omitting `maxAmount` means paying whatever is asked,
   which is only safe for a resource you already trust.
 
@@ -1197,7 +1204,7 @@ consume the fix.
     shape, where a lone requirement sits at the top level with no `accepts`
     array, is read too.
   - **The version the resource asked for.** `x402Version: 'auto'` was the
-    documented default and detected nothing — every header came out v1. The
+    documented default and detected nothing â€” every header came out v1. The
     version is now read off the challenge and carried down through
     `PaymentInfo.x402Version`, so a v2 resource gets a v2 envelope. A v2 retry
     carries the payload under **both** `X-PAYMENT` and `PAYMENT-SIGNATURE`
@@ -1210,8 +1217,8 @@ consume the fix.
     common scale with `BigInt`, so the comparison is exact rather than
     floating-point.
   - **Chain switching.** The chosen offer's chain is switched to before signing.
-  - **Passthrough.** A non-`402` response — a first-try `200`, a `500`, a `404`
-    — is returned untouched and unsigned. This pays only when payment is what
+  - **Passthrough.** A non-`402` response â€” a first-try `200`, a `500`, a `404`
+    â€” is returned untouched and unsigned. This pays only when payment is what
     was asked for.
 
   New: `X402FetchOptions` (with `select` to override the cheapest-offer
@@ -1231,7 +1238,7 @@ consume the fix.
 
 ### Fixed
 
-- **A `502 settlement_unconfirmed` is no longer retried — retrying it charged
+- **A `502 settlement_unconfirmed` is no longer retried â€” retrying it charged
   the buyer twice.** The facilitator now answers, when a settle is broadcast and
   no receipt ever arrives:
 
@@ -1240,7 +1247,7 @@ consume the fix.
 
   The transaction MAY BE MINED. Retrying signs a **new** authorization with a
   **fresh nonce**, which the chain accepts as a second, perfectly valid payment
-  for the same purchase — EIP-3009's `authorizationState` does not stop it,
+  for the same purchase â€” EIP-3009's `authorizationState` does not stop it,
   because the second authorization is genuinely new.
 
   The SDK was being reasonable: until now the only `502` on `/settle` was
@@ -1250,11 +1257,11 @@ consume the fix.
 
   Two places decided retries by status, and both are fixed:
 
-  - `readFacilitatorError` — the source of the `retryable` flag that
+  - `readFacilitatorError` â€” the source of the `retryable` flag that
     `failureFields` copies onto every response. From there it reached the
     Express and Hono middleware, which answered **503 + `Retry-After`**: a
     literal instruction to the buyer to send the payment again.
-  - `Erc8004LookupError.retryable` — `POST /register` goes through the same EVM
+  - `Erc8004LookupError.retryable` â€” `POST /register` goes through the same EVM
     `send_transaction_from` as a settle, so a mint can come back unconfirmed
     too, and re-POSTing one that may already have landed is the sequence that
     minted five duplicate agents.
@@ -1263,7 +1270,7 @@ consume the fix.
   It only ever **downgrades**: a body claiming `retryable: true` on a `402` will
   not make this SDK resend a credential the facilitator genuinely refused.
 
-  **The other `502` is untouched** — still retryable, still with its wait
+  **The other `502` is untouched** â€” still retryable, still with its wait
   clamped to 15s, still answered as `503` + `Retry-After` by the middleware.
 
 ### Added
@@ -1271,27 +1278,27 @@ consume the fix.
 - **`transaction`, `paymentId` and `errorCode` on every facilitator failure.**
   An error that says "do not retry" and hands back nothing to look up rebuilds
   the same dead end one layer up. They now travel on `FacilitatorFailureFields`
-  — so on `SettleResponse`, `VerifyResponse`, the gasless escrow calls and every
-  ERC-8004 write — and as getters on `Erc8004LookupError`. The middleware
+  â€” so on `SettleResponse`, `VerifyResponse`, the gasless escrow calls and every
+  ERC-8004 write â€” and as getters on `Erc8004LookupError`. The middleware
   repeats them in its `500`, **without** a `Retry-After`, because "stop" is the
   correct instruction when the transfer may be mining.
 
   The hash is passed through **verbatim**: Algorand prints base32 and Solana
-  base58, and reformatting it makes it unpasteable in an explorer — which is the
+  base58, and reformatting it makes it unpasteable in an explorer â€” which is the
   entire remedy on offer. `paymentId` is the same id a successful settle would
   have printed, so a payment later found confirmed reconciles cleanly.
 
 - **Adopted from the Python SDK: any 5xx carrying a transaction hash is not
   retryable.** `uvd-x402-sdk` (PyPI) has had this as its anti-double-settle
-  guard in `_is_retryable_settle_error` — *"a 5xx whose body already contains a
-  transaction hash is NOT retryable"* — while this SDK had only the status to go
+  guard in `_is_retryable_settle_error` â€” *"a 5xx whose body already contains a
+  transaction hash is NOT retryable"* â€” while this SDK had only the status to go
   on. It is the general form of the rule above: a hash in a **failure** body
   means the facilitator got as far as broadcasting, whatever it called the
   error, so it holds for codes that do not exist yet.
 
   It is kept **alongside** the named code and the explicit flag rather than
-  replacing them — a facilitator that answers `retryable: false` with no hash
-  must still be obeyed — giving three independent reasons to stop.
+  replacing them â€” a facilitator that answers `retryable: false` with no hash
+  must still be obeyed â€” giving three independent reasons to stop.
 
   The error path also now reads all five spellings the facilitator uses for a
   hash (`transaction`, `transaction.hash`, `txHash`, `tx_hash`,
@@ -1337,16 +1344,16 @@ consume the fix.
   Found by the Python SDK's cross-SDK comparison (0.74.0): it was the **only**
   body difference left between the two SDKs on the same wire.
 
-- **`'auto'` no longer throws on a v2 payload — the very shape it exists to
+- **`'auto'` no longer throws on a v2 payload â€” the very shape it exists to
   route.** `resolveEnvelopeVersion` read only `paymentHeader.network`. A v1
   header carries one at the top level; a **v2 payload carries none at all**
-  (`PaymentPayloadV2` has no top-level network — v2 moved the chain id into
+  (`PaymentPayloadV2` has no top-level network â€” v2 moved the chain id into
   `accepted`). So on a real v2 payload the default threw
 
       TypeError: Cannot read properties of undefined (reading 'includes')
 
   before deciding anything. It now reads the network wherever the payload keeps
-  it — top level, else `accepted.network` — and treats a missing one as "no
+  it â€” top level, else `accepted.network` â€” and treats a missing one as "no
   CAIP-2 evidence" rather than as a crash. The parameter widens to
   `X402Header | PaymentPayloadV2`, which is what it actually receives.
 
@@ -1376,7 +1383,7 @@ consume the fix.
   facilitator has since taught the v1 envelope to read CAIP-2. Re-measured
   2026-09-04 against production: all five rows are understood.
 
-  The rule is unchanged — still CAIP-2, still ignoring the marker — but the
+  The rule is unchanged â€” still CAIP-2, still ignoring the marker â€” but the
   comment now carries the three reasons that actually hold it up, and the note
   that with a fabricated signature the HTTP status discriminates nothing
   (`invalid_request_body` vs `contract_call_failed` is what does). No behaviour
@@ -1410,7 +1417,7 @@ consume the fix.
 - **`FacilitatorClient` picks the payment envelope instead of always sending
   v1.** The v2 builders have been in this file since v2.44.0
   (`buildVerifyRequestV2` / `buildSettleRequestV2`, shape verified against
-  production on 2026-07-29 and re-verified on 2026-09-03 — still exactly what it
+  production on 2026-07-29 and re-verified on 2026-09-03 â€” still exactly what it
   accepts). Nothing could reach them: `verify()` and `settle()`
   called the v1 builder unconditionally, and those two methods are what
   `createPaymentMiddleware`, `createHonoMiddleware`, `verifyAndSettle` and every
@@ -1428,7 +1435,7 @@ consume the fix.
   untagged, so the refusal is `data did not match any variant of untagged enum
   VerifyRequestEnvelope`, which names no field.
 
-  The SDK's own suite had this pinned as correct —
+  The SDK's own suite had this pinned as correct â€”
   `src/backend/index.test.ts` asserted the verify body carried
   `paymentRequirements.network === 'eip155:1'`. Measured against production on
   2026-09-03, that exact body is a `400`. A stubbed `fetch` never noticed.
@@ -1442,7 +1449,7 @@ consume the fix.
 
   Three renames do the damage, and the facilitator reports none of them by name:
   `maxAmountRequired` becomes `amount`; `network` must be CAIP-2; and
-  `resource`/`description`/`mimeType` move out into a `resource` OBJECT — all
+  `resource`/`description`/`mimeType` move out into a `resource` OBJECT â€” all
   three keys required, a bare URL string is a `400`. `extra` is carried through,
   because that is where the EIP-712 domain lives for tokens the facilitator does
   not know by address (EURC, the bridged USDCs); dropping it makes them
@@ -1450,7 +1457,7 @@ consume the fix.
 
 ### Changed
 
-- **`FacilitatorClientOptions.x402Version`** — `1`, `2` or `'auto'`
+- **`FacilitatorClientOptions.x402Version`** â€” `1`, `2` or `'auto'`
   (default). The version is chosen, never imposed: a pin is honoured even when
   it contradicts the wire.
 
@@ -1471,11 +1478,11 @@ consume the fix.
   A header that merely *declares* version 2 while carrying plain names is being
   served correctly today, so upgrading it on the strength of the marker would
   change a call that works. Every CAIP-2 combination is already a hard `400`, so
-  switching those to v2 cannot regress anyone — it can only turn a failure into
+  switching those to v2 cannot regress anyone â€” it can only turn a failure into
   a payment. That is the whole safety argument for making this a minor rather
   than a major: **no request that succeeds today changes shape.**
 
-  XRPL stays on v1 by the same rule and correctly so — `xrpl-mainnet` has no
+  XRPL stays on v1 by the same rule and correctly so â€” `xrpl-mainnet` has no
   CAIP-2 form, its v1 string is its network id.
 
 - `buildVerifyRequest` / `buildSettleRequest` are untouched and still emit v1
@@ -1497,7 +1504,7 @@ consume the fix.
   the buyer pay twice.** `402` and `503` say opposite things: `402` is "the
   payment was REFUSED, sign a new authorization", `503` is "no verdict was
   reached, resend the SAME credential". Every facilitator edge in this SDK
-  flattened both into `success: false` plus an English sentence — so a caller
+  flattened both into `success: false` plus an English sentence â€” so a caller
   could not tell them apart, and the correct-looking reaction to the sentence
   ("ask the buyer to sign again") charges them a second time for money that was
   never refused. The first authorization stays perfectly spendable.
@@ -1517,16 +1524,16 @@ consume the fix.
 - **`refundViaFacilitator` had no non-2xx branch at all.** It called
   `response.json()` straight through, so a `503` body parsed cleanly,
   `result.success` came back `undefined`, and a refund the facilitator never
-  attempted was reported as failed — an escrow declared lost while every token
+  attempted was reported as failed â€” an escrow declared lost while every token
   was still in it. It now reports the refusal and, like `releaseViaFacilitator`,
   names the status when the body carries no reason.
 
 - **The claim that only the payer can recover an expired escrow is false, and it
   is in this repo three times.** `AuthCaptureEscrow.partialVoid` is
-  `onlySender(paymentInfo.operator)` — the operator is the **facilitator** — it
+  `onlySender(paymentInfo.operator)` â€” the operator is the **facilitator** â€” it
   sends the tokens **to the payer**, and it **never reads
   `authorizationExpiry`**. `reclaim` is the payer-only, post-expiry path, which
-  is why the facilitator does not expose it — not the only exit. So a release
+  is why the facilitator does not expose it â€” not the only exit. So a release
   that reverted with `AfterAuthorizationExpiry` is recoverable through
   `refundViaFacilitator` with no gas and no payer, and the belief that it was
   not is why stuck escrows were written off. Corrected in `buildPaymentInfo`, in
@@ -1536,14 +1543,14 @@ consume the fix.
 ### Added
 
 - **`upload`: bring your own storage for DX402 anchors.** The facilitator has
-  accepted two anchor shapes since v0.1 — `sealed` (the ciphertext rides in the
+  accepted two anchor shapes since v0.1 â€” `sealed` (the ciphertext rides in the
   request and it hosts the blob) and `pointer` (the seller stored it and sends
   only the locator). Both SDKs implemented only the first, so an integrator
   could not use their own storage at all and their body had to fit inside an
   anchor request.
 
   `upload` is a **callable, not a precomputed pointer**, for the same reason
-  `sign` is one: the SDK must seal first — the buyer has to be able to decrypt —
+  `sign` is one: the SDK must seal first â€” the buyer has to be able to decrypt â€”
   and only then is there anything to upload.
 
   ```ts
@@ -1563,7 +1570,7 @@ consume the fix.
   - **The signature covers YOUR pointer.** The facilitator verifies against
     `req.pointer` when present and `""` when absent, so `anchorEvidence` signs
     the pointer it sent. Signing `""` next to a real pointer throws nothing and
-    leaves the anchor permanently *provisional* — the state anyone can supersede.
+    leaves the anchor permanently *provisional* â€” the state anyone can supersede.
     `sellerDigestFor` takes the pointer as an optional fifth argument.
   - **A failed upload is a skip, never a failed sale.** A throw or an empty
     pointer yields `skipped: 'anchor_failed'` with `stage: 'upload'`.
@@ -1572,7 +1579,7 @@ consume the fix.
   `s3`) and can be set explicitly.
 
 - **Bounded, opt-out automatic retry.** A refusal the facilitator *proved* it did
-  not execute is replayed with the identical request — no re-signing, ever.
+  not execute is replayed with the identical request â€” no re-signing, ever.
   `retries` (default 2 extra attempts, `0` disables) on `FacilitatorClient`,
   `Erc8004Client`, `AdvancedEscrowClient` and both middlewares.
 
@@ -1601,19 +1608,19 @@ consume the fix.
   `FacilitatorErrorInfo`, `FacilitatorFailureFields`, `FacilitatorFetchOptions`,
   `WriterLeaseReason`.
 
-### Changed — behaviour, not signatures
+### Changed â€” behaviour, not signatures
 
 Nothing public was removed or renamed; every new field and option is optional.
 Two behaviours did move, deliberately:
 
 - **The middlewares answer `503` + `Retry-After` where they previously answered
-  `402` (verify) or `500` (settle)** — but only when the facilitator reached no
+  `402` (verify) or `500` (settle)** â€” but only when the facilitator reached no
   verdict. A genuine rejection is still `402`, and a genuine settlement failure
   is still `500`. A client that treated the old `402` as "sign again" was being
   told to double-charge.
 - **`verify()` and `settle()` may now make up to two extra attempts**, adding
   latency on a facilitator that is refusing. `Retry-After` is honoured only up to
-  `MAX_RETRY_AFTER_SECONDS` (15) — a misconfigured `Retry-After: 3600` would
+  `MAX_RETRY_AFTER_SECONDS` (15) â€” a misconfigured `Retry-After: 3600` would
   otherwise hang the caller for an hour inside a function documented as
   returning promptly. Pass `retries: 0` for the old timing.
 
@@ -1671,7 +1678,7 @@ payment fails on-chain:
 - Signing **raw** for an Alchemy SMA reverts `0x151d90fe`. Measured: 14 of 14
   delegated payers failed their escrow lock (2026-07-31).
 - **Wrapping** for a delegate that validates plain ECDSA is just as
-  unsettleable — and `FeedbackDelegate` is exactly that. Applying the wrap to
+  unsettleable â€” and `FeedbackDelegate` is exactly that. Applying the wrap to
   "any delegated account" means *the act of rating breaks the rater's next
   payment*. Found by Karma Kadabra and fixed in the Python SDK 0.67.0; this is
   the TypeScript half.
@@ -1680,7 +1687,7 @@ An UNKNOWN delegation is **not** "not delegated". `resolveDelegation` returns
 `null` for an unreadable chain and `buildEscrowPreAuth` refuses rather than
 guessing: collapsing the two is how the original bug survived eight days.
 
-Vectors in `erc7702.test.ts` are generated by the Python SDK, not by this port —
+Vectors in `erc7702.test.ts` are generated by the Python SDK, not by this port â€”
 a port compared only against itself proves nothing.
 
 ## [2.71.0] - 2026-08-25
@@ -1691,16 +1698,16 @@ a port compared only against itself proves nothing.
   ever have worked.**
 
   `prepareRelayedFeedback()` returns a `digest` that ALREADY carries the EIP-191
-  envelope — the facilitator recovers against it as a prehash, adding nothing.
+  envelope â€” the facilitator recovers against it as a prehash, adding nothing.
   This README and these docstrings told you to `signMessage(prep.digest)`.
   `signMessage` / `personal_sign` applies the envelope itself, so the value got
   wrapped **twice** and recovered an address that was not the rater.
 
   The failure is silent by construction: the signature is well-formed, the
-  request is well-formed, and the facilitator answers `relay_bad_signature` —
+  request is well-formed, and the facilitator answers `relay_bad_signature` â€”
   which reads like the rater signed the wrong content, not like the client
   wrapped it twice. Measured against production on 2026-08-25: signing the
-  digest recovered `0x98C5…7c97` for a rater whose address was `0x0B35…DcA5`.
+  digest recovered `0x98C5â€¦7c97` for a rater whose address was `0x0B35â€¦DcA5`.
 
   Found by Karma Kadabra reading the code before emitting anything, and
   confirmed independently on our side. Every wallet surface across three
@@ -1708,21 +1715,21 @@ a port compared only against itself proves nothing.
 
 ### Added
 
-- **`signingPayload` on `PrepareRelayFeedbackResponse`** — the same hash with the
+- **`signingPayload` on `PrepareRelayFeedbackResponse`** â€” the same hash with the
   envelope still off. This is what a wallet signs:
 
   | how you sign | what you sign |
   |---|---|
   | raw key (prehash) | `digest` |
   | wallet `personal_sign` | `signingPayload` |
-  | ✗ `personal_sign(digest)` | recovers a stranger |
+  | âœ— `personal_sign(digest)` | recovers a stranger |
 
   `keccak256('\x19Ethereum Signed Message:\n32' || signingPayload) === digest`,
   so a client can check the two against each other rather than rebuilding the
   preimage from `data`.
 
   Served by the facilitator from **v1.95.0**. Older facilitators omit it and the
-  field is `undefined` — fail loudly rather than falling back to signing
+  field is `undefined` â€” fail loudly rather than falling back to signing
   `digest` through a wallet, which is the broken path.
 
 Requires facilitator v1.95.0+ for `signingPayload`. Raw-key signers were never
@@ -1779,7 +1786,7 @@ served this rail since v1.74.0.
 
 ### Reconstructed
 
-- `bd22a5a` fix(escrow): paridad con Python — el ultimo recurso del settle nombra algo (v2.69.0)
+- `bd22a5a` fix(escrow): paridad con Python â€” el ultimo recurso del settle nombra algo (v2.69.0)
 
 ## [2.68.0] - 2026-08-21
 
@@ -1794,7 +1801,7 @@ served this rail since v1.74.0.
 
 - **`settle()` reported success whenever the HTTP call succeeded.** The returned
   object carried the literal `success: true`, so the facilitator's own verdict
-  was never read — even though the line above it already consulted
+  was never read â€” even though the line above it already consulted
   `result.success` for a warning.
 
   "The request arrived" is not "the money moved", and the gap is not
@@ -1821,7 +1828,7 @@ served this rail since v1.74.0.
   *"the only thing that reaches `verified: true`"*, the facilitator returns it
   when the ERC-8004 extension asks for one, and this client threw it away. A
   seller using the SDK end to end could therefore only ever produce
-  **provisional** anchors — which a gate-verified anchor can supersede. Read in
+  **provisional** anchors â€” which a gate-verified anchor can supersede. Read in
   both `camelCase` and `snake_case`.
 
   `errorReason` is what separates a reverted transfer from a rejected
@@ -1877,7 +1884,7 @@ served this rail since v1.74.0.
 
 ### Reconstructed
 
-- `ae55657` fix(dx402): elegir la forma del digest por la curva del PAYEE — un payee EVM no podia firmar
+- `ae55657` fix(dx402): elegir la forma del digest por la curva del PAYEE â€” un payee EVM no podia firmar
 
 ## [2.58.0] - 2026-08-18
 
@@ -1920,8 +1927,8 @@ served this rail since v1.74.0.
   whole mint.
 
 - **`RegistrationPendingError`, carrying `jobId` as a field.** What makes the
-  above safe rather than merely convenient. A timeout is not a failure — the mint
-  may still land — and a caller who cannot reach the job id without parsing a
+  above safe rather than merely convenient. A timeout is not a failure â€” the mint
+  may still land â€” and a caller who cannot reach the job id without parsing a
   string will re-register instead. That is the sequence that once produced five
   duplicate mints. For the same reason the timeout throws rather than resolving
   `success: false`.
@@ -1935,7 +1942,7 @@ served this rail since v1.74.0.
   `RegisterAgentResponse` carrying the agent id and tx of the run ALREADY
   underway, plus a "poll GET /register/status/{jobId}" hint. That was flattened
   into `Facilitator error: 409 - <text>`, leaving the caller with a bare failure
-  — precisely the shape that invites a retry, and retrying a mint is how
+  â€” precisely the shape that invites a retry, and retrying a mint is how
   duplicate agents get created. The parsed body is returned instead, with
   `success` forced to `false` so a 4xx can never claim otherwise. A 400 now
   surfaces the facilitator's own message; a non-JSON error still degrades to the
@@ -1950,8 +1957,8 @@ served this rail since v1.74.0.
   SDK exposed it.
 
   A synchronous register waits on a mint receipt, which on a congested chain
-  outlives client and proxy timeouts. The timed-out call is genuinely ambiguous —
-  the mint may well have landed — and retrying it is how five duplicate agents
+  outlives client and proxy timeouts. The timed-out call is genuinely ambiguous â€”
+  the mint may well have landed â€” and retrying it is how five duplicate agents
   once got minted. The async flow hands back a job id instead of a guess.
 
   `waitForRegistration` rejects on timeout rather than resolving the last
@@ -1976,7 +1983,7 @@ served this rail since v1.74.0.
 
 - **Solana support in `getIdentityByOwner`.** Facilitator v1.72.0 answers the
   route for SVM; before that it was EVM-only and returned 400. No SDK shape
-  change was needed — verified against the live mainnet response.
+  change was needed â€” verified against the live mainnet response.
 
 ## [2.50.0] - 2026-08-07
 
@@ -1984,7 +1991,7 @@ served this rail since v1.74.0.
 
 - **`score` on `FeedbackParams`.** On Solana the ATOM Engine ignores an unscored
   feedback: it is written to the agent, but contributes nothing to reputation and
-  the program reports `had_impact=false`. Not retroactive — reputation stays at
+  the program reports `had_impact=false`. Not retroactive â€” reputation stays at
   zero however much unscored feedback accumulates. The facilitator could not send
   it either until v1.70.3, so nobody's Solana reputation was ever being scored.
 
@@ -2018,7 +2025,7 @@ served this rail since v1.74.0.
 
 ### Added
 
-- **`uvd-x402-sdk/erc8128` — one signer and one verifier for the whole fleet.**
+- **`uvd-x402-sdk/erc8128` â€” one signer and one verifier for the whole fleet.**
   ERC-8128 signing was copy-pasted across four projects and verification
   existed only as two independent server implementations that had never been
   compared. They had diverged: one rejected the canonical `alg="eip191"`
@@ -2033,14 +2040,14 @@ served this rail since v1.74.0.
     client-chosen first-use model are both expressible.
   - `POLICY_PRESETS` (`meshrelay-strict`, `em-lenient`, `canonical-strict`)
     carry the nonce ordering with them, so adopting a posture cannot silently
-    flip it. `canonical-strict` pins the chain — a preset named "strict" that
+    flip it. `canonical-strict` pins the chain â€” a preset named "strict" that
     accepts any chain is not strict.
   - The verifier never re-serialises `@signature-params`: it takes the
     parameter substring verbatim from the header, so a parameter added to the
     wire tomorrow verifies through the same byte path instead of 401-ing.
   - `@authority` normalisation (lowercase, scheme's default port dropped)
     applies only where the scheme is known. The **configured** policy authority
-    is validated but never re-normalised — guessing a scheme for it silently
+    is validated but never re-normalised â€” guessing a scheme for it silently
     breaks `https` on `:80` and `http` on `:443`.
   - Conformance vectors ship **inside** the package and are byte-identical to
     the Python ones; a cross-language test signs in each runtime and verifies in
@@ -2050,7 +2057,7 @@ served this rail since v1.74.0.
 
 - **A rejected verification no longer reports a `wallet`.** The Python verifier
   returned the address the client wrote into its keyid on the failure path,
-  where nothing had checked it against the recovered signer — attacker-supplied
+  where nothing had checked it against the recovered signer â€” attacker-supplied
   input in a field named `wallet`, one forgotten `if (!result.ok)` away from
   being treated as an authenticated principal. Both languages now return no
   wallet on any rejection.
@@ -2061,7 +2068,7 @@ served this rail since v1.74.0.
 
 - **Token metadata in the EVM payload** (`includeTokenMetadata`): an EIP-3009
   authorization is signed against a token contract, but the encoded payload
-  only carried `{signature, authorization}` — a EURC payment and a USDC payment
+  only carried `{signature, authorization}` â€” a EURC payment and a USDC payment
   on the same chain produced indistinguishable headers, so a resource accepting
   several stablecoins could not rebuild `paymentRequirements` (`asset` +
   the `extra` EIP-712 domain) and the facilitator could not settle. Opt in via
@@ -2071,7 +2078,7 @@ served this rail since v1.74.0.
   every existing header stays byte-identical. Unknown token addresses throw
   rather than emitting a guess. New `getTokenByAddress` / `buildTokenMetadata`
   resolve an address back to its registry entry.
-- **BSC** in the chain registry, `enabled: false` on purpose — Binance-Peg USDC
+- **BSC** in the chain registry, `enabled: false` on purpose â€” Binance-Peg USDC
   does not implement ERC-3009 `transferWithAuthorization`, so the exact scheme
   cannot settle it. The entry exists so its **18 decimals** are on record;
   assuming the usual 6 mis-prices a payment by 12 orders of magnitude.
@@ -2079,13 +2086,13 @@ served this rail since v1.74.0.
 ### Fixed
 
 - **`X402Client.createPayment` always charged USDC**, silently ignoring
-  `paymentInfo.tokenType` — it read `chain.usdc` for the EIP-712 domain, the
+  `paymentInfo.tokenType` â€” it read `chain.usdc` for the EIP-712 domain, the
   decimals and the payload's `token` field, so asking for EURC signed a USDC
   authorization. It now resolves the token through `getTokenConfig`, matching
   what `EVMProvider.signPayment` already did, and throws when the token is not
   supported on the chain.
 - **`btoa()` cannot encode the payload of a USDT payment**: the EIP-712 domain
-  name of USDT on Optimism, Arbitrum and Monad is `USD₮0` (U+20AE), and
+  name of USDT on Optimism, Arbitrum and Monad is `USDâ‚®0` (U+20AE), and
   `btoa()` throws on any code point above 255. Every header the SDK emits now
   goes through a UTF-8 safe encoder (`encodeBase64Json`), and
   `decodeX402Header` reverses it. Byte-identical to the old output for ASCII
@@ -2108,7 +2115,7 @@ served this rail since v1.74.0.
   signs the sign-on-assignment EIP-3009 `ReceiveWithAuthorization` that locks
   a bounty in the x402r AuthCaptureEscrow and packs it as the raw-JSON
   `X-Payment-Auth` wrapper for the facilitator's `/settle`. The nonce is
-  `AuthCaptureEscrow.getHash(paymentInfo)` (payer-zeroed raw keccak — it
+  `AuthCaptureEscrow.getHash(paymentInfo)` (payer-zeroed raw keccak â€” it
   commits to the receiver, exported as `computeEscrowNonce`). Fail-loud
   validation: incomplete network config, unknown tier, bounty above the
   on-chain deposit limit, or `maxFeeBps` below the operator's 1300 bps all
@@ -2130,6 +2137,6 @@ served this rail since v1.74.0.
 
 - GitHub Actions pinned by commit SHA (`checkout`, `setup-node`) against
   npm supply-chain campaigns. Publishing still uses a long-lived `NPM_TOKEN`
-  on purpose — migrating to trusted publishing requires linking the package
+  on purpose â€” migrating to trusted publishing requires linking the package
   to this repo/workflow from npmjs.com first (documented inline in the
   workflow).
