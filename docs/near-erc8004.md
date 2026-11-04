@@ -175,6 +175,8 @@ weights sum in 256 bits. Hashes are exactly 64 lowercase hex characters without
 numbers in the deployed ABI; the SDK restricts them to safe integers. NFT page
 offsets are decimal U128 strings.
 
+Callback messages are capped at 16 KiB by the SDK.
+
 URIs need a scheme and RFC 3986 characters. Builders preserve valid bytes and
 reject malformed input; `normalizeNearErc8004Uri` explicitly encodes spaces and
 Unicode when desired. It does not turn a bare CID into a URI. Empty optional

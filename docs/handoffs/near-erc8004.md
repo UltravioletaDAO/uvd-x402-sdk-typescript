@@ -72,3 +72,108 @@ and pending callback state remain contract checks.
 
 The original 87 mutations all passed their second run. Two additional mutations
 cover detached argument/config snapshots before validation and signing.
+
+## Final verification
+
+Node 20.20.2, Python 3.11.4: typecheck, lint, ESM/CJS/declaration build and package
+smoke passed. The full offline CI-mode suite passed 4194 tests and retained only
+the baseline Windows OWS native-load failure (zero new failures). The 276 new
+tests pass. ESM and CJS package APIs replay both networks' configs and outcomes.
+Existing TS/Python runtime conformance passed 512 checks across nine phases; both
+existing registry fixture checks and the new ERC-8004 byte comparison passed.
+Gitleaks found no secrets in the three-point diff or the new commit history.
+
+The final complete mutation run killed **89/89**, with no survivors, invalid
+mutants or timeout kills. The worktree was clean before and after restoration.
+
+| ID | Guard | Result |
+| --- | --- | --- |
+| M01 | network allowlist | KILLED |
+| M02 | config network binding | KILLED |
+| M03 | identity binding | KILLED |
+| M04 | escrow binding | KILLED |
+| M05 | config deposit positive | KILLED |
+| M06 | config deposit ceiling | KILLED |
+| M07 | config gas floor | KILLED |
+| M08 | config gas ceiling | KILLED |
+| M09 | signer account | KILLED |
+| M10 | unknown args | KILLED |
+| M11 | required argument checks | KILLED |
+| M12 | optional argument checks | KILLED |
+| M13 | deadline expired | KILLED |
+| M14 | deadline maximum | KILLED |
+| M15 | verifier network | KILLED |
+| M16 | deposit floor | KILLED |
+| M17 | deposit ceiling | KILLED |
+| M18 | gas floor | KILLED |
+| M19 | gas ceiling | KILLED |
+| M20 | null deposit option | KILLED |
+| M21 | null gas option | KILLED |
+| M22 | one signing action | KILLED |
+| M23 | signing action type | KILLED |
+| M24 | signing receiver binding | KILLED |
+| M25 | nonce positive | KILLED |
+| M26 | block hash length | KILLED |
+| M27 | signature verification | KILLED |
+| M28 | view HTTP status | KILLED |
+| M29 | view byte ceiling | KILLED |
+| M30 | RPC error envelope | KILLED |
+| M31 | view timeout minimum | KILLED |
+| M32 | view timeout maximum | KILLED |
+| M33 | default bounded pagination | KILLED |
+| M34 | view verifier network | KILLED |
+| M35 | view byte-array maximum | KILLED |
+| M36 | view byte-array type | KILLED |
+| M37 | view schema check | KILLED |
+| M38 | view config budget check | KILLED |
+| M39 | identity view binding | KILLED |
+| M40 | receipt status uniqueness | KILLED |
+| M41 | receipt successful execution | KILLED |
+| M42 | receipt log-array shape | KILLED |
+| M43 | event emitter role | KILLED |
+| M44 | event standard | KILLED |
+| M45 | event version | KILLED |
+| M46 | single event data row | KILLED |
+| M47 | event data schema | KILLED |
+| M48 | final transaction success | KILLED |
+| M49 | outcome receiver network | KILLED |
+| M50 | register outcome ID equality | KILLED |
+| M51 | register outcome owner equality | KILLED |
+| M52 | register outcome URI equality | KILLED |
+| M53 | rejection code allowlist | KILLED |
+| M54 | rejection multiplicity | KILLED |
+| M55 | rejection receipt emitter | KILLED |
+| M56 | feedback outcome index equality | KILLED |
+| M57 | feedback outcome signer equality | KILLED |
+| M58 | feedback outcome value equality | KILLED |
+| M59 | required schema fields | KILLED |
+| M60 | optional schema fields | KILLED |
+| M61 | unknown schema fields | KILLED |
+| M62 | all list rows | KILLED |
+| M63 | list bound | KILLED |
+| M64 | safe number maximum | KILLED |
+| M65 | number integer | KILLED |
+| M66 | unsigned string representation | KILLED |
+| M67 | positive feedback index | KILLED |
+| M68 | signed canonicality | KILLED |
+| M69 | signed summary width | KILLED |
+| M70 | value lower bound | KILLED |
+| M71 | value upper bound | KILLED |
+| M72 | decimal maximum | KILLED |
+| M73 | tag controls | KILLED |
+| M74 | Unicode scalar strings | KILLED |
+| M75 | UTF-8 byte length | KILLED |
+| M76 | hash lowercase | KILLED |
+| M77 | hash width | KILLED |
+| M78 | metadata key width | KILLED |
+| M79 | reserved metadata key | KILLED |
+| M80 | proof alphabet | KILLED |
+| M81 | proof label alphabet | KILLED |
+| M82 | URI limit | KILLED |
+| M83 | URI scheme alpha | KILLED |
+| M84 | URI scheme alphabet | KILLED |
+| M85 | base64 canonical padding | KILLED |
+| M86 | base64 decoded limit | KILLED |
+| M87 | parallel feedback arrays | KILLED |
+| M88 | argument snapshot | KILLED |
+| M89 | config snapshot | KILLED |
