@@ -27,7 +27,7 @@ add('required argument checks','s.check(input[k], check, k); args[k] = input[k];
 add('optional argument checks','if (input[k] != null) { s.check(input[k], check, k);','if (input[k] != null) {');
 add('deadline expired','deadline < BigInt(now)','false');
 add('deadline maximum','deadline > BigInt(now) + BigInt(o.config.identity.limits.max_deadline_delay_ns)','false');
-add('verifier network','args.verifier !== t.verifier','false');
+add('verifier network','if (args.verifier !== t.verifier)','if (false)');
 add('deposit floor','BigInt(deposit) < minimum','false');
 add('deposit ceiling','BigInt(deposit) > cap','false');
 add('gas floor','BigInt(gas) < minGas','false');
@@ -75,7 +75,7 @@ add('required schema fields','Object.hasOwn(v, k) && check(v[k])','true',schema)
 add('optional schema fields','!Object.hasOwn(v, k) || check(v[k])','true',schema);
 add('unknown schema fields','Object.keys(v).every(k => Object.hasOwn(required, k) || Object.hasOwn(optional, k))','true',schema);
 add('all list rows','v.every(check)','v.some(check)',schema);
-add('list bound','v.length <= max','true',schema);
+add('list bound','Array.isArray(v) && v.length <= max && v.every(check)','Array.isArray(v) && v.every(check)',schema);
 add('safe number maximum','v <= max','true',schema);
 add('number integer','Number.isSafeInteger(v)','Number.isFinite(v)',schema);
 add('unsigned string representation',"typeof v !== 'string' || v.length > 78","v.length > 78",schema);
@@ -94,7 +94,7 @@ add('metadata key width','[A-Za-z0-9._:/-]{1,64}','[A-Za-z0-9._:/-]{0,65}',schem
 add('reserved metadata key',"key(v) && v !== 'agentWallet'",'key(v)',schema);
 add('proof alphabet','[\\x21-\\x7e]{1,128}','[\\x20-\\x7e]{1,129}',schema);
 add('proof label alphabet','[a-z0-9_-]{0,32}','[A-Za-z0-9_-]{0,33}',schema);
-add('URI limit','v.length <= max','true',schema);
+add('URI limit','(v.length <= max && fullMatch','(true && fullMatch',schema);
 add('URI scheme alpha','^[A-Za-z][A-Za-z0-9+.-]*:','^[A-Za-z0-9][A-Za-z0-9+.-]*:',schema);
 add('URI scheme alphabet','[A-Za-z0-9+.-]*:','[A-Za-z0-9+._-]*:',schema);
 add('base64 canonical padding','if (base64(bytes) !== value)','if (false)',schema);
