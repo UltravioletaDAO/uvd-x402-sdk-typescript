@@ -46,31 +46,33 @@ skipping a missing or mismatched fixture. This round preserves the TS vector byt
 
 ## Verification and auto-refutation
 
-Baseline Node 20.20.2/Python 3.11.4: 92 suites, 3638 tests passed, 75 skipped.
-The first baseline attempt found a better-sqlite3 ABI mismatch; rebuilding that
-dependency for Node 20 resolved it before implementation. OWS native tests are
-skipped on unsupported Windows by the existing suite; Linux CI requires them.
+Round 1 uses Node 20.20.2 and Python 3.11.4, matching CI. The initial base
+`f19902b` run with `CI=true` passed 3585 tests and failed to load OWS and SQLite.
+Rebuilding better-sqlite3 for Node 20 removed the SQLite failure; the base then
+passed 3636 tests, with only the unsupported Windows OWS native library failing.
+These baseline failures were recorded before comparing the final head.
 
-The registry suite exercises exact URI/UTF-8/tag/payment/hash/score/deposit/gas
-boundaries, uppercase/whitespace/null/Unicode cases, all builders and signing
-revalidation, response shapes, events, outcomes and bigint summaries. The mutation
-inventory is executable in `scripts/mutate-near-registry.mjs`: clean committed tree,
-one edit at a time, 120-second timeout per process, git checkout restoration after
-each edit. Final mutation and CI results are recorded in the PR verification table.
+The registry suite has 254 tests; the vector parity script adds four tests for
+identical bytes, whitespace drift, CRLF drift and a missing sibling fixture.
+The original 92 mutations are retained, with their targets adapted to the revised
+deposit/gas code. M93-M97 cover the five refutator gaps; M98-M117 cover the new
+ordering, emitter, async, SDK gas-error and parity guards. **117/117 killed** in a
+complete run, with no survivors, invalid mutants or timeout kills. Each process has
+a 120-second timeout and every edit is restored with git checkout; the tree was
+clean before and after the run.
 
+One independent adversarial subagent reviewed the diff and ran offline probes
+against the built bundle: no new P1/P2 findings. The vector equality guard gained
+negative tests and M117. URI case/whitespace/scheme prefixes, exact gas and deposit
+bounds, null/malformed receipts, executor/network binding and panic-only callback
+codes are covered. The final full-suite comparison, pre-CI table, build/package,
+secret scan and GitHub CI results are recorded in the PR and local round delivery.
 
-Final registry coverage: 217 tests. Mutation results: **92/92 killed**, no timeout
-kills and no surviving/invalid mutants (91 in the complete second pass, then M92
-for the final config-u8 boundary). Initial survivors M21/M43/M50/M51/M58/M60 were
-closed with explicit regressions; none was removed from the inventory. Typed
-summary validation checks operator presence and type separately. The full suite,
-build, lint, package smoke test and 512 existing TS/Python conformance checks were
-run with Node 20; final counts and the pre-CI table are in the PR.
-
-`git merge-tree` against open Nano PR #65 (shared package.json) completed without
-conflicts. No other open SDK PR overlaps. Secret scanning of branch history and
-the three-dot diff passed. The original implementation used no subagents. Round 1 includes the adversarial
-review required by its security-related assignment; results are recorded in the PR.
+The existing 512 runtime conformance checks continue to use Python main. Registry
+fixture parity uses a separate sparse checkout of Python PR #81's immutable fixture
+commit `9e5c4d2772d980074771d09f58f670e11f2dcc9d`, avoiding a circular merge
+dependency between the two open PRs. The 6784-byte TS fixture is unchanged; SHA256
+`80eeb72f0ee5a4a933b8592f88387d6c4a1f2234a97b02a1f94969878294be38`.
 
 ### Mutation inventory
 
@@ -168,3 +170,28 @@ review required by its security-related assignment; results are recorded in the 
 | M90 | boolean field | KILLED |
 | M91 | role field | KILLED |
 | M92 | config u8 max_score | KILLED |
+| M93 | receiver network binding | KILLED |
+| M94 | escrow network binding | KILLED |
+| M95 | E19 is not a callback rejection | KILLED |
+| M96 | display scheme exact delimiter | KILLED |
+| M97 | config exact version | KILLED |
+| M98 | update deposit before identity validation | KILLED |
+| M99 | update has no register deposit floor | KILLED |
+| M100 | zero gas SDK error | KILLED |
+| M101 | maximum gas SDK error | KILLED |
+| M102 | receipt array | KILLED |
+| M103 | receipt object | KILLED |
+| M104 | receipt outcome object | KILLED |
+| M105 | receipt emitter allowlist | KILLED |
+| M106 | receipt emitter network binding | KILLED |
+| M107 | receipt network validation | KILLED |
+| M108 | getAgent rejects asynchronously | KILLED |
+| M109 | listAgents rejects asynchronously | KILLED |
+| M110 | getFeedback rejects asynchronously | KILLED |
+| M111 | getFeedbackForPayment rejects asynchronously | KILLED |
+| M112 | listFeedback rejects asynchronously | KILLED |
+| M113 | getSummary rejects asynchronously | KILLED |
+| M114 | getSummaryByOperator rejects asynchronously | KILLED |
+| M115 | isFeedbackPending rejects asynchronously | KILLED |
+| M116 | update deposit check applies | KILLED |
+| M117 | cross-repo vector byte equality | KILLED |

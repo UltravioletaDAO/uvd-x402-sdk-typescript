@@ -136,10 +136,25 @@ jobs:
         run: |
           node scripts/derive-erc8128-f3-3.mjs --check
           node scripts/xlang/generate-near-registry-vectors.mjs --check
-          node scripts/xlang/check-near-registry-parity.mjs
 
       - name: Sign in each runtime, verify in the other
         env:
           UVD_X402_PY_ROOT: ${{ github.workspace }}/.sibling/uvd-x402-sdk-python
           UVD_PYTHON: python
         run: node scripts/xlang/cross-language-conformance.mjs
+
+      # PR #81 adopts the unchanged TS fixture. Pin its reviewed fixture commit
+      # while both PRs are open; the existing runtime conformance still uses main.
+      - name: Check out the shared registry fixture from Python
+        uses: actions/checkout@v4
+        with:
+          repository: UltravioletaDAO/uvd-x402-sdk-python
+          ref: 9e5c4d2772d980074771d09f58f670e11f2dcc9d
+          path: .sibling/uvd-x402-sdk-python-registry
+          sparse-checkout: tests/fixtures/near-registry.json
+          sparse-checkout-cone-mode: false
+
+      - name: Registry vectors are the same file in both repos
+        env:
+          UVD_X402_PY_ROOT: ${{ github.workspace }}/.sibling/uvd-x402-sdk-python-registry
+        run: node scripts/xlang/check-near-registry-parity.mjs
