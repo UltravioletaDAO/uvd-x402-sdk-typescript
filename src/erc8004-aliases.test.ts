@@ -1,4 +1,6 @@
 /** Offline transport contract: aliases never reach a facilitator URL or body. */
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ERC8004_CONTRACTS,
@@ -28,6 +30,10 @@ const publicAliases = [
 const invalidName: Erc8004Network = 'not-a-network';
 // @ts-expect-error A CAIP-2 EVM reference must be numeric.
 const invalidReference: Erc8004Network = 'eip155:base';
+// @ts-expect-error Numeric references without an ERC-8004 deployment are not public names.
+const unregisteredChain: Erc8004Network = 'eip155:999999999';
+// @ts-expect-error A numeric spelling is not enough: aliases must be exact literals.
+const noncanonicalChain: Erc8004Network = 'eip155:8453.0';
 
 const address = '0x1111111111111111111111111111111111111111';
 const feedback = { agentId: 42, value: 95, rater: address };
@@ -64,6 +70,29 @@ const writes = [
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ERC-8004 EVM aliases', () => {
+  it('declares exactly the registered networks and derived EVM aliases as string literals', () => {
+    // The Python snapshot reads quoted members from the published declaration.
+    // Reject templates/references as well as missing, extra or duplicate names.
+    const source = ts.createSourceFile(
+      'backend/index.ts',
+      readFileSync(new URL('./backend/index.ts', import.meta.url), 'utf8'),
+      ts.ScriptTarget.Latest,
+    );
+    const declaration = source.statements.find(
+      (node): node is ts.TypeAliasDeclaration => ts.isTypeAliasDeclaration(node) && node.name.text === 'Erc8004Network',
+    );
+    if (!declaration || !ts.isUnionTypeNode(declaration.type)) throw new Error('Missing Erc8004Network union');
+    const names = declaration.type.types.map((member) => {
+      if (!ts.isLiteralTypeNode(member) || !ts.isStringLiteral(member.literal)) {
+        throw new Error('Erc8004Network members must be exact string literals');
+      }
+      return member.literal.text;
+    });
+    expect(names.sort()).toEqual([
+      ...Object.keys(ERC8004_CONTRACTS), ...aliases.map(({ network }) => network),
+    ].sort());
+  });
+
   it('keeps Base canonical if the payment helper also recognizes base-mainnet', async () => {
     // ERC-8004 must preserve its wire spelling even if the shared payment
     // helper gains the deprecated alias. Otherwise the later table entry wins.
@@ -105,6 +134,8 @@ describe('ERC-8004 EVM aliases', () => {
     for (const network of publicAliases) expect(client.isAvailable(network)).toBe(true);
     expect(client.isAvailable(invalidName)).toBe(false);
     expect(client.isAvailable(invalidReference)).toBe(false);
+    expect(client.isAvailable(unregisteredChain)).toBe(false);
+    expect(client.isAvailable(noncanonicalChain)).toBe(false);
   });
 
   it.each(aliases)('$network resolves only to $canonical and preserves rail availability', ({ network, canonical }) => {

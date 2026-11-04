@@ -6,9 +6,11 @@
 
 - ERC-8004 registries for Robinhood Chain (`robinhood`, chain 4663) and Robinhood testnet (`robinhood-testnet`, chain 46630). Both networks include the confirmed identity, reputation and validation registries.
 - `Erc8004Client` accepts CAIP-2 aliases for every registered EVM network, including `eip155:4663` and `eip155:46630`, for the same lookups and facilitator requests. Offline tests pin the addresses, aliases and request routing. Neither network enables relayed feedback or x402r escrow.
+- The public `CAIP2_IDENTIFIERS` table now includes `ethereum-sepolia`, `base-sepolia`, `polygon-amoy`, `arbitrum-sepolia`, `optimism-sepolia`, `celo-sepolia` and `avalanche-fuji`. `CAIP2_TO_CHAIN`, `chainToCAIP2`, `caip2ToChain` and `parseNetworkIdentifier` recognize these seven testnets; this adds no payment-chain configurations.
 
 ### Fixed
 
+- `Erc8004Network` enumerates the exact 23 registered EVM CAIP-2 aliases as string literals, matching runtime lookups and the Python SDK snapshot; unregistered or noncanonical numeric identifiers are rejected by the type.
 - ERC-8004 availability and contract lookups reject inherited object keys such as `constructor` and `toString`.
 
 ## [2.112.0] - 2026-11-04

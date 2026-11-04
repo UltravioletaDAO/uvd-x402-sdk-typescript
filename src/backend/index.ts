@@ -5138,8 +5138,8 @@ export function wireNetwork(network: string): string {
  * Network type for ERC-8004 operations (25 networks: 23 EVM + 2 Solana)
  *
  * These are the names the facilitator accepts (GET /feedback -> supportedNetworks),
- * plus CAIP-2 spellings for EVM networks. Use isAvailable to check whether a
- * numeric CAIP-2 identifier has an entry in ERC8004_CONTRACTS.
+ * plus the exact CAIP-2 spellings of the 23 registered EVM networks.
+ * Use isAvailable to check an untyped network name at runtime.
  * 'base-mainnet' is kept only as a
  * deprecated alias: the facilitator rejects it outright (400 "Invalid network"),
  * so anything passed through this module is normalised to 'base' before it
@@ -5149,7 +5149,15 @@ export type Erc8004Network =
   // EVM Mainnets
   | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base' | 'arc' | 'robinhood'
   // Aliases are rewritten to canonical names for lookups and on the wire
-  | 'base-mainnet' | `eip155:${number}`
+  | 'base-mainnet'
+  // Closed literals derived from ERC8004_CONTRACTS via chainToCAIP2.
+  // erc8004-aliases.test.ts pins this union to that table; Python snapshots read it.
+  | 'eip155:1' | 'eip155:8453' | 'eip155:137' | 'eip155:42161'
+  | 'eip155:10' | 'eip155:42220' | 'eip155:56' | 'eip155:143'
+  | 'eip155:43114' | 'eip155:534352' | 'eip155:1187947933' | 'eip155:5042'
+  | 'eip155:4663' | 'eip155:11155111' | 'eip155:84532' | 'eip155:80002'
+  | 'eip155:421614' | 'eip155:11155420' | 'eip155:11142220' | 'eip155:43113'
+  | 'eip155:324705682' | 'eip155:5042002' | 'eip155:46630'
   // EVM Testnets
   | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia' | 'arc-testnet' | 'robinhood-testnet'
   // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)
