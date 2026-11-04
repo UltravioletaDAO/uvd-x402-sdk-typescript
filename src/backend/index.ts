@@ -5089,10 +5089,11 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
   },
-  // Robinhood testnet (46630): only identity and reputation confirmed.
+  // Robinhood testnet (46630), all three registries measured on 2026-11-04.
   'robinhood-testnet': {
     identityRegistry: TESTNET_IDENTITY,
     reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
   },
   // Solana (2) - uses QuantuLabs 8004-solana Anchor program + ATOM Engine
   solana: {
@@ -5105,15 +5106,22 @@ export const ERC8004_CONTRACTS: Record<string, {
   },
 };
 
-const ERC8004_NETWORK_ALIASES = {
+// Derive aliases only from registered ERC-8004 networks. Payment support alone
+// does not imply an ERC-8004 deployment, and the deprecated Base spelling must
+// never replace the canonical name for eip155:8453.
+const ERC8004_NETWORK_ALIASES: Record<string, string> = {
   'base-mainnet': 'base',
-  'eip155:4663': 'robinhood',
-  'eip155:46630': 'robinhood-testnet',
-} as const;
+  ...Object.fromEntries(
+    Object.keys(ERC8004_CONTRACTS)
+      .filter((network) => network !== 'base-mainnet')
+      .map((network) => [chainToCAIP2(network), network])
+      .filter(([caip2]) => caip2.startsWith('eip155:')),
+  ),
+};
 
 /**
  * Return the network name the facilitator actually accepts.
- * Robinhood CAIP-2 identifiers resolve to the same names as local lookups.
+ * Registered EVM CAIP-2 identifiers resolve to the same names as local lookups.
  *
  * `base-mainnet` reads like the canonical spelling and is not: the facilitator
  * answers `400 {"error": "Invalid network: base-mainnet"}`. Every name is passed
@@ -5129,9 +5137,9 @@ export function wireNetwork(network: string): string {
 /**
  * Network type for ERC-8004 operations (25 networks: 23 EVM + 2 Solana)
  *
- * The original 23 names follow GET /feedback -> supportedNetworks
- * (facilitator 2.39.0, 2026-09-23). Robinhood registries were measured on
- * mainnet and testnet on 2026-11-04; CAIP-2 aliases use those same entries.
+ * These are the names the facilitator accepts (GET /feedback -> supportedNetworks),
+ * plus CAIP-2 spellings for EVM networks. Use isAvailable to check whether a
+ * numeric CAIP-2 identifier has an entry in ERC8004_CONTRACTS.
  * 'base-mainnet' is kept only as a
  * deprecated alias: the facilitator rejects it outright (400 "Invalid network"),
  * so anything passed through this module is normalised to 'base' before it
@@ -5141,7 +5149,7 @@ export type Erc8004Network =
   // EVM Mainnets
   | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base' | 'arc' | 'robinhood'
   // Aliases are rewritten to canonical names for lookups and on the wire
-  | keyof typeof ERC8004_NETWORK_ALIASES
+  | 'base-mainnet' | `eip155:${number}`
   // EVM Testnets
   | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia' | 'arc-testnet' | 'robinhood-testnet'
   // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)

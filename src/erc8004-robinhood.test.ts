@@ -1,4 +1,5 @@
 /** Robinhood singleton registries measured by c0der on 2026-11-04; no RPCs. */
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ const MAINNET = {
 const TESTNET = {
   identityRegistry: '0x8004A818BFB912233c491871b3d84c89A494BD9e',
   reputationRegistry: '0x8004B663056A597Dffe9eCcC1965A193B7388713',
+  validationRegistry: '0x8004Cb1BF31DAf7788923b405b754f57acEB4272',
 };
 const NETWORKS = [
   ['robinhood', 'robinhood', MAINNET],
@@ -50,8 +52,22 @@ describe('Robinhood in ERC-8004', () => {
     expect(parseNetworkIdentifier('eip155:46630')).toBe('robinhood-testnet');
   });
 
-  it('does not advertise an unconfirmed testnet validation registry', () => {
-    expect(client.getContracts('robinhood-testnet')).not.toHaveProperty('validationRegistry');
+  it('includes the measured testnet validation registry', () => {
+    expect(client.getContracts('robinhood-testnet')?.validationRegistry).toBe(TESTNET.validationRegistry);
+  });
+
+  it.each([
+    ['robinhood', 'Robinhood (4663)'],
+    ['robinhood-testnet', 'Robinhood testnet (46630)'],
+  ])('%s README row matches all three contract addresses', (network, label) => {
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    const rows = readme.split('\n').filter((line) => line.startsWith(`| ${label} |`));
+    expect(rows).toHaveLength(1);
+    const cells = rows[0].split('|').slice(1, -1).map((cell) => cell.trim().replaceAll('`', ''));
+    const contracts = ERC8004_CONTRACTS[network];
+    expect(cells).toEqual([
+      label, contracts.identityRegistry, contracts.reputationRegistry, contracts.validationRegistry,
+    ]);
   });
 
   it.each(NETWORKS)('%s uses the canonical name on identity and reputation reads', async (network, canonical) => {
@@ -116,12 +132,12 @@ describe('Robinhood in ERC-8004', () => {
 
   // The normal tsconfig excludes tests. Compile this file explicitly so removing
   // a public network from Erc8004Network cannot leave the runtime tests green.
-  it('typechecks the four spellings against the public client API', () => {
+  it('typechecks Robinhood and all EVM aliases against the public client API', () => {
     const config = ts.readConfigFile(fileURLToPath(new URL('../tsconfig.json', import.meta.url)), ts.sys.readFile);
     expect(config.error).toBeUndefined();
     const root = fileURLToPath(new URL('..', import.meta.url));
     const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root);
-    const program = ts.createProgram([fileURLToPath(import.meta.url)], { ...parsed.options, noEmit: true });
+    const program = ts.createProgram([fileURLToPath(import.meta.url), fileURLToPath(new URL('./erc8004-aliases.test.ts', import.meta.url))], { ...parsed.options, noEmit: true });
     expect(ts.getPreEmitDiagnostics(program).map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'))).toEqual([]);
   }, 30_000);
 });

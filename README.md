@@ -1400,12 +1400,14 @@ Arc (`arc`, `arc-testnet`) since 2.98.0, with the canonical registries on both; 
 Robinhood Chain accepts `robinhood` / `eip155:4663` and
 `robinhood-testnet` / `eip155:46630` in `Erc8004Client` methods. Both spellings
 resolve through `getContracts` and `isAvailable`; requests use the short name.
-`ERC8004_CONTRACTS` is indexed by short name.
+`ERC8004_CONTRACTS` is indexed by short name. Every EVM network in that table
+also accepts its CAIP-2 identifier (for example `eip155:8453` for Base and
+`eip155:5042` for Arc); only registered networks resolve locally.
 
 | Network | Identity registry | Reputation registry | Validation registry |
 | --- | --- | --- | --- |
 | Robinhood (4663) | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` | `0x8004BAa17C55a88189AE136b182e5fdA19dE9b63` | `0x8004Cc8439f36fd5F9F049D9fF86523Df6dAAB58` |
-| Robinhood testnet (46630) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` | `0x8004B663056A597Dffe9eCcC1965A193B7388713` | Not configured (unconfirmed) |
+| Robinhood testnet (46630) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` | `0x8004B663056A597Dffe9eCcC1965A193B7388713` | `0x8004Cb1BF31DAf7788923b405b754f57acEB4272` |
 
 These registry deployments were measured on 2026-11-04. They do not establish a
 FeedbackDelegate deployment: neither Robinhood network is advertised by

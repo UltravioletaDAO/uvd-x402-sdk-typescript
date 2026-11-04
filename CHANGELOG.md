@@ -4,8 +4,8 @@
 
 ### Added
 
-- ERC-8004 registries for Robinhood Chain (`robinhood`, chain 4663) and Robinhood testnet (`robinhood-testnet`, chain 46630). Mainnet includes identity, reputation and validation; testnet includes the confirmed identity and reputation registries only.
-- `Erc8004Client` accepts `eip155:4663` and `eip155:46630` as aliases for the same lookups and facilitator requests. Offline tests pin the addresses, aliases and request routing. Neither network enables relayed feedback or x402r escrow.
+- ERC-8004 registries for Robinhood Chain (`robinhood`, chain 4663) and Robinhood testnet (`robinhood-testnet`, chain 46630). Both networks include the confirmed identity, reputation and validation registries.
+- `Erc8004Client` accepts CAIP-2 aliases for every registered EVM network, including `eip155:4663` and `eip155:46630`, for the same lookups and facilitator requests. Offline tests pin the addresses, aliases and request routing. Neither network enables relayed feedback or x402r escrow.
 
 ### Fixed
 

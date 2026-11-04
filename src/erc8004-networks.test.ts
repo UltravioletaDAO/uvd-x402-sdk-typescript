@@ -23,9 +23,9 @@ const TESTNET_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const TESTNET_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const TESTNET_VALIDATION = '0x8004Cb1BF31DAf7788923b405b754f57acEB4272';
 
-// Original GET /feedback -> supportedNetworks snapshot (facilitator 2.39.0,
-// 2026-09-23), extended with the Robinhood deployments measured 2026-11-04.
-const REGISTERED_NETWORKS = [
+// Exactly the networks GET /feedback -> supportedNetworks must serve.
+// Robinhood support is a prerequisite for merging this SDK change.
+const FACILITATOR_NETWORKS = [
   'ethereum', 'base', 'polygon', 'arbitrum', 'optimism', 'celo', 'bsc',
   'monad', 'avalanche', 'scroll', 'skale-base', 'arc',
   'ethereum-sepolia', 'base-sepolia', 'polygon-amoy', 'arbitrum-sepolia',
@@ -41,15 +41,15 @@ const EVM_MAINNETS = [
 ];
 
 describe('ERC-8004 network table', () => {
-  it('covers every declared deployment', () => {
-    const missing = REGISTERED_NETWORKS.filter((n) => !(n in ERC8004_CONTRACTS));
+  it('covers every network the facilitator serves', () => {
+    const missing = FACILITATOR_NETWORKS.filter((n) => !(n in ERC8004_CONTRACTS));
     expect(missing).toEqual([]);
   });
 
-  it('contains only declared networks and the deprecated alias', () => {
+  it('invents no network the facilitator would reject', () => {
     // 'base-mainnet' is the one deliberate extra: a deprecated alias.
     const extra = Object.keys(ERC8004_CONTRACTS).filter(
-      (n) => !REGISTERED_NETWORKS.includes(n)
+      (n) => !FACILITATOR_NETWORKS.includes(n)
     );
     expect(extra).toEqual(['base-mainnet']);
   });
@@ -60,7 +60,7 @@ describe('ERC-8004 network table', () => {
   });
 
   it('leaves every other name untouched', () => {
-    for (const n of REGISTERED_NETWORKS) {
+    for (const n of FACILITATOR_NETWORKS) {
       expect(wireNetwork(n)).toBe(n);
     }
   });
