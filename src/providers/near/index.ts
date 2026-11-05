@@ -814,3 +814,5 @@ export * from './nep413';
 export * from './storage';
 export * from './events';
 export * from './registry';
+
+export * from './erc8004';

@@ -10,6 +10,8 @@ Users sign a message or transaction, and the Ultravioleta facilitator handles on
 
 ## Features
 
+**NEAR ERC-8004 (v2.112.0):** separate identity NFTs and reputation registries, payment-backed Arras feedback, config-bound wallet transactions and strict offline outcome parsing on mainnet and testnet. [Execution Market integration guide](docs/near-erc8004.md).
+
 **Arras NEAR escrow (v2.110.0):** offline local-key NEP-366 authorization, canonical Rust payment IDs and pull lifecycle helpers through `uvd-x402-sdk/near`. [Guide and agent example](docs/near-escrow.md). As of 2026-11-03 the production facilitator relays NEAR escrow only on testnet. Since 2.110.0 the registry allows mainnet escrow signing only for `v1.arras-escrow.near`; testnet keeps `arras-v1b-1101.testnet`.
 
 - **31 Networks**: EVM (19 including HashKey Chain, Arc, Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, Hedera (mainnet + testnet)
