@@ -35,12 +35,17 @@ describe('ESCROW_OPERATOR_GENERATION', () => {
     }
   });
 
-  it('has v3 on Arc and Arc Testnet only', () => {
+  it('has v3 on Robinhood Chain, Arc and Arc Testnet only', () => {
     const v3 = Object.entries(ESCROW_OPERATOR_GENERATION)
       .filter(([, generation]) => generation === 'v3')
       .map(([chainId]) => Number(chainId))
       .sort((a, b) => a - b);
-    expect(v3).toEqual([5042, 5042002]);
+    expect(v3).toEqual([4663, 5042, 5042002]);
+  });
+
+  it('reads Robinhood testnet (46630), which has no escrow, as an unlisted chain', () => {
+    expect(ESCROW_OPERATOR_GENERATION[46630]).toBeUndefined();
+    expect(getEscrowOperatorGeneration(46630)).toBe('v1');
   });
 
   it('reads an unlisted chain as v1, the ABI a custom options.contracts has always used', () => {

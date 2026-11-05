@@ -354,7 +354,9 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
   /**
    * The Python SDK's `escrow_signing.VERIFIED_USDC_DOMAINS`
    * (uvd-x402-sdk-python@3c81050, 0.97.0), written out here: not read from the
-   * table under test, nor from the chain registry.
+   * table under test, nor from the chain registry. Robinhood Chain (4663) is
+   * not in that version: its row is USDG's domain as x402-rs `src/network.rs`
+   * and Execution Market's network registry publish it.
    */
   const PYTHON_VERIFIED_USDC_DOMAINS: Record<number, [string, string]> = {
     8453: ['USD Coin', '2'],
@@ -368,6 +370,7 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
     1187947933: ['Bridged USDC (SKALE Bridge)', '2'],
     5042: ['USDC', '2'],
     5042002: ['USDC', '2'],
+    4663: ['Global Dollar', '1'],
   };
   const DOMAIN_CHAINS = Object.keys(PYTHON_VERIFIED_USDC_DOMAINS)
     .map(Number)
@@ -375,7 +378,7 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
   /** The other spelling a server could plausibly send. */
   const otherName = (name: string) => (name === 'USD Coin' ? 'USDC' : 'USD Coin');
 
-  it("has the Python SDK's eleven rows, no more", () => {
+  it("has the Python SDK's eleven rows and Robinhood Chain's, no more", () => {
     expect(VERIFIED_USDC_DOMAINS).toEqual(
       Object.fromEntries(
         Object.entries(PYTHON_VERIFIED_USDC_DOMAINS).map(([chainId, [name, version]]) => [chainId, { name, version }])
@@ -413,7 +416,7 @@ describe('VERIFIED_USDC_DOMAINS (domains checked against the token on-chain)', (
         [network, chainId, 'another name', otherName(name), version],
         [network, chainId, 'the name in lower case', name.toLowerCase(), version],
         [network, chainId, 'the name with a trailing space', `${name} `, version],
-        [network, chainId, 'another version', name, '1'],
+        [network, chainId, 'another version', name, version === '1' ? '2' : '1'],
         [network, chainId, 'the version with a leading space', name, ` ${version}`],
       ] as const;
     })
@@ -822,6 +825,17 @@ const EM_NETWORKS: Record<
     collector: '0x0E3dF9510de65469C4518D7843919c0b8C7A7757',
     usdc: '0x3600000000000000000000000000000000000000',
   },
+  // Execution Market's registry reads Robinhood's escrow addresses from its
+  // deployment configuration; these are the ones it measured on chain 4663
+  // (execution-market@1517823a docs/handoffs/robinhood-deployed-evidence/reads.json:
+  // the factory's getOperator, the operator's ESCROW()), and its registry's USDG.
+  robinhood: {
+    chainId: 4663,
+    operator: '0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D',
+    escrow: '0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff',
+    collector: '0x0E3dF9510de65469C4518D7843919c0b8C7A7757',
+    usdc: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+  },
 };
 /** The fee bounds Execution Market's payment config serves (`mcp_server/api/h2a.py`). */
 const EM_FEES = { min_fee_bps: 0, max_fee_bps: 1800 };
@@ -1139,11 +1153,12 @@ describe('buildEscrowPreAuth against the SDK tables: one contradiction per field
   });
 
   // ESCROW_CONTRACTS' operator column: the factory on most chains. On Ethereum,
-  // Arc and Arc Testnet it holds the operator itself, so they are not cases.
+  // Robinhood Chain, Arc and Arc Testnet it holds the operator itself, so they
+  // are not cases.
   const COLUMN_CASES = TABLE_CASES.filter(([, chainId]) => REGISTRY_CONTRACTS[chainId].operator !== ESCROW_OPERATORS[chainId]);
 
-  it('the operator column differs from the operator row on every chain but Ethereum, Arc and Arc Testnet', () => {
-    expect(TABLE_CHAINS.filter((c) => !COLUMN_CASES.some(([, chainId]) => chainId === c))).toEqual([1, 5042, 5042002]);
+  it('the operator column differs from the operator row on every chain but Ethereum, Robinhood Chain, Arc and Arc Testnet', () => {
+    expect(TABLE_CHAINS.filter((c) => !COLUMN_CASES.some(([, chainId]) => chainId === c))).toEqual([1, 4663, 5042, 5042002]);
   });
 
   it.each(COLUMN_CASES)("%s (chain %i): ESCROW_CONTRACTS' operator column is refused as the operator", async (network, chainId) => {
@@ -1213,7 +1228,7 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     ['hyperevm', 999],
     ['unichain', 130],
     ['scroll', 534352],
-    ['robinhood', 4663],
+    ['robinhood-testnet', 46630],
   ])('%s (chain %i), with no escrow row: refused with and without network', async (name, chainId) => {
     expect(REGISTRY_CONTRACTS[chainId]).toBeUndefined();
     expect(getChainByName(name)!.chainId).toBe(chainId);
@@ -1229,7 +1244,7 @@ describe('buildEscrowPreAuth against the SDK tables: unknown networks, case, nul
     const rowless = Object.values(SUPPORTED_CHAINS).filter(
       (chain) => chain.networkType === 'evm' && ESCROW_OPERATORS[chain.chainId] === undefined
     );
-    expect(rowless.map((chain) => chain.chainId)).toEqual(expect.arrayContaining([999, 130, 534352, 4663]));
+    expect(rowless.map((chain) => chain.chainId)).toEqual(expect.arrayContaining([999, 130, 534352, 46630]));
     for (const chain of rowless) {
       await refused(rowlessConfig(chain.chainId), {}, noRows(chain.chainId, ALL_FOUR));
       await refused(rowlessConfig(chain.chainId), { network: chain.name }, noRows(chain.chainId, ALL_FOUR));

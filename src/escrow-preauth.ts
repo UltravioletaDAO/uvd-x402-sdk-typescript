@@ -268,6 +268,12 @@ export interface EscrowPaymentInfo {
  * chain registry (`src/chains`), so that a registry edit cannot move the
  * domain this check accepts; a test pins that both agree. Frozen, each row
  * included.
+ *
+ * Robinhood Chain (4663) has no USDC: its row is the domain of the token its
+ * escrow moves, Paxos USDG (`Global Dollar` / `1`), the config's `usdc` key
+ * carrying USDG's address. USDG's `version()` reverts on-chain, so the pair is
+ * the one x402-rs (`src/network.rs`, checked against the token's
+ * `DOMAIN_SEPARATOR()`) and Execution Market's network registry publish.
  */
 export const VERIFIED_USDC_DOMAINS: Readonly<Record<number, Readonly<{ name: string; version: string }>>> =
   Object.freeze({
@@ -282,6 +288,7 @@ export const VERIFIED_USDC_DOMAINS: Readonly<Record<number, Readonly<{ name: str
     1187947933: Object.freeze({ name: 'Bridged USDC (SKALE Bridge)', version: '2' }), // SKALE Base
     5042: Object.freeze({ name: 'USDC', version: '2' }), // Arc
     5042002: Object.freeze({ name: 'USDC', version: '2' }), // Arc Testnet
+    4663: Object.freeze({ name: 'Global Dollar', version: '1' }), // Robinhood Chain (USDG)
   });
 
 /**
