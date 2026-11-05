@@ -460,6 +460,39 @@ describe('AdvancedEscrowClient on Robinhood Chain (4663)', () => {
     expect(signed[0].domain).toEqual({ ...USDG_DOMAIN, chainId: CHAIN_ID, verifyingContract: USDG });
   });
 
+  it("USDC_DOMAIN_VERSION[4663] is the chain registry's version, not a literal, and equals VERIFIED_USDC_DOMAINS'", () => {
+    expect(USDC_DOMAIN_VERSION[CHAIN_ID]).toBe(robinhoodUsdg().version);
+    expect(USDC_DOMAIN_VERSION[CHAIN_ID]).toBe(VERIFIED_USDC_DOMAINS[CHAIN_ID].version);
+    expect(USDC_DOMAIN_NAME[CHAIN_ID]).toBe(VERIFIED_USDC_DOMAINS[CHAIN_ID].name);
+    for (const chainId of Object.keys(USDC_DOMAIN_VERSION)) {
+      expect(VERIFIED_USDC_DOMAINS[Number(chainId)], `chain ${chainId} has no verified domain`).toBeDefined();
+    }
+  });
+
+  // The two reads cannot diverge: on every chain with a verified domain, the
+  // version authorize actually signs (signErc3009, not a copy of its logic) is
+  // the version VERIFIED_USDC_DOMAINS holds -- '1' on 4663, '2' everywhere else.
+  it.each(Object.keys(VERIFIED_USDC_DOMAINS).map(Number))(
+    'chain %i: authorize signs the domain version VERIFIED_USDC_DOMAINS verified',
+    async (chainId) => {
+      const signed: any[] = [];
+      const signer = {
+        provider: null,
+        getAddress: async () => PAYER,
+        signTypedData: async (domain: unknown) => {
+          signed.push(domain);
+          return MOCK_SIGNATURE;
+        },
+      };
+      stubFacilitator();
+      const client = new AdvancedEscrowClient(signer, { chainId, facilitatorUrl: FACILITATOR_URL });
+      await client.authorize({ ...paymentInfo(), token: ESCROW_CONTRACTS[chainId].usdc });
+      expect(signed).toHaveLength(1);
+      expect(signed[0].chainId).toBe(chainId);
+      expect(signed[0].version).toBe(VERIFIED_USDC_DOMAINS[chainId].version);
+    },
+  );
+
   it("Arc's authorize still signs version '2': the version table moves Robinhood Chain only", async () => {
     const signed: any[] = [];
     const signer = {
