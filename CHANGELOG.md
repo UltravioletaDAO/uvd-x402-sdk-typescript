@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.113.0] - 2026-11-05
+
 ### Added
 
 - ERC-8004 registries for Robinhood Chain (`robinhood`, chain 4663) and Robinhood testnet (`robinhood-testnet`, chain 46630). Both networks include the confirmed identity, reputation and validation registries.
