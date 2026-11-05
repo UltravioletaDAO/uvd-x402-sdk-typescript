@@ -23,8 +23,8 @@ const TESTNET_IDENTITY = '0x8004A818BFB912233c491871b3d84c89A494BD9e';
 const TESTNET_REPUTATION = '0x8004B663056A597Dffe9eCcC1965A193B7388713';
 const TESTNET_VALIDATION = '0x8004Cb1BF31DAf7788923b405b754f57acEB4272';
 
-// Exactly what GET /feedback -> supportedNetworks returns: all 23, in its
-// order, read from facilitator 2.39.0 on 2026-09-23.
+// Exactly the networks GET /feedback -> supportedNetworks must serve.
+// Robinhood support is a prerequisite for merging this SDK change.
 const FACILITATOR_NETWORKS = [
   'ethereum', 'base', 'polygon', 'arbitrum', 'optimism', 'celo', 'bsc',
   'monad', 'avalanche', 'scroll', 'skale-base', 'arc',
@@ -32,11 +32,12 @@ const FACILITATOR_NETWORKS = [
   'optimism-sepolia', 'celo-sepolia', 'avalanche-fuji', 'skale-base-sepolia',
   'arc-testnet',
   'solana', 'solana-devnet',
+  'robinhood', 'robinhood-testnet',
 ];
 
 const EVM_MAINNETS = [
   'ethereum', 'base', 'polygon', 'arbitrum', 'optimism', 'celo', 'bsc',
-  'monad', 'avalanche', 'scroll', 'arc',
+  'monad', 'avalanche', 'scroll', 'arc', 'robinhood',
 ];
 
 describe('ERC-8004 network table', () => {

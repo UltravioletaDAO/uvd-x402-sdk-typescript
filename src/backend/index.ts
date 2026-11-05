@@ -4937,7 +4937,7 @@ export type AgentId = number | string;
 const MAINNET_IDENTITY = '0x8004A169FB4a3325136EB29fA0ceB6D2e539a432';
 const MAINNET_REPUTATION = '0x8004BAa17C55a88189AE136b182e5fdA19dE9b63';
 // Deployed after the identity/reputation pair, which is why it was missing here.
-// Verified live on all eleven EVM mainnets (Arc on 2026-09-23); SKALE Base has
+// Verified on twelve EVM mainnets (Robinhood on 2026-11-04); SKALE Base has
 // no code at this address and is the one mainnet that legitimately has no
 // validation registry.
 const MAINNET_VALIDATION = '0x8004Cc8439f36fd5F9F049D9fF86523Df6dAAB58';
@@ -4952,7 +4952,7 @@ const SOLANA_AGENT_REGISTRY = '8oo4dC4JvBLwy5tGgiH3WwK4B9PWxL9Z4XjA2jzkQMbQ';
 const SOLANA_ATOM_ENGINE = 'AToMw53aiPQ8j7iHVb4fGt6nzUNxUhcPc3tbPBZuzVVb';
 
 /**
- * ERC-8004 contract addresses per network (23 networks: 21 EVM + 2 Solana)
+ * ERC-8004 contract addresses per network (25 networks: 23 EVM + 2 Solana)
  */
 export const ERC8004_CONTRACTS: Record<string, {
   identityRegistry?: string;
@@ -4961,7 +4961,7 @@ export const ERC8004_CONTRACTS: Record<string, {
   agentRegistryProgram?: string;
   atomEngineProgram?: string;
 }> = {
-  // Mainnets (12)
+  // Mainnets (13)
   ethereum: {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
@@ -5027,13 +5027,19 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: MAINNET_REPUTATION,
     validationRegistry: MAINNET_VALIDATION,
   },
+  // Robinhood Chain (4663), singleton registries measured on 2026-11-04.
+  robinhood: {
+    identityRegistry: MAINNET_IDENTITY,
+    reputationRegistry: MAINNET_REPUTATION,
+    validationRegistry: MAINNET_VALIDATION,
+  },
   // Deprecated alias for 'base' -- kept so existing lookups keep resolving.
   'base-mainnet': {
     identityRegistry: MAINNET_IDENTITY,
     reputationRegistry: MAINNET_REPUTATION,
     validationRegistry: MAINNET_VALIDATION,
   },
-  // Testnets (9)
+  // Testnets (10)
   'ethereum-sepolia': {
     identityRegistry: TESTNET_IDENTITY,
     reputationRegistry: TESTNET_REPUTATION,
@@ -5083,6 +5089,12 @@ export const ERC8004_CONTRACTS: Record<string, {
     reputationRegistry: TESTNET_REPUTATION,
     validationRegistry: TESTNET_VALIDATION,
   },
+  // Robinhood testnet (46630), all three registries measured on 2026-11-04.
+  'robinhood-testnet': {
+    identityRegistry: TESTNET_IDENTITY,
+    reputationRegistry: TESTNET_REPUTATION,
+    validationRegistry: TESTNET_VALIDATION,
+  },
   // Solana (2) - uses QuantuLabs 8004-solana Anchor program + ATOM Engine
   solana: {
     agentRegistryProgram: SOLANA_AGENT_REGISTRY,
@@ -5094,8 +5106,22 @@ export const ERC8004_CONTRACTS: Record<string, {
   },
 };
 
+// Derive aliases only from registered ERC-8004 networks. Payment support alone
+// does not imply an ERC-8004 deployment, and the deprecated Base spelling must
+// never replace the canonical name for eip155:8453.
+const ERC8004_NETWORK_ALIASES: Record<string, string> = {
+  'base-mainnet': 'base',
+  ...Object.fromEntries(
+    Object.keys(ERC8004_CONTRACTS)
+      .filter((network) => network !== 'base-mainnet')
+      .map((network) => [chainToCAIP2(network), network])
+      .filter(([caip2]) => caip2.startsWith('eip155:')),
+  ),
+};
+
 /**
  * Return the network name the facilitator actually accepts.
+ * Registered EVM CAIP-2 identifiers resolve to the same names as local lookups.
  *
  * `base-mainnet` reads like the canonical spelling and is not: the facilitator
  * answers `400 {"error": "Invalid network: base-mainnet"}`. Every name is passed
@@ -5103,14 +5129,17 @@ export const ERC8004_CONTRACTS: Record<string, {
  * old spelling keep working instead of being rejected at the edge.
  */
 export function wireNetwork(network: string): string {
-  return network === 'base-mainnet' ? 'base' : network;
+  return Object.hasOwn(ERC8004_NETWORK_ALIASES, network)
+    ? ERC8004_NETWORK_ALIASES[network as keyof typeof ERC8004_NETWORK_ALIASES]
+    : network;
 }
 
 /**
- * Network type for ERC-8004 operations (23 networks: 21 EVM + 2 Solana)
+ * Network type for ERC-8004 operations (25 networks: 23 EVM + 2 Solana)
  *
- * These are the names the FACILITATOR accepts, verified against
- * GET /feedback -> supportedNetworks (all 23, facilitator 2.39.0, 2026-09-23).
+ * These are the names the facilitator accepts (GET /feedback -> supportedNetworks),
+ * plus the exact CAIP-2 spellings of the 23 registered EVM networks.
+ * Use isAvailable to check an untyped network name at runtime.
  * 'base-mainnet' is kept only as a
  * deprecated alias: the facilitator rejects it outright (400 "Invalid network"),
  * so anything passed through this module is normalised to 'base' before it
@@ -5118,11 +5147,19 @@ export function wireNetwork(network: string): string {
  */
 export type Erc8004Network =
   // EVM Mainnets
-  | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base' | 'arc'
-  // Deprecated alias, rewritten to 'base' before it reaches the wire
+  | 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism' | 'celo' | 'bsc' | 'monad' | 'avalanche' | 'scroll' | 'skale-base' | 'arc' | 'robinhood'
+  // Aliases are rewritten to canonical names for lookups and on the wire
   | 'base-mainnet'
+  // Closed literals derived from ERC8004_CONTRACTS via chainToCAIP2.
+  // erc8004-aliases.test.ts pins this union to that table; Python snapshots read it.
+  | 'eip155:1' | 'eip155:8453' | 'eip155:137' | 'eip155:42161'
+  | 'eip155:10' | 'eip155:42220' | 'eip155:56' | 'eip155:143'
+  | 'eip155:43114' | 'eip155:534352' | 'eip155:1187947933' | 'eip155:5042'
+  | 'eip155:4663' | 'eip155:11155111' | 'eip155:84532' | 'eip155:80002'
+  | 'eip155:421614' | 'eip155:11155420' | 'eip155:11142220' | 'eip155:43113'
+  | 'eip155:324705682' | 'eip155:5042002' | 'eip155:46630'
   // EVM Testnets
-  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia' | 'arc-testnet'
+  | 'ethereum-sepolia' | 'base-sepolia' | 'polygon-amoy' | 'arbitrum-sepolia' | 'optimism-sepolia' | 'celo-sepolia' | 'avalanche-fuji' | 'skale-base-sepolia' | 'arc-testnet' | 'robinhood-testnet'
   // Solana (uses QuantuLabs 8004-solana Anchor program + ATOM Engine)
   | 'solana' | 'solana-devnet';
 
@@ -6727,7 +6764,8 @@ export class Erc8004Client {
    * @returns Contract addresses or undefined if not deployed
    */
   getContracts(network: Erc8004Network): typeof ERC8004_CONTRACTS[Erc8004Network] | undefined {
-    return ERC8004_CONTRACTS[network];
+    const canonical = wireNetwork(network);
+    return Object.hasOwn(ERC8004_CONTRACTS, canonical) ? ERC8004_CONTRACTS[canonical] : undefined;
   }
 
   /**
@@ -6737,7 +6775,7 @@ export class Erc8004Client {
    * @returns True if ERC-8004 contracts are deployed
    */
   isAvailable(network: string): network is Erc8004Network {
-    return network in ERC8004_CONTRACTS;
+    return Object.hasOwn(ERC8004_CONTRACTS, wireNetwork(network));
   }
 
   /**

@@ -643,6 +643,15 @@ export const CAIP2_IDENTIFIERS: Record<string, string> = {
   'robinhood-testnet': 'eip155:46630',
   arc: 'eip155:5042',
   'arc-testnet': 'eip155:5042002',
+  // ERC-8004 testnets without a payment-chain configuration. Keep their
+  // identifiers here so chainToCAIP2 is the shared source for network aliases.
+  'ethereum-sepolia': 'eip155:11155111',
+  'base-sepolia': 'eip155:84532',
+  'polygon-amoy': 'eip155:80002',
+  'arbitrum-sepolia': 'eip155:421614',
+  'optimism-sepolia': 'eip155:11155420',
+  'celo-sepolia': 'eip155:11142220',
+  'avalanche-fuji': 'eip155:43113',
   // SVM chains
   solana: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
   fogo: 'svm:fogo',
