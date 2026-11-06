@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.114.0] - 2026-11-06
+
 ### Added
 
 - Escrow on Robinhood Chain (chain 4663), with Paxos USDG. `buildEscrowPreAuth` signs a Robinhood config under `network: 'robinhood'` or `'eip155:4663'`: the four tables it reads gain one row each. `ESCROW_CONTRACTS[4663]` is the x402r canonical escrow with Arc's addresses (AuthCaptureEscrow `0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff`, token collector `0x0E3dF9510de65469C4518D7843919c0b8C7A7757`, ProtocolFeeConfig `0xBe2d24614F339a1eB103A399F93AA2a39Ca815Bc`, RefundRequestFactory `0xe971C674fD5c3462023f3F891dF6289DFbC9CEFC`, operator `0x0258472A1410Ac3Ad720f1BC83f22B3c0af1Fd9D`) and USDG `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, read from the chain registry. `ESCROW_OPERATORS[4663]` is Execution Market's operator, the same address; `ESCROW_MAX_FEE_BPS[4663]` is 1800; `VERIFIED_USDC_DOMAINS[4663]` is USDG's domain, `Global Dollar` / `1`. The addresses were crossed against this SDK's Arc row, Execution Market's on-chain measurement (`docs/handoffs/robinhood-deployed-evidence/reads.json`) and x402-rs (`src/payment_operator/addresses.rs`).
