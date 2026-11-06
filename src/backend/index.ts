@@ -94,7 +94,7 @@ import type {
 } from '../lifecycle-auth';
 import { X402Error } from '../types';
 import { getChainByName, isUsdPegged, usdConversionError } from '../chains';
-import { arcUsdc, ESCROW_CONTRACTS } from '../escrow-contracts';
+import { arcUsdc, ESCROW_CONTRACTS, robinhoodUsdg } from '../escrow-contracts';
 import {
   AUTHORIZATION_ALREADY_SETTLED,
   AUTHORIZATION_IN_FLIGHT,
@@ -7324,7 +7324,7 @@ export function buildErc8004PaymentRequirements(
 //   operator.charge()           -> escrow.charge()       (direct payment)
 //   operator.refundPostEscrow() -> escrow.refund()       (dispute refund)
 //
-// On a 'v3' operator (Arc, Arc Testnet) the client maps RELEASE to
+// On a 'v3' operator (Arc, Arc Testnet, Robinhood Chain) the client maps RELEASE to
 // operator.capture() and REFUND IN ESCROW to operator.void(), which returns
 // the WHOLE capturable amount. See OPERATOR_ABI_V3.
 // ============================================================================
@@ -7391,7 +7391,18 @@ export const USDC_DOMAIN_NAME: Record<number, string> = {
   143: 'USDC',            // Monad
   5042: arcUsdc('arc').name,             // Arc ('USDC', from src/chains)
   5042002: arcUsdc('arc-testnet').name,  // Arc Testnet ('USDC', from src/chains)
+  4663: robinhoodUsdg().name,            // Robinhood Chain (USDG 'Global Dollar', from src/chains)
 };
+
+/**
+ * USDC EIP-712 domain version per chain, where it is not `'2'`: the version
+ * `AdvancedEscrowClient` signs `ReceiveWithAuthorization` under. Every other
+ * chain signs `'2'`, as it always has. Robinhood Chain's token is USDG, whose
+ * domain version is `'1'` (from src/chains; its `version()` reverts on-chain).
+ */
+export const USDC_DOMAIN_VERSION: Readonly<Record<number, string>> = Object.freeze({
+  4663: robinhoodUsdg().version,         // Robinhood Chain (USDG '1', from src/chains)
+});
 
 /**
  * Per-chain escrow contract addresses: {@link ESCROW_CONTRACTS} lives in
@@ -7641,7 +7652,8 @@ export interface AdvancedEscrowClientOptions extends StackKeyOptions {
    * Supported chains: 8453 (Base), 84532 (Base Sepolia), 1 (Ethereum),
    * 11155111 (Ethereum Sepolia), 137 (Polygon), 42161 (Arbitrum),
    * 10 (Optimism), 42220 (Celo), 143 (Monad), 43114 (Avalanche),
-   * 1187947933 (SKALE Base), 5042 (Arc), 5042002 (Arc Testnet).
+   * 1187947933 (SKALE Base), 5042 (Arc), 5042002 (Arc Testnet),
+   * 4663 (Robinhood Chain, USDG).
    */
   chainId?: number;
   /** Contract addresses (auto-resolved from chainId if not provided) */
@@ -7801,6 +7813,7 @@ export const ESCROW_OPERATOR_GENERATION: Record<number, EscrowOperatorGeneration
   1187947933: 'v2',  // SKALE Base
   5042: 'v3',        // Arc
   5042002: 'v3',     // Arc Testnet
+  4663: 'v3',        // Robinhood Chain
 };
 
 /** Operator generation of a chain; `'v1'` when the chain is not listed. */
@@ -7815,10 +7828,12 @@ export function getEscrowOperatorGeneration(chainId: number): EscrowOperatorGene
  * Supported chains: Base (8453), Base Sepolia (84532), Ethereum (1),
  * Ethereum Sepolia (11155111), Polygon (137), Arbitrum (42161),
  * Optimism (10), Celo (42220), Monad (143), Avalanche (43114),
- * SKALE Base (1187947933), Arc (5042), Arc Testnet (5042002).
+ * SKALE Base (1187947933), Arc (5042), Arc Testnet (5042002),
+ * Robinhood Chain (4663, USDG: domain {@link USDC_DOMAIN_NAME} /
+ * {@link USDC_DOMAIN_VERSION}).
  *
  * The operator ABI follows the chain's {@link ESCROW_OPERATOR_GENERATION}.
- * On Arc and Arc Testnet (`'v3'`) `release` sends `capture`, `refundInEscrow`
+ * On Arc, Arc Testnet and Robinhood Chain (`'v3'`) `release` sends `capture`, `refundInEscrow`
  * sends `void` (whole capturable amount only), `refundPostEscrow` sends
  * `refund`, and `charge` refuses without signing or sending.
  *
@@ -8087,7 +8102,7 @@ export class AdvancedEscrowClient {
   private async signErc3009(auth: Record<string, string>): Promise<string> {
     const domain = {
       name: USDC_DOMAIN_NAME[this.chainId] || 'USD Coin',
-      version: '2',
+      version: Object.hasOwn(USDC_DOMAIN_VERSION, this.chainId) ? USDC_DOMAIN_VERSION[this.chainId] : '2',
       chainId: this.chainId,
       verifyingContract: this.contracts.usdc,
     };
@@ -8243,7 +8258,7 @@ export class AdvancedEscrowClient {
    *
    * Calls PaymentOperator.release() -> escrow.capture()
    *
-   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * On a `'v3'` operator (Arc, Arc Testnet, Robinhood Chain) it calls
    * `PaymentOperator.capture(paymentInfo, amount, 0x)` instead, after checking
    * that the operator has code ({@link ESCROW_OPERATOR_NOT_DEPLOYED}).
    *
@@ -8297,7 +8312,7 @@ export class AdvancedEscrowClient {
    *
    * Calls PaymentOperator.refundInEscrow() -> escrow.partialVoid()
    *
-   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * On a `'v3'` operator (Arc, Arc Testnet, Robinhood Chain) it calls
    * `PaymentOperator.void(paymentInfo, 0x)`, which takes no amount and returns
    * the WHOLE `capturableAmount`. So it first reads that amount on-chain
    * (`AuthCaptureEscrow.getHash` + `paymentState`) and sends only when
@@ -8720,7 +8735,7 @@ export class AdvancedEscrowClient {
    * Calls PaymentOperator.charge() -> escrow.charge()
    * Funds go directly from payer to receiver.
    *
-   * Not available on a `'v3'` operator (Arc, Arc Testnet): it returns
+   * Not available on a `'v3'` operator (Arc, Arc Testnet, Robinhood Chain): it returns
    * {@link ESCROW_UNSUPPORTED_ON_GENERATION} without signing or sending.
    *
    * @param paymentInfo - PaymentInfo with receiver and amount
@@ -8796,7 +8811,7 @@ export class AdvancedEscrowClient {
    *
    * Kept for future use when tokenCollector is implemented.
    *
-   * On a `'v3'` operator (Arc, Arc Testnet) it calls
+   * On a `'v3'` operator (Arc, Arc Testnet, Robinhood Chain) it calls
    * `PaymentOperator.refund(paymentInfo, amount, tokenCollector, collectorData)`
    * -> escrow.refund(), the same arguments, after checking that the operator
    * has code ({@link ESCROW_OPERATOR_NOT_DEPLOYED}).
@@ -8857,7 +8872,7 @@ export class AdvancedEscrowClient {
   }
 
   // ==========================================================================
-  // INTERNAL: 'v3' operator (Arc, Arc Testnet)
+  // INTERNAL: 'v3' operator (Arc, Arc Testnet, Robinhood Chain)
   // ==========================================================================
 
   /** The refusal of a call a 'v3' operator does not have, or null elsewhere. */

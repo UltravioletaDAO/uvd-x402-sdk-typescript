@@ -692,6 +692,8 @@ const paymentAuth = await buildEscrowPreAuth(new EnvKeyAdapter(), {
 
 Any `SigningWalletAdapter` works as the signer (only `signTypedData` is used); browser wallets can pass a minimal `{ signTypedData }` wrapper. Validation fails loud instead of falling back: incomplete network config, unknown tier, bounty outside the on-chain deposit limit ($100), or a `maxFeeBps` below the operator's 1300 bps all throw before anything is signed. What the config asserts is also checked against the SDK's own tables before signing, as in the Python SDK: the `chain_id` against the `network` you name (a registry name or `eip155:<id>`), the escrow, token collector and USDC against `ESCROW_CONTRACTS`, the operator against `ESCROW_OPERATORS`, `maxFeeBps` against the chain's ceiling in `ESCROW_MAX_FEE_BPS`, and the USDC EIP-712 domain (`usdc_domain_name` / `usdc_domain_version`) against the token's on-chain domain in `VERIFIED_USDC_DOMAINS`. A contradiction throws `INVALID_CONFIG`, and so do a `network` the SDK does not register and a chain without a row in each of the four tables, with or without `network`; name the network you expect to pay on, from your own code, never one read from the config. A server-published tier window must be an integer from 0 to its `ESCROW_TIER_WINDOW_MAX`, and `authorizationExpiry` at most `ESCROW_MAX_AUTHORIZATION_SEC` after now: past either, the SDK refuses, it never clamps. `computeEscrowNonce` is exported to reproduce `AuthCaptureEscrow.getHash` externally.
 
+On Robinhood Chain (`network: 'robinhood'` or `'eip155:4663'`) the escrow moves Paxos USDG, not USDC: the config's `usdc` is USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, 6 decimals) and its domain is `Global Dollar` / `1`, the row `VERIFIED_USDC_DOMAINS[4663]` holds. The escrow, token collector and operator are Arc's (x402r canonical escrow). Robinhood testnet (`46630`) has no escrow and is refused like any chain without rows.
+
 ## Batch Settlement (buyer)
 
 The buyer side of the x402 `batch-settlement` scheme on EVM ([spec](https://github.com/coinbase/x402/tree/main/specs/schemes/batch-settlement)): the first paid request signs an ERC-3009 deposit into a payment channel plus a voucher, and every later request on that channel signs only the next cumulative voucher. Same API and the same golden vectors as the Python SDK's `uvd_x402_sdk.batch_settlement`.
@@ -1411,7 +1413,9 @@ also accepts its CAIP-2 identifier (for example `eip155:8453` for Base and
 
 These registry deployments were measured on 2026-11-04. They do not establish a
 FeedbackDelegate deployment: neither Robinhood network is advertised by
-`supportsRelayedFeedback`. Robinhood x402r escrow is not available.
+`supportsRelayedFeedback`. x402r escrow runs on Robinhood Chain (4663) only, with
+USDG; see [Advanced Escrow](#advanced-escrow-advancedescrowclient). Robinhood
+testnet has no escrow.
 
 ### Solana Networks (2)
 
@@ -1663,7 +1667,7 @@ const state = await escrow.getEscrowState({
 
 Full escrow lifecycle management for EVM chains. Supports both `ethers.Signer` and `SigningWalletAdapter` (EnvKey, OWS) for signing.
 
-Supported on 10 EVM networks: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche. Since 2.99.0 also on Arc and Arc Testnet, on the x402r canonical escrow: there `release` sends `capture` and `refundInEscrow` sends `void`, which only returns the whole capturable amount. See [Escrow on Arc](docs/networks/arc.md#escrow-on-arc-2990).
+Supported on 10 EVM networks: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche. Since 2.99.0 also on Arc and Arc Testnet, on the x402r canonical escrow: there `release` sends `capture` and `refundInEscrow` sends `void`, which only returns the whole capturable amount. See [Escrow on Arc](docs/networks/arc.md#escrow-on-arc-2990). Robinhood Chain (chain ID `4663`) runs the same canonical escrow, with Arc's addresses and operator (`'v3'`); its token is Paxos USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`), and `authorize` signs it under USDG's EIP-712 domain, `Global Dollar` / `1` (`USDC_DOMAIN_NAME` / `USDC_DOMAIN_VERSION`). Robinhood testnet (`46630`) has no escrow.
 
 ### With Private Key (ethers.Signer)
 

@@ -100,8 +100,8 @@ describe('Robinhood in ERC-8004', () => {
     expect(supportsSolanaFeedback(network)).toBe(false);
   });
 
-  it('adds no Robinhood escrow deployment', () => {
-    expect(ESCROW_CONTRACTS[4663]).toBeUndefined();
+  it('adds no Robinhood testnet escrow deployment (the mainnet one is pinned in src/escrow-robinhood.test.ts)', () => {
+    expect(ESCROW_CONTRACTS[4663]?.escrow).toBe('0xBdEA0D1bcC5966192B070Fdf62aB4EF5b4420cff');
     expect(ESCROW_CONTRACTS[46630]).toBeUndefined();
   });
 
