@@ -31,6 +31,9 @@ export {
 export {
   validateRecipient,
   validateAmount,
+  isValidNanoAddress,
+  encodeNanoAddress,
+  decodeNanoAddress,
   createPaymentHeaders,
   getPaymentHeader,
   DEFAULT_PAYMENT_HEADER,

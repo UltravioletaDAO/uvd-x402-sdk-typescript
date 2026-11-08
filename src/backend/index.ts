@@ -386,6 +386,68 @@ export interface PaymentMiddlewareOptions extends FacilitatorClientOptions {
    * skip notice. Off when absent. See {@link DurableEvidenceOptions}.
    */
   durable?: DurableEvidenceOptions;
+  /**
+   * Networks this server verifies itself, beside the facilitator. Opt-in:
+   * absent, every payment goes to the facilitator exactly as before, and with
+   * it only the payments of the listed networks are taken out of that path.
+   * See {@link LocalVerifiers}.
+   */
+  localVerifiers?: LocalVerifiers;
+}
+
+/**
+ * Local verifiers by network type. Only `nano` today: the facilitator does not
+ * settle Nano, so a Nano payment is a send block already confirmed on the
+ * ledger, read from the merchant's own node. Its "settle" settles nothing more
+ * and answers with the block hash.
+ */
+export interface LocalVerifiers {
+  /**
+   * Build it with `createNanoVerifier` from `uvd-x402-sdk/nano`. It checks each
+   * payment against the requirements of the request it arrives on and the order
+   * the 402 issued; the fetch/Hono paywall puts that order (`extra.nano`) in
+   * every Nano accept it advertises, using the verifier's `issuer`.
+   */
+  nano?: ((payment: X402Header, requirements: PaymentRequirements) => Promise<VerifyResponse>) & {
+    issuer?: { issue(request: { payTo: string; amountRaw: string; resource: string }): unknown };
+  };
+}
+
+/** `requirements` with a fresh Nano order in `extra.nano` on every Nano entry, when a Nano issuer is configured. */
+function withNanoOrders(requirements: PaymentRequirements[], local: LocalVerifiers | undefined): PaymentRequirements[] {
+  const issuer = local?.nano?.issuer;
+  if (!issuer) return requirements;
+  return requirements.map((requirement) => {
+    const isNano = typeof requirement.network === 'string'
+      && getChainByName(parseNetworkIdentifier(requirement.network))?.networkType === 'nano';
+    if (!isNano) return requirement;
+    const nano = issuer.issue({ payTo: requirement.payTo, amountRaw: requirement.maxAmountRequired, resource: requirement.resource });
+    return { ...requirement, extra: { ...(isObject(requirement.extra) ? requirement.extra : {}), nano } };
+  });
+}
+
+/** `client`, with the payments of the `local` networks verified without the facilitator. */
+function withLocalVerifiers(client: FacilitatorClient, local: LocalVerifiers | undefined): FacilitatorClient {
+  const nano = local?.nano;
+  if (!nano) return client;
+  const isNano = (payment: X402Header) => typeof payment?.network === 'string'
+    && getChainByName(parseNetworkIdentifier(payment.network))?.networkType === 'nano';
+  const verified = new WeakMap<X402Header, VerifyResponse>();
+  const wrapped = Object.create(client) as FacilitatorClient;
+  wrapped.verify = async (payment, requirements, callOptions) => {
+    if (!isNano(payment)) return client.verify(payment, requirements, callOptions);
+    const result = await nano(payment, requirements);
+    if (result.isValid) verified.set(payment, result);
+    return result;
+  };
+  wrapped.settle = async (payment, requirements, callOptions) => {
+    if (!isNano(payment)) return client.settle(payment, requirements, callOptions);
+    const result = verified.get(payment);
+    if (!result) return { success: false, errorReason: 'nano_payment_not_verified', network: payment.network };
+    const transactionHash = (payment.payload as { blockHash?: string }).blockHash;
+    return { success: true, transactionHash, network: result.network ?? payment.network, payer: result.payer };
+  };
+  return wrapped;
 }
 
 /** The anchorer of `options.durable`, bound to the paywall's facilitator and stack key. */
@@ -2423,13 +2485,13 @@ export function createPaymentMiddleware(
   res: ExpressLikeResponse,
   next: () => void
 ) => Promise<void> {
-  const client = new FacilitatorClient({
+  const client = withLocalVerifiers(new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
     stackKey: options.stackKey,
     stackKeyHosts: options.stackKeyHosts,
-  });
+  }), options.localVerifiers);
   const settlementStrategy = options.settlementStrategy || 'before-handler';
   const anchorer = durableAnchorerFor(options);
 
@@ -2699,13 +2761,13 @@ function createAcceptsPaymentGate(input: HonoMiddlewareOptions) {
   const options: HonoMiddlewareOptions = input.discoverable === undefined
     ? input
     : { ...input, accepts: discoverableAccepts(input.accepts, input.discoverable) };
-  const client = new FacilitatorClient({
+  const client = withLocalVerifiers(new FacilitatorClient({
     baseUrl: options.facilitatorUrl || options.baseUrl,
     timeout: options.timeout,
     retries: options.retries,
     stackKey: options.stackKey,
     stackKeyHosts: options.stackKeyHosts,
-  });
+  }), options.localVerifiers);
   const settlementStrategy = options.settlementStrategy || 'before-handler';
 
   if (!options.accepts[0]) {
@@ -2728,15 +2790,16 @@ function createAcceptsPaymentGate(input: HonoMiddlewareOptions) {
     );
 
     if (selected.kind === 'missing') {
+      const challenged = withNanoOrders(advertisedRequirements, options.localVerifiers);
       return {
         reply: {
           status: 402,
           headers: advertisedVersion === 2
-            ? paymentRequiredHeader(advertisedRequirements[0], advertisedRequirements)
+            ? paymentRequiredHeader(challenged[0], challenged)
             : {},
           body: create402ResponseBody(
-            advertisedRequirements[0],
-            advertisedRequirements,
+            challenged[0],
+            challenged,
             advertisedVersion,
             options.facilitatorUrl
           ),
