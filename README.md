@@ -1,20 +1,22 @@
 # uvd-x402-sdk
 
-Gasless crypto payments across 29 blockchain networks using the x402 protocol.
+Gasless crypto payments across 31 enabled blockchain networks using the x402 protocol.
 
 Users sign a message or transaction, and the Ultravioleta facilitator handles on-chain settlement. No gas fees for users.
 
-**New in v2.94.0**: EURC on Arc mainnet and testnet, six-decimal euro amounts and token-specific signatures. Gas remains USDC. Funded EURC payments confirmed on Arc mainnet (x402 v1 and v2, 2026-09-22); Arc testnet funded acceptance pending. [Arc EURC guide](docs/networks/arc.md#eurc-prices-in-euros).
+**Arc EURC**: EURC on Arc mainnet and testnet, six-decimal euro amounts and token-specific signatures. Gas remains USDC. Funded EURC payments confirmed on Arc mainnet (x402 v1 and v2, 2026-09-22); Arc testnet funded acceptance pending. [Arc EURC guide](docs/networks/arc.md#eurc-prices-in-euros).
 
-**New in v2.95.0**: Hedera mainnet and testnet accept native USDC payments only, with offline signing and buyer/merchant helpers. HBAR funds sponsor network fees and is rejected as payment. [Hedera guide](docs/networks/hedera.md). Arc USDC/EURC remains supported on mainnet and testnet.
+**Native Hedera**: Hedera mainnet and testnet accept native USDC payments only, with offline signing and buyer/merchant helpers. HBAR funds sponsor network fees and is rejected as payment. [Hedera guide](docs/networks/hedera.md).
+
+See the [CHANGELOG](CHANGELOG.md) for release history.
 
 ## Features
 
-**NEAR ERC-8004 (v2.112.0):** separate identity NFTs and reputation registries, payment-backed Arras feedback, config-bound wallet transactions and strict offline outcome parsing on mainnet and testnet. [Execution Market integration guide](docs/near-erc8004.md).
+**NEAR ERC-8004:** separate identity NFTs and reputation registries, payment-backed Arras feedback, config-bound wallet transactions and strict offline outcome parsing on mainnet and testnet. [Execution Market integration guide](docs/near-erc8004.md).
 
-**Arras NEAR escrow (v2.110.0):** offline local-key NEP-366 authorization, canonical Rust payment IDs and pull lifecycle helpers through `uvd-x402-sdk/near`. [Guide and agent example](docs/near-escrow.md). As of 2026-11-03 the production facilitator relays NEAR escrow only on testnet. Since 2.110.0 the registry allows mainnet escrow signing only for `v1.arras-escrow.near`; testnet keeps `arras-v1b-1101.testnet`.
+**Arras NEAR escrow:** offline local-key NEP-366 authorization, canonical Rust payment IDs and pull lifecycle helpers through `uvd-x402-sdk/near`. [Guide and agent example](docs/near-escrow.md). As of 2026-11-08, the production facilitator advertises escrow on mainnet (`near` / `near:mainnet`) for `v1.arras-escrow.near` and on testnet for `arras-v1b-1101.testnet`, with operator `em` on both. These are also the SDK's registered escrow contracts; check [`/supported`](https://facilitator.ultravioletadao.xyz/supported) before use.
 
-- **31 Networks**: EVM (19 including HashKey Chain, Arc, Scroll, SKALE Base, Robinhood Chain), Solana, Fogo, Stellar, NEAR, Algorand, Sui, XRP Ledger, Hedera (mainnet + testnet)
+- **31 Enabled Payment Networks**: EVM (19), SVM (2: Solana and Fogo), Stellar (1), NEAR (1), Algorand (2), Sui (2), XRP Ledger (2), native Hedera (2). Mainnets and registered testnets are counted separately; aliases and disabled entries are excluded.
 - **Multi-Stablecoin**: USDC, EURC, AUSD, PYUSD, USDT, USDG (Robinhood Chain)
 - **x402 v1 & v2**: Protocol auto-detection; native Hedera supports v2/exact only
 - **Gasless**: Facilitator pays all network fees
@@ -802,12 +804,19 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 
 ## Supported Networks
 
-### EVM (16)
+The tables list the 31 enabled entries returned by `getEnabledChains()` from
+[`src/chains/index.ts`](src/chains/index.ts). BSC is registered but disabled and
+is excluded; aliases do not add networks. This payment-network count is separate
+from the ERC-8004 registry count. The NEAR escrow helpers additionally support
+`near:testnet`, which is not a separate entry in this chain registry. Facilitator
+availability is deployment-specific: check [`/supported`](https://facilitator.ultravioletadao.xyz/supported).
+
+### EVM (19)
 
 | Network | Chain ID | Tokens |
 |---------|----------|--------|
 | Base | 8453 | USDC, EURC |
-| Ethereum | 1 | USDC, EURC, AUSD, PYUSD, USDT |
+| Ethereum | 1 | USDC, EURC, AUSD, PYUSD |
 | Polygon | 137 | USDC, AUSD |
 | Arbitrum | 42161 | USDC, AUSD, USDT |
 | Optimism | 10 | USDC, USDT |
@@ -815,7 +824,7 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Celo | 42220 | USDC, USDT |
 | HyperEVM | 999 | USDC |
 | Unichain | 130 | USDC |
-| Monad | 143 | USDC, AUSD |
+| Monad | 143 | USDC, AUSD, USDT |
 | Scroll | 534352 | USDC |
 | SKALE Base | 1187947933 | USDC.e |
 | SKALE Base Sepolia | 324705682 | USDC.e |
@@ -844,21 +853,34 @@ const header = svm.encodePaymentHeader(payload, chainConfig);
 | Network | USDC ASA | Wallet |
 |---------|----------|--------|
 | Algorand | 31566704 | Lute, Pera |
+| Algorand Testnet | 10458941 | Lute, Pera |
 
 ### Sui
 
 | Network | Tokens | Wallet |
 |---------|--------|--------|
 | Sui | USDC, AUSD | Sui Wallet |
+| Sui Testnet | USDC | Sui Wallet |
 
 ### XRPL
 
-XRP Ledger settles in **native XRP** (6 decimals / drops) using the **t54 pre-signed Payment blob** scheme. The client builds and fully signs the Payment off-chain and sends `{ signedTxBlob }` to the facilitator. There is no stablecoin/token contract on XRPL. Use network ids `xrpl-mainnet` and `xrpl-testnet`. See [XRPL (XRP Ledger)](#xrpl-xrp-ledger) above for the `uvd-x402-sdk/xrpl` provider usage.
+XRP Ledger settles in **native XRP** (6 decimals / drops) using the **t54 pre-signed Payment blob** scheme. The client builds and fully signs the Payment off-chain and sends `{ signedTxBlob }` to the facilitator. There is no stablecoin/token contract on XRPL. Use network ids `xrpl` (alias `xrpl-mainnet`) and `xrpl-testnet`. See [XRPL (XRP Ledger)](#xrpl-xrp-ledger) above for the `uvd-x402-sdk/xrpl` provider usage.
 
 | Network | Asset | Network ID | Provider |
 |---------|-------|------------|----------|
-| XRP Ledger | XRP (native) | xrpl-mainnet | `uvd-x402-sdk/xrpl` |
+| XRP Ledger | XRP (native) | xrpl | `uvd-x402-sdk/xrpl` |
 | XRP Ledger Testnet | XRP (native) | xrpl-testnet | `uvd-x402-sdk/xrpl` |
+
+### Native Hedera (2)
+
+| Network | Network ID | USDC token | Provider |
+|---------|------------|------------|----------|
+| Hedera | `hedera:mainnet` | `0.0.456858` | `uvd-x402-sdk/hedera` |
+| Hedera Testnet | `hedera:testnet` | `0.0.429274` | `uvd-x402-sdk/hedera` |
+
+Native Hedera supports x402 v2/exact with six-decimal USDC payments. HBAR pays
+sponsor network fees only; these are native ledgers, not EVM chains 295/296.
+See the [Hedera guide](docs/networks/hedera.md).
 
 ### Other
 
@@ -1667,7 +1689,7 @@ const state = await escrow.getEscrowState({
 
 Full escrow lifecycle management for EVM chains. Supports both `ethers.Signer` and `SigningWalletAdapter` (EnvKey, OWS) for signing.
 
-Supported on 10 EVM networks: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche. Since 2.99.0 also on Arc and Arc Testnet, on the x402r canonical escrow: there `release` sends `capture` and `refundInEscrow` sends `void`, which only returns the whole capturable amount. See [Escrow on Arc](docs/networks/arc.md#escrow-on-arc-2990). Robinhood Chain (chain ID `4663`) runs the same canonical escrow, with Arc's addresses and operator (`'v3'`); its token is Paxos USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`), and `authorize` signs it under USDG's EIP-712 domain, `Global Dollar` / `1` (`USDC_DOMAIN_NAME` / `USDC_DOMAIN_VERSION`). Robinhood testnet (`46630`) has no escrow.
+The SDK registers 14 EVM escrow networks in `ESCROW_CONTRACTS`: Base, Base Sepolia, Ethereum, Ethereum Sepolia, Polygon, Arbitrum, Optimism, Celo, Monad, Avalanche, SKALE Base, Arc, Arc Testnet and Robinhood Chain. SKALE Base (`1187947933`) uses the CREATE3 operator (`'v2'`). Arc and Arc Testnet use the x402r canonical escrow: there `release` sends `capture` and `refundInEscrow` sends `void`, which only returns the whole capturable amount. See [Escrow on Arc](docs/networks/arc.md#escrow-on-arc-2990). Robinhood Chain (chain ID `4663`) runs the same canonical escrow, with Arc's addresses and operator (`'v3'`); its token is Paxos USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`), and `authorize` signs it under USDG's EIP-712 domain, `Global Dollar` / `1` (`USDC_DOMAIN_NAME` / `USDC_DOMAIN_VERSION`). Robinhood testnet (`46630`) has no escrow.
 
 ### With Private Key (ethers.Signer)
 

@@ -1,10 +1,16 @@
 # NEAR identity and reputation registry
 
-Import from `uvd-x402-sdk/near`. These helpers target the Arras registry v1 ABI in
-`registry-v1.md`. The mainnet target is `registry.arras-escrow.near`; the accepted
-escrow is `v1.arras-escrow.near`. Testnet has no registered deployment. This release
-prepares the integration; contract deployment and package publication are separate
-owner-controlled steps. Confirm deployment before using the default RPC transport.
+Import from `uvd-x402-sdk/near`. These helpers target the legacy Arras `registry-v1`
+contract ABI. Its mainnet contract, `registry.arras-escrow.near`, has
+been [deployed without access keys since 2026-11-04](https://nearblocks.io/address/registry.arras-escrow.near).
+The SDK registers it with `v1.arras-escrow.near` as the accepted escrow; testnet
+has no registered deployment for this legacy API.
+
+Execution Market switched from this registry to the separate NEAR ERC-8004
+identity and reputation contracts on 2026-11-06. Use the [NEAR ERC-8004 integration
+guide](near-erc8004.md) for current Execution Market registration and payment-backed
+feedback. The legacy helpers below remain available under their existing names;
+they do not call or migrate data to the ERC-8004 registries.
 
 ```ts
 import {
@@ -122,11 +128,11 @@ selected network and successful execution status. Loose logs cannot establish
 execution success or authenticate an emitter; this also applies to
 rejection logs passed to `parseGiveFeedbackOutcome`.
 
-## Execution Market flow and trust
+## Legacy registry flow and trust
 
-Once an EM payment releases any amount, its payer may rate the receiver and its
-receiver may rate the payer. A later refund/reclaim does not invalidate an earlier
-partial release. Submit feedback promptly: after payment compaction (eligible at
+Once an Arras v1 payment with operator `em` releases any amount, its payer may
+rate the receiver and its receiver may rate the payer. A later refund/reclaim does
+not invalidate an earlier partial release. Submit feedback promptly: after payment compaction (eligible at
 `reclaim_after + 7 days`) the registry can no longer resolve that payment. Each
 party gets one feedback per escrow/payment and can revoke its own feedback.
 Neither party needs an identity registration to give or receive feedback.

@@ -6,7 +6,8 @@ import { getChainById, getChainsByNetworkType, getSupportedTokens } from './chai
 // The README's EVM table is what integrators read to decide where they can
 // charge EURC. It said "Arc | 5042 | USDC" for months after 2.94.0 registered
 // EURC on both Arc networks, so readers concluded EURC did not work on Arc.
-// This pins the EURC column to the registry in both directions.
+// Pin every token, not just EURC: Ethereum once advertised unsupported USDT,
+// while Monad omitted supported USDT. USDC.e is the SKALE display label for usdc.
 function readmeEvmRows(): Map<number, Set<string>> {
   const readme = readFileSync(resolve(__dirname, '..', 'README.md'), 'utf8');
   const start = readme.indexOf('| Network | Chain ID | Tokens |');
@@ -39,5 +40,21 @@ describe('README EVM table: EURC column matches the registry', () => {
       expect(chain, `README row ${chainId}`).toBeDefined();
       expect(getSupportedTokens(chain!.name)).toContain('eurc');
     }
+  });
+});
+
+describe('README EVM table: all tokens match getSupportedTokens()', () => {
+  const rows = readmeEvmRows();
+  const chains = getChainsByNetworkType('evm');
+
+  it('lists exactly the enabled EVM chain IDs', () => {
+    expect([...rows.keys()].sort()).toEqual(chains.map((chain) => chain.chainId).sort());
+  });
+
+  it.each(chains)('$name ($chainId) lists every supported token and no others', (chain) => {
+    const expected = getSupportedTokens(chain.name).map((token) =>
+      token === 'usdc' && chain.usdc.name === 'Bridged USDC (SKALE Bridge)' ? 'usdc.e' : token,
+    );
+    expect(rows.get(chain.chainId)).toEqual(new Set(expected));
   });
 });
