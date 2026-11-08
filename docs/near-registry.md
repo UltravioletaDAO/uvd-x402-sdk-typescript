@@ -1,8 +1,8 @@
 # NEAR identity and reputation registry
 
-Import from `uvd-x402-sdk/near`. These helpers target the legacy Arras registry v1
-ABI in `registry-v1.md`. Its mainnet contract, `registry.arras-escrow.near`, has
-been [deployed without access keys since 2026-11-04](https://github.com/UltravioletaDAO/arras#readme).
+Import from `uvd-x402-sdk/near`. These helpers target the legacy Arras `registry-v1`
+contract ABI. Its mainnet contract, `registry.arras-escrow.near`, has
+been [deployed without access keys since 2026-11-04](https://nearblocks.io/address/registry.arras-escrow.near).
 The SDK registers it with `v1.arras-escrow.near` as the accepted escrow; testnet
 has no registered deployment for this legacy API.
 
@@ -130,9 +130,9 @@ rejection logs passed to `parseGiveFeedbackOutcome`.
 
 ## Legacy registry flow and trust
 
-Once an EM payment releases any amount, its payer may rate the receiver and its
-receiver may rate the payer. A later refund/reclaim does not invalidate an earlier
-partial release. Submit feedback promptly: after payment compaction (eligible at
+Once an Arras v1 payment with operator `em` releases any amount, its payer may
+rate the receiver and its receiver may rate the payer. A later refund/reclaim does
+not invalidate an earlier partial release. Submit feedback promptly: after payment compaction (eligible at
 `reclaim_after + 7 days`) the registry can no longer resolve that payment. Each
 party gets one feedback per escrow/payment and can revoke its own feedback.
 Neither party needs an identity registration to give or receive feedback.
