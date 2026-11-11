@@ -16,7 +16,14 @@ function add(label,before,after,file=main,id='M'+String(mutations.length+1).padS
 add('network allowlist',"network !== 'near:mainnet' && network !== 'near:testnet'",'false');
 add('config network binding','config.network !== net','false');
 add('identity binding','c.identity_registry !== t.identity','false');
-add('escrow binding','c.escrow !== t.escrow','false');
+add('verifier config escrow registered','reads === null || ','');
+add('verifier config account binding','(verifier !== undefined && reads !== verifier)','false');
+add('verifier rows own keys only','Object.hasOwn(rows, escrow) ? rows[escrow] : null','(rows[escrow] ?? null)');
+add('verify_feedback_proof receiver follows its config',"spec.target === 'verifier' ? escrowVerifier(o.network, c.verifier.escrow) as string : t[spec.target]",'t[spec.target]');
+add('verifier view account',"spec.target === 'verifier' ? verifier ?? t.verifier : t[spec.target]",'t[spec.target]');
+add('verifier view binds to its account',"spec.target === 'verifier' ? accountId : undefined",'undefined');
+add('getConfig verifier registered before RPC',"if (verifier !== undefined && !ratingVerifier(this.network, verifier)) throw new Error('Verifier is not registered for network');\n    const config",'const config');
+add('getVerifierConfig verifier registered before RPC',"if (verifier !== undefined && !ratingVerifier(this.network, verifier)) throw new Error('Verifier is not registered for network');\n    return this.query",'return this.query');
 add('config deposit positive','BigInt(v as string) < 1n','false');
 add('config deposit ceiling','BigInt(v as string) > BigInt(cap)','false');
 add('config gas floor','BigInt(v as string) < min','false');
@@ -148,7 +155,7 @@ review('R20', 'transfer-call default 50 to 51 TGas', 'gasDefault = 50n * TGAS', 
 const chosen = process.argv.slice(2);
 const selected = mutations.filter(m=>!chosen.length||chosen.includes(m.id));
 const env={...process.env,HTTP_PROXY:'http://127.0.0.1:9',HTTPS_PROXY:'http://127.0.0.1:9',NO_PROXY:'127.0.0.1,localhost'};
-const test=()=>spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run','src/providers/near/erc8004.test.ts'],{encoding:'utf8',timeout:120000,env});
+const test=()=>spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run','src/providers/near/erc8004.test.ts','src/providers/near/erc8004-escrow-verifiers.test.ts'],{encoding:'utf8',timeout:120000,env});
 const baseline=test();if(baseline.status!==0)throw new Error('Unmutated tests failed: '+baseline.stdout+baseline.stderr);
 const failures=[];
 for(const m of selected){

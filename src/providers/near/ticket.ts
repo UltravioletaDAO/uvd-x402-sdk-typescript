@@ -186,8 +186,10 @@ export async function signOperatorTicket(options: SignOperatorTicketOptions): Pr
 /**
  * What the contract's `check_ticket` (authorize.rs:263-285) answers, for the ticket of a payment or budget deposit in an
  * operator with `ticketPubkey`: null if it passes. No key and no ticket passes; a key without a ticket, or a ticket
- * without a key, is E53; an expired ticket (`now >= expiry`) is E54, checked before the signature; a malformed ticket
- * or a signature of anything else (another contract, subject, expiry or key) is E53.
+ * without a key, is E53; an expired ticket (`now >= expiry`) is E54, checked before the signature; a signature of
+ * anything else (another contract, subject, expiry or key) is E53. Stricter than the chain on form: a ticket that is
+ * not exactly `{expiry, sig}` with a canonical decimal expiry is E53 here, while the contract answers E03 for a bad
+ * shape (msg.rs:28-33) and parses a non-canonical expiry such as "+1" or "01". Both refuse it.
  */
 export function checkOperatorTicket(options: CheckOperatorTicketOptions): OperatorTicketRejection | null {
   const o = { ...options };

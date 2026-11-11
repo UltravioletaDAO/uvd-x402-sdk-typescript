@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha256';
 import { account, concat, le, str, uint, unbase58 } from './encoding';
 import type { NearEscrowNetwork, NearLocalSigner, NearUnsigned } from './escrow';
 import * as s from './erc8004-schema';
+import { NEAR_ERC8004_ESCROW_VERIFIERS } from './erc8004-verifiers';
 
 export type NearErc8004Network = NearEscrowNetwork;
 export type NearErc8004Contract = 'identity' | 'reputation' | 'verifier';
@@ -13,16 +14,7 @@ export const NEAR_ERC8004_CONTRACTS = Object.freeze({
   'near:testnet': Object.freeze({ identity: 'identity-registry.erc-8004.testnet', reputation: 'reputation-registry.erc-8004.testnet',
     verifier: 'erc8004-verifier.arras-dev.testnet', escrow: 'arras-v1b-1101.testnet', agentRegistry: 'near:testnet:identity-registry.erc-8004.testnet' }),
 });
-/**
- * The ERC-8004 verifier that rates the payments of each registered Arras escrow, one row per contract of
- * NEAR_ESCROW_CONTRACTS. null: no verifier is registered for that escrow yet, and rating its payments is refused (fail
- * closed) rather than sent to a verifier that reads another contract. A row is filled in a release only after its
- * verifier account is deployed on chain.
- */
-export const NEAR_ERC8004_ESCROW_VERIFIERS: Readonly<Record<NearErc8004Network, Readonly<Record<string, string | null>>>> = Object.freeze({
-  'near:mainnet': Object.freeze({ 'v1.arras-escrow.near': 'erc8004-verifier.arras-escrow.near', 'v2.arras-escrow.near': null }),
-  'near:testnet': Object.freeze({ 'arras-v1b-1101.testnet': 'erc8004-verifier.arras-dev.testnet' }),
-});
+export { NEAR_ERC8004_ESCROW_VERIFIERS };
 /**
  * The ERC-8004 verifier for payments made in `escrow`, an Arras contract of the network: rate each task with the verifier
  * of the escrow it was paid in. Throws for an escrow with no registered verifier yet (Arras v2 today).
@@ -35,9 +27,14 @@ export function nearErc8004Verifier(network: NearErc8004Network, escrow: string)
   if (verifier === null) throw new Error('No ERC-8004 verifier is registered for this Arras escrow yet: its payments cannot be rated');
   return verifier;
 }
-/** A verifier this release rates with on the network. `verifier` is a checked account string here, never null. */
+/** The verifier of a registered escrow of the network, or null (not registered, or no verifier yet). */
+function escrowVerifier(network: NearErc8004Network, escrow: unknown): string | null {
+  const rows = NEAR_ERC8004_ESCROW_VERIFIERS[network];
+  return typeof escrow === 'string' && Object.hasOwn(rows, escrow) ? rows[escrow] : null;
+}
+/** A verifier this release rates with on the network: the non-null verifier of one of its escrows. */
 function ratingVerifier(network: NearErc8004Network, verifier: unknown): boolean {
-  return Object.values(NEAR_ERC8004_ESCROW_VERIFIERS[network]).includes(verifier as string);
+  return typeof verifier === 'string' && Object.values(NEAR_ERC8004_ESCROW_VERIFIERS[network]).includes(verifier);
 }
 const ceiling = (measured: bigint): string => ((measured * 105n + 99n) / 100n).toString();
 /** Five percent above the recorded worst-case storage quotes; never a substitute for get_config. */
@@ -80,7 +77,8 @@ function configuredGas(v: unknown, min: bigint): void {
   s.check(v, s.u64, 'config gas');
   if (BigInt(v as string) < min || BigInt(v as string) > 300n * TGAS) throw new Error('Invalid config gas range');
 }
-function validateContractConfig(kind: NearErc8004Contract, value: unknown, net: NearErc8004Network): void {
+/** `verifier`: the account a verifier config was read from, when known; its snapshot must be of that verifier's escrow. */
+function validateContractConfig(kind: NearErc8004Contract, value: unknown, net: NearErc8004Network, verifier?: string): void {
   const t = targets(net);
   if (kind === 'identity') {
     s.check(value, s.identityConfigCheck, 'identity config'); const c = value as NearErc8004IdentityConfig;
@@ -95,7 +93,9 @@ function validateContractConfig(kind: NearErc8004Contract, value: unknown, net: 
     configuredGas(c.min_gas_give_feedback, 40n * TGAS); configuredGas(c.min_gas_give_feedback_with_proof, 120n * TGAS);
   } else {
     s.check(value, s.verifierConfigCheck, 'verifier config'); const c = value as NearErc8004VerifierConfig;
-    if (c.escrow !== t.escrow) throw new Error('Config contract binding mismatch');
+    // A verifier reads one escrow: the snapshot's escrow must have a registered verifier, and be read from that one.
+    const reads = escrowVerifier(net, c.escrow);
+    if (reads === null || (verifier !== undefined && reads !== verifier)) throw new Error('Config contract binding mismatch');
     configuredGas(c.min_gas_verify, 25n * TGAS); configuredGas(c.gas_get_payment, 1n); configuredGas(c.gas_on_payment, 1n);
   }
 }
@@ -224,7 +224,9 @@ export function buildNearErc8004Transaction<M extends NearErc8004Method>(method:
   s.check(deposit, s.u128, 'deposit'); s.check(gas, s.u64, 'gas');
   if (BigInt(deposit) < minimum || BigInt(deposit) > cap) throw new Error('deposit outside permitted range');
   if (BigInt(gas) < minGas || BigInt(gas) > 300n * TGAS) throw new Error('gas outside permitted range');
-  return { signerId: o.signerId, receiverId: t[spec.target], actions: [{ type: 'FunctionCall', params: { methodName: method, args, gas, deposit } }] };
+  // verify_feedback_proof goes to the verifier whose config was quoted: the one of the escrow that config reads.
+  const receiverId = spec.target === 'verifier' ? escrowVerifier(o.network, c.verifier.escrow) as string : t[spec.target];
+  return { signerId: o.signerId, receiverId, actions: [{ type: 'FunctionCall', params: { methodName: method, args, gas, deposit } }] };
 }
 function builder<M extends NearErc8004Method>(method: M) {
   return (options: NearErc8004BuildOptions & NearErc8004MethodArgs[M]): NearErc8004Transaction => {
@@ -396,34 +398,51 @@ export class NearErc8004Client {
     this.rpc = options.rpc ?? ((method, params, signal) => defaultRpc(this.network, method, params, signal));
   }
   async view<M extends ViewMethod>(method: M, input: NearErc8004ViewArgs[M]): Promise<NearErc8004ViewResults[M]> {
+    return this.query(method, input);
+  }
+  /** `verifier`: the account a verifier view goes to; default NEAR_ERC8004_CONTRACTS[network].verifier. */
+  private async query<M extends ViewMethod>(method: M, input: NearErc8004ViewArgs[M], verifier?: string): Promise<NearErc8004ViewResults[M]> {
     const t = targets(this.network);
     if (!Object.hasOwn(views, method)) throw new Error('Unknown ERC-8004 view');
     const spec = views[method], args = canonicalArgs(spec.required, spec.optional ?? {}, input);
     if (spec.page && args.limit === undefined) args.limit = 100;
     if (args.verifier !== undefined && !ratingVerifier(this.network, args.verifier)) throw new Error('Verifier is not registered for network');
+    const accountId = spec.target === 'verifier' ? verifier ?? t.verifier : t[spec.target];
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('NEAR RPC timeout')); }, this.timeoutMs); });
     let response: unknown;
     try {
-      response = await Promise.race([this.rpc('query', { request_type: 'call_function', finality: 'final', account_id: t[spec.target],
+      response = await Promise.race([this.rpc('query', { request_type: 'call_function', finality: 'final', account_id: accountId,
         method_name: spec.method ?? method, args_base64: s.base64(new TextEncoder().encode(JSON.stringify(args))) }, controller.signal), timeout]);
     } finally { clearTimeout(timer); }
     if (!s.object(response) || !Array.isArray(response.result) || response.result.length > MAX_VIEW_BYTES ||
       !response.result.every(v => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 255)) throw new Error('Invalid call_function response');
     const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(response.result)));
     s.check(value, spec.result, `${method} response`);
-    if (spec.method === 'get_config') validateContractConfig(spec.target, value, this.network);
+    if (spec.method === 'get_config') validateContractConfig(spec.target, value, this.network, spec.target === 'verifier' ? accountId : undefined);
     if (method === 'get_identity_registry' && value !== t.identity) throw new Error('Identity registry binding mismatch');
     return value as NearErc8004ViewResults[M];
   }
-  async getConfig(): Promise<NearErc8004Config> {
+  /**
+   * The three configs, with the verifier config of `verifier` (default: NEAR_ERC8004_CONTRACTS[network].verifier).
+   * Pass the verifier of the payment's escrow (`nearErc8004Verifier`) to quote `verify_feedback_proof` against it.
+   */
+  async getConfig(verifier?: string): Promise<NearErc8004Config> {
+    if (verifier !== undefined && !ratingVerifier(this.network, verifier)) throw new Error('Verifier is not registered for network');
     const config = { network: this.network, identity: await this.view('identity_config', {}),
-      reputation: await this.view('reputation_config', {}), verifier: await this.view('verifier_config', {}) };
+      reputation: await this.view('reputation_config', {}), verifier: await this.getVerifierConfig(verifier) };
     validateConfig(config, this.network); return config;
   }
   getIdentityConfig() { return this.view('identity_config', {}); }
   getReputationConfig() { return this.view('reputation_config', {}); }
-  getVerifierConfig() { return this.view('verifier_config', {}); }
+  /**
+   * The get_config of `verifier`, a registered verifier (default: NEAR_ERC8004_CONTRACTS[network].verifier), bound to
+   * that verifier's escrow. Refused before RPC for any other account; rejects if the verifier does not answer.
+   */
+  async getVerifierConfig(verifier?: string): Promise<NearErc8004VerifierConfig> {
+    if (verifier !== undefined && !ratingVerifier(this.network, verifier)) throw new Error('Verifier is not registered for network');
+    return this.query('verifier_config', {}, verifier);
+  }
   getVersion(contract: 'identity' | 'reputation' = 'identity') { return this.view(contract === 'identity' ? 'identity_version' : 'reputation_version', {}); }
   getAgent(agent_id: string) { return this.view('nft_token', { token_id: agent_id }); }
   getAgentUri(agent_id: string) { return this.view('token_uri', { agent_id }); }

@@ -28,9 +28,21 @@ returns that row's verifier:
 | `near:testnet` | `arras-v1b-1101.testnet` | `erc8004-verifier.arras-dev.testnet` |
 
 Arras v2 has no deployed verifier yet: `nearErc8004Verifier` throws for
-`v2.arras-escrow.near`, and the proof helpers refuse any verifier missing from
-the table, so a v2 payment is never sent to the v1 verifier. A release fills the
-v2 row once its verifier account is deployed on mainnet.
+`v2.arras-escrow.near`, so the SDK hands out no verifier for v2 payments. A
+release fills the v2 row once its verifier account is deployed on mainnet.
+
+The proof helpers accept any verifier of the table for the network: they cannot
+see which escrow a proof was paid in, so pick the verifier with
+`nearErc8004Verifier(network, escrow)` from the escrow the task was paid in. A
+v2 payment sent to the v1 verifier is rejected on chain (the v1 verifier reads
+v1 only), with its gas spent.
+
+`client.getConfig(verifier)` and `client.getVerifierConfig(verifier)` read the
+`get_config` of that verifier (default: `NEAR_ERC8004_CONTRACTS[network].verifier`),
+refuse any account outside the table before RPC, and require the snapshot's
+`escrow` to be the one that verifier rates. A verifier that does not answer
+rejects the call, so nothing is quoted against it. `verify_feedback_proof` goes
+to the verifier of the escrow its quoted config reads.
 
 ## Registration paid by Execution Market
 
@@ -85,7 +97,7 @@ import {
   parseNearErc8004GiveFeedbackOutcome,
 } from 'uvd-x402-sdk/near';
 
-// The escrow the payment was made in: v1.arras-escrow.near today.
+// The verifier of the escrow the payment was made in: throws for v2 until its verifier is registered.
 const verifier = nearErc8004Verifier(network, paymentEscrowContract);
 const tx = buildNearErc8004GiveFeedbackWithProof({
   network, config: await client.getConfig(), signerId: payerAccount,

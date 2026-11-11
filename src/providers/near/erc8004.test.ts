@@ -734,19 +734,52 @@ describe('the verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS)', ()
   it('refuses an unknown network', () => {
     expect(() => r.nearErc8004Verifier('near:devnet' as r.NearErc8004Network, 'v1.arras-escrow.near')).toThrow('Unsupported NEAR ERC-8004 network');
   });
-  it('an unregistered v2 verifier account is refused in wallet calls, views and outcomes', async () => {
-    const proposed = 'erc8004-verifier-v2.arras-escrow.near'; // not deployed: its row is null
-    for (const verifier of [proposed, 'v2.arras-escrow.near', null, 'null']) {
-      expect(() => r.buildNearErc8004GiveFeedbackWithProof({ ...common(), ...feedback, verifier, proof: 'p' } as any)).toThrow();
+  it('an unregistered v2 verifier account is refused in wallet calls, views, configs and outcomes', async () => {
+    // payment-proof.arras-escrow.near: the v2 verifier, not deployed yet, so its row is null.
+    for (const proposed of ['payment-proof.arras-escrow.near', 'erc8004-verifier-v2.arras-escrow.near']) {
+      for (const verifier of [proposed, 'v2.arras-escrow.near', null, 'null']) {
+        expect(() => r.buildNearErc8004GiveFeedbackWithProof({ ...common(), ...feedback, verifier, proof: 'p' } as any)).toThrow();
+      }
+      const rpc = vi.fn(async () => bytes({ ...sampleSummary, weight_sum: '1' }));
+      const c = new r.NearErc8004Client({ network: net, rpc });
+      await expect(c.getVerifiedSummary({ agent_id: '0', verifier: proposed })).rejects.toThrow('Verifier is not registered for network');
+      await expect(c.listVerifiedFeedback({ agent_id: '0', verifier: proposed })).rejects.toThrow('Verifier is not registered for network');
+      await expect(c.getVerifierConfig(proposed)).rejects.toThrow('Verifier is not registered for network');
+      await expect(c.getConfig(proposed)).rejects.toThrow('Verifier is not registered for network');
+      expect(rpc).not.toHaveBeenCalled();
+      const outcome = txFixture('give_feedback_with_proof', net), call = outcome.transaction.actions[0].FunctionCall;
+      call.args = b64({ ...JSON.parse(Buffer.from(call.args, 'base64').toString()), verifier: proposed });
+      expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, net)).toThrow('Verifier is not registered for network');
     }
-    const rpc = vi.fn(async () => bytes({ ...sampleSummary, weight_sum: '1' }));
-    const c = new r.NearErc8004Client({ network: net, rpc });
-    await expect(c.getVerifiedSummary({ agent_id: '0', verifier: proposed })).rejects.toThrow('Verifier is not registered for network');
-    await expect(c.listVerifiedFeedback({ agent_id: '0', verifier: proposed })).rejects.toThrow('Verifier is not registered for network');
-    expect(rpc).not.toHaveBeenCalled();
-    const outcome = txFixture('give_feedback_with_proof', net), call = outcome.transaction.actions[0].FunctionCall;
-    call.args = b64({ ...JSON.parse(Buffer.from(call.args, 'base64').toString()), verifier: proposed });
-    expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, net)).toThrow('Verifier is not registered for network');
+  });
+  it('a verifier config that reads v2 is refused while v2 has no verifier: no quote, no verify_feedback_proof', async () => {
+    const o = common(); o.config.verifier.escrow = 'v2.arras-escrow.near';
+    expect(() => r.buildNearErc8004VerifyFeedbackProof({ ...o, client: 'payer.near', proof: 'p' })).toThrow('Config contract binding mismatch');
+    expect(() => r.buildNearErc8004Register(o)).toThrow('Config contract binding mismatch');
+    const c = new r.NearErc8004Client({ network: net, rpc: async () => bytes({ ...config().verifier, escrow: 'v2.arras-escrow.near' }) });
+    await expect(c.getVerifierConfig()).rejects.toThrow('Config contract binding mismatch');
+  });
+  it('quotes verify_feedback_proof against the verifier of the escrow its config reads', async () => {
+    for (const network of networks) {
+      const t = r.NEAR_ERC8004_CONTRACTS[network];
+      const rpc = vi.fn(async (_m: string, p: any) => bytes(p.account_id === t.identity ? config(network).identity : p.account_id === t.reputation ? config(network).reputation : config(network).verifier));
+      const c = new r.NearErc8004Client({ network, rpc });
+      const quoted = await c.getConfig(r.nearErc8004Verifier(network, t.escrow));
+      expect(rpc.mock.calls.map(([, p]) => p.account_id)).toEqual([t.identity, t.reputation, t.verifier]);
+      const tx = r.buildNearErc8004VerifyFeedbackProof({ network, signerId: 'payer.near', config: quoted, client: 'payer.near', proof: 'p' });
+      expect(tx.receiverId).toBe(t.verifier);
+      expect(BigInt(params(tx).gas)).toBeGreaterThanOrEqual(BigInt(quoted.verifier.min_gas_verify));
+    }
+  });
+  it('fails closed when the verifier does not answer: the config, and so the quote, rejects', async () => {
+    const down = new r.NearErc8004Client({ network: net, rpc: async (_m, p) => {
+      if (p.account_id === targets.verifier) throw new Error(`account ${p.account_id} does not exist while viewing`);
+      return bytes(p.account_id === targets.identity ? config().identity : config().reputation);
+    } });
+    await expect(down.getVerifierConfig(targets.verifier)).rejects.toThrow('does not exist');
+    await expect(down.getConfig(targets.verifier)).rejects.toThrow('does not exist');
+    const silent = new r.NearErc8004Client({ network: net, timeoutMs: 20, rpc: () => new Promise(() => {}) });
+    await expect(silent.getVerifierConfig(targets.verifier)).rejects.toThrow('NEAR RPC timeout');
   });
   it('comes through the near subpath', async () => {
     const near = await import('./index');
