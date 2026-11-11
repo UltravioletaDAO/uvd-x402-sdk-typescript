@@ -183,6 +183,14 @@ describe('a ticket verifies only for its contract, subject, expiry and key, befo
     expect(check({ subject: { payment } })).toBe('E53_TICKET_INVALIDO');
     expect(reads).toBe(1);
   });
+  it('reads the key and the clock once: a flipping getter cannot judge with one and report with another', () => {
+    let keyReads = 0, nowReads = 0;
+    const options = { contract: T1.contract, subject: paymentT1, ticket: t1Ticket,
+      get ticketPubkey() { return keyReads++ === 0 ? testKey.ticket_pubkey : null; },
+      get now() { return nowReads++ === 0 ? justBefore : expiry; } };
+    expect(checkOperatorTicket(options)).toBeNull();
+    expect([keyReads, nowReads]).toEqual([1, 1]);
+  });
   it('defaults now to the wall clock in nanoseconds', () => {
     const atMs = Number(expiry / 1_000_000n);
     vi.spyOn(Date, 'now').mockReturnValue(atMs - 1);
@@ -280,6 +288,11 @@ describe('signOperatorTicket refuses before calling the signer', () => {
     let subjectReads = 0;
     const payment = { get payment_id() { return subjectReads++ === 0 ? T1.subject.payment!.payment_id : v2.payment_id.vectores[1].payment_id; } };
     expect(await signOperatorTicket({ ...base, signer: operator, subject: { payment } })).toEqual(t1Ticket);
+    // now is read once: the clock that passed the expiry check is the clock the options carried.
+    let nowReads = 0;
+    const flippingNow = { ...base, signer: operator, get now() { return nowReads++ === 0 ? 0n : expiry; } };
+    expect(await signOperatorTicket(flippingNow)).toEqual(t1Ticket);
+    expect(nowReads).toBe(1);
   });
 });
 
