@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [2.115.0] - 2026-11-11
+
+### Added
+
+- Arras v2 operator ticket on `uvd-x402-sdk/near`: `signOperatorTicket` builds `borsh("arras:v2:operator_ticket", contract, subject, expiry)` byte for byte as arras `contracts/escrow-v2/src/ticket.rs` and signs it with an injected Ed25519 signer (a key in memory through `createNearLocalSigner`, or an external `{ publicKey, sign(message) }`); no key is read from a file or the environment. It refuses a ticket already expired at `now` before signing and returns `{expiry, sig}`. `checkOperatorTicket` answers as the contract's `check_ticket` (`null`, `E53_TICKET_INVALIDO`, `E54_TICKET_VENCIDO`), `verifyOperatorTicket` is its boolean, and `operatorTicketMessage`, `decodeOperatorTicketSig`, `canonicalOperatorTicket` and `parseTicketPubkey` expose the pieces.
+- The Arras v2 authorize msg: `EscrowMsgParams` takes the optional `dispute_deadline` (refused outside `release_deadline <= dispute_deadline <= reclaim_after`, the contract's E67 and E11) and `operator_ticket`. `buildEscrowMsg` writes them after the v1 keys, in that order and only when present; neither enters the payment ID.
+- `v2.arras-escrow.near` joins `NEAR_ESCROW_CONTRACTS` on mainnet, after v1, and the new `NEAR_ESCROW_V2_CONTRACTS` lists it: a msg with a v2 field is signed only toward a v2 contract (v1 answers E03). Lifecycle signing and `buildArrasStorageDeposit` accept it with the same methods and arguments as v1. Testnet registers no v2 contract.
+- NEAR ERC-8004: `NEAR_ERC8004_ESCROW_VERIFIERS` maps each registered Arras escrow to the verifier that rates its payments (`v1.arras-escrow.near` to `erc8004-verifier.arras-escrow.near`, `arras-v1b-1101.testnet` to `erc8004-verifier.arras-dev.testnet`), and `nearErc8004Verifier(network, escrow)` returns it. `v2.arras-escrow.near` has no verifier yet (`null`): `nearErc8004Verifier` throws for it, and `give_feedback_with_proof`, the verified views and the feedback outcome parser accept only the verifiers listed there, so a v2 payment cannot be rated with the v1 verifier. Filling the v2 row, after its verifier is deployed, is the patch that turns on rating v2 payments. Same names and data as the Python SDK (`NEAR_ERC8004_ESCROW_VERIFIERS`, `near_erc8004_verifier`).
+- `src/providers/near/vectors/arras-v2.json`: arras `9f8332f` `docs/vectores.json` byte for byte (sha256 and git blob pinned). The tests reproduce T-1 and T-2 (message, signature with the vector key, OpenSSL verification), the three canonical v2 msgs and VB-1, and refuse expired tickets and tickets of another contract, subject, expiry or key.
+
+### Unchanged
+
+- Arras v1: every v1 msg, payment ID, signed authorization, lifecycle delegate and storage transaction is the same byte for byte (`escrow-v1-bytes.test.ts` pins their digest, recorded on 2.114.0).
+
 ## [2.114.0] - 2026-11-06
 
 ### Added
