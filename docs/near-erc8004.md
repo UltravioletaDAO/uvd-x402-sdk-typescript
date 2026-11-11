@@ -16,6 +16,22 @@ Mainnet verification reads `v1.arras-escrow.near`; testnet reads
 `arras-v1b-1101.testnet`. This release's proof helpers accept the listed Arras
 verifier for the selected network.
 
+Each verifier reads one escrow, so a payment is rated with the verifier of the
+escrow it was paid in. `NEAR_ERC8004_ESCROW_VERIFIERS` has one row per Arras
+escrow of `NEAR_ESCROW_CONTRACTS`, and `nearErc8004Verifier(network, escrow)`
+returns that row's verifier:
+
+| Network | Escrow | Verifier |
+| --- | --- | --- |
+| `near:mainnet` | `v1.arras-escrow.near` | `erc8004-verifier.arras-escrow.near` |
+| `near:mainnet` | `v2.arras-escrow.near` | none yet (`null`) |
+| `near:testnet` | `arras-v1b-1101.testnet` | `erc8004-verifier.arras-dev.testnet` |
+
+Arras v2 has no deployed verifier yet: `nearErc8004Verifier` throws for
+`v2.arras-escrow.near`, and the proof helpers refuse any verifier missing from
+the table, so a v2 payment is never sent to the v1 verifier. A release fills the
+v2 row once its verifier account is deployed on mainnet.
+
 ## Registration paid by Execution Market
 
 Obtain configuration from the contracts before constructing transactions. The
@@ -65,11 +81,12 @@ its own signature. Supply the actual released payment's ID as `proof`.
 
 ```ts
 import {
-  buildNearErc8004GiveFeedbackWithProof,
+  buildNearErc8004GiveFeedbackWithProof, nearErc8004Verifier,
   parseNearErc8004GiveFeedbackOutcome,
 } from 'uvd-x402-sdk/near';
 
-const verifier = NEAR_ERC8004_CONTRACTS[network].verifier;
+// The escrow the payment was made in: v1.arras-escrow.near today.
+const verifier = nearErc8004Verifier(network, paymentEscrowContract);
 const tx = buildNearErc8004GiveFeedbackWithProof({
   network, config: await client.getConfig(), signerId: payerAccount,
   agent_id: workerAgentId, value: '90', value_decimals: 0,
@@ -205,11 +222,11 @@ already established final transaction success. It preserves receipt/log order.
 Transaction parsers require `final_execution_status === "FINAL"` whenever that
 field is present; older results without the field retain the existing status
 and receipt checks.
-Feedback outcome parsing requires any `args.verifier` to equal
-`NEAR_ERC8004_CONTRACTS[network].verifier`, including failed or rejected outcomes.
+Feedback outcome parsing requires any `args.verifier` to be a verifier of
+`NEAR_ERC8004_ESCROW_VERIFIERS[network]`, including failed or rejected outcomes.
 
 An indexer counts a `new_feedback` event as verified only when `proof.verifier`
-equals `NEAR_ERC8004_CONTRACTS[network].verifier` and `proof.context` equals the
+is a verifier of `NEAR_ERC8004_ESCROW_VERIFIERS[network]` and `proof.context` equals the
 expected context (`"em"` for Execution Market). A non-null proof alone is not
 sufficient; the event parser preserves other verifiers and contexts for callers
 to apply their own indexing policy.

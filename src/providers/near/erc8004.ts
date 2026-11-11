@@ -13,6 +13,32 @@ export const NEAR_ERC8004_CONTRACTS = Object.freeze({
   'near:testnet': Object.freeze({ identity: 'identity-registry.erc-8004.testnet', reputation: 'reputation-registry.erc-8004.testnet',
     verifier: 'erc8004-verifier.arras-dev.testnet', escrow: 'arras-v1b-1101.testnet', agentRegistry: 'near:testnet:identity-registry.erc-8004.testnet' }),
 });
+/**
+ * The ERC-8004 verifier that rates the payments of each registered Arras escrow, one row per contract of
+ * NEAR_ESCROW_CONTRACTS. null: no verifier is registered for that escrow yet, and rating its payments is refused (fail
+ * closed) rather than sent to a verifier that reads another contract. A row is filled in a release only after its
+ * verifier account is deployed on chain.
+ */
+export const NEAR_ERC8004_ESCROW_VERIFIERS: Readonly<Record<NearErc8004Network, Readonly<Record<string, string | null>>>> = Object.freeze({
+  'near:mainnet': Object.freeze({ 'v1.arras-escrow.near': 'erc8004-verifier.arras-escrow.near', 'v2.arras-escrow.near': null }),
+  'near:testnet': Object.freeze({ 'arras-v1b-1101.testnet': 'erc8004-verifier.arras-dev.testnet' }),
+});
+/**
+ * The ERC-8004 verifier for payments made in `escrow`, an Arras contract of the network: rate each task with the verifier
+ * of the escrow it was paid in. Throws for an escrow with no registered verifier yet (Arras v2 today).
+ */
+export function nearErc8004Verifier(network: NearErc8004Network, escrow: string): string {
+  targets(network);
+  const rows = NEAR_ERC8004_ESCROW_VERIFIERS[network];
+  if (typeof escrow !== 'string' || !Object.hasOwn(rows, escrow)) throw new Error('escrow is not a registered Arras contract for this network');
+  const verifier = rows[escrow];
+  if (verifier === null) throw new Error('No ERC-8004 verifier is registered for this Arras escrow yet: its payments cannot be rated');
+  return verifier;
+}
+/** A verifier this release rates with on the network. `verifier` is a checked account string here, never null. */
+function ratingVerifier(network: NearErc8004Network, verifier: unknown): boolean {
+  return Object.values(NEAR_ERC8004_ESCROW_VERIFIERS[network]).includes(verifier as string);
+}
 const ceiling = (measured: bigint): string => ((measured * 105n + 99n) / 100n).toString();
 /** Five percent above the recorded worst-case storage quotes; never a substitute for get_config. */
 export const NEAR_ERC8004_DEPOSIT_CAPS = Object.freeze({
@@ -166,8 +192,8 @@ export function buildNearErc8004Transaction<M extends NearErc8004Method>(method:
     if (deadline < BigInt(now) || deadline > BigInt(now) + BigInt(o.config.identity.limits.max_deadline_delay_ns)) throw new Error('deadline outside five-minute window');
   }
   if (method === 'give_feedback_with_proof') {
-    // This release supports the measured Arras verifier for each network.
-    if (args.verifier !== t.verifier) throw new Error('Verifier is not registered for network');
+    // This release rates with the registered verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS).
+    if (!ratingVerifier(o.network, args.verifier)) throw new Error('Verifier is not registered for network');
   }
   const c = o.config;
   let minimum = 1n, recommended = 1n, cap = 1n, minGas = 1n, gasDefault = 30n * TGAS;
@@ -374,7 +400,7 @@ export class NearErc8004Client {
     if (!Object.hasOwn(views, method)) throw new Error('Unknown ERC-8004 view');
     const spec = views[method], args = canonicalArgs(spec.required, spec.optional ?? {}, input);
     if (spec.page && args.limit === undefined) args.limit = 100;
-    if (args.verifier !== undefined && args.verifier !== t.verifier) throw new Error('Verifier is not registered for network');
+    if (args.verifier !== undefined && !ratingVerifier(this.network, args.verifier)) throw new Error('Verifier is not registered for network');
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('NEAR RPC timeout')); }, this.timeoutMs); });
     let response: unknown;
@@ -516,7 +542,7 @@ export type NearErc8004FeedbackOutcome = { status: 'accepted'; feedbackIndex: st
   { status: 'rejected'; code: NearErc8004RejectionCode } | { status: 'failed'; code: string | null; message: string };
 export function parseNearErc8004GiveFeedbackOutcome(outcome: unknown, network: NearErc8004Network): NearErc8004FeedbackOutcome {
   const parsed = transaction(outcome, network, ['give_feedback', 'give_feedback_with_proof']);
-  if (parsed.args.verifier !== undefined && parsed.args.verifier !== targets(network).verifier) throw new Error('Verifier is not registered for network');
+  if (parsed.args.verifier !== undefined && !ratingVerifier(network, parsed.args.verifier)) throw new Error('Verifier is not registered for network');
   if (Object.hasOwn(parsed.status, 'Failure')) {
     if (Object.keys(parsed.status).length !== 1) throw new Error('Ambiguous transaction status');
     const message = JSON.stringify(parsed.status.Failure);
