@@ -60,7 +60,7 @@ add('view verifier network',"args.verifier !== undefined && !ratingVerifier(this
 add('view byte-array maximum','response.result.length > MAX_VIEW_BYTES','false');
 add('view byte-array type','!response.result.every(v => typeof v === \'number\' && Number.isInteger(v) && v >= 0 && v <= 255)','false');
 add('view schema check','s.check(value, spec.result, `${method} response`);','');
-add('view config budget check',"if (spec.method === 'get_config') validateContractConfig(spec.target, value, this.network);",'');
+add('view config budget check',"if (spec.method === 'get_config') validateContractConfig(spec.target, value, this.network, spec.target === 'verifier' ? accountId : undefined);",'');
 add('identity view binding',"method === 'get_identity_registry' && value !== t.identity",'false');
 add('receipt status uniqueness','Object.keys(status).length === 1','Object.keys(status).length >= 1');
 add('receipt successful execution','!successful(r.outcome.status)','false');
