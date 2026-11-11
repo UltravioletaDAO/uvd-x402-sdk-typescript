@@ -1,8 +1,9 @@
-/** Arras v1: offline, local-key NEP-366 signing. No RPC or transaction submission. */
+/** Arras v1 and v2: offline, local-key NEP-366 signing. No RPC or transaction submission. */
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { encodeBase58 } from 'ethers';
-import { fullMatch, uint, account, concat, le, str, unbase58 } from './encoding';
+import { fullMatch, uint, account, concat, le, operatorId, str, unbase58 } from './encoding';
+import { canonicalOperatorTicket, type OperatorTicket } from './ticket';
 
 export type NearEscrowNetwork = 'near:mainnet' | 'near:testnet';
 /** Numbers must be safe integers; use decimal strings or bigint for nanoseconds and u128. */
@@ -15,6 +16,17 @@ export interface EscrowMsgParams {
   fee_bps_max: number;
   terms_hash: string;
   salt: string;
+  /**
+   * Arras v2 only (escrow-v2 msg.rs:3-6): the last instant (exclusive) to open a dispute, in nanoseconds. Absent, v2
+   * uses `reclaim_after`. The contract requires `release_deadline <= dispute_deadline <= reclaim_after` (E67, E11).
+   * It does not enter the payment ID. Omit it, or pass null, for a v1 msg.
+   */
+  dispute_deadline?: NearUnsigned | null;
+  /**
+   * Arras v2 only: the operator's ticket for this payment's ID (`signOperatorTicket` with subject `payment`). Required
+   * by v2 when the operator has a `ticket_pubkey` (E53 without it). It does not enter the payment ID.
+   */
+  operator_ticket?: OperatorTicket | null;
 }
 export interface PaymentIdParams extends EscrowMsgParams {
   token: string;
@@ -71,11 +83,20 @@ export const NEAR_ESCROW_TOKENS: Readonly<Record<NearEscrowNetwork, string>> = O
 /**
  * The Arras escrow deployments this SDK signs for, per network. Any other escrowContract is refused before the
  * signer is called, for authorization and lifecycle alike: a signed delegate can be relayed by anyone, so a 402
- * server must not be able to point it at its own account. Only deployed Arras v1 contracts are registered.
+ * server must not be able to point it at its own account. Only deployed, keyless Arras contracts are registered:
+ * v1 first, then v2 (`NEAR_ESCROW_V2_CONTRACTS`).
  */
 export const NEAR_ESCROW_CONTRACTS: Readonly<Record<NearEscrowNetwork, readonly string[]>> = Object.freeze({
   'near:testnet': Object.freeze(['arras-v1b-1101.testnet']),
-  'near:mainnet': Object.freeze(['v1.arras-escrow.near']),
+  'near:mainnet': Object.freeze(['v1.arras-escrow.near', 'v2.arras-escrow.near']),
+});
+/**
+ * The registered contracts that run Arras v2 and so accept `dispute_deadline` and `operator_ticket` in the msg.
+ * `v2.arras-escrow.near`: deployed 2026-11-08 from arras ddc5121, keyless (arras docs/MAINNET.md, 8.8).
+ */
+export const NEAR_ESCROW_V2_CONTRACTS: Readonly<Record<NearEscrowNetwork, readonly string[]>> = Object.freeze({
+  'near:testnet': Object.freeze([]),
+  'near:mainnet': Object.freeze(['v2.arras-escrow.near']),
 });
 /** NEAR's ACCESS_KEY_NONCE_RANGE_MULTIPLIER: a delegate needs nonce < block height * 10^6. */
 const NONCE_RANGE_MULTIPLIER = 1_000_000n;
@@ -87,9 +108,7 @@ function hex(value: string, size: number, name: string): Uint8Array {
   return Uint8Array.from(value.match(/../g)!, (v) => parseInt(v, 16));
 }
 function msgValues(p: EscrowMsgParams) {
-  if (typeof p.operator_id !== 'string' || !fullMatch(/^[a-z0-9_-]{1,32}$/, p.operator_id)) {
-    throw new Error('operator_id: expected [a-z0-9_-]{1,32}');
-  }
+  operatorId(p.operator_id, 'operator_id');
   account(p.receiver, 'receiver');
   const release = uint(p.release_deadline, 64, 'release_deadline');
   const reclaim = uint(p.reclaim_after, 64, 'reclaim_after');
@@ -99,12 +118,31 @@ function msgValues(p: EscrowMsgParams) {
   return { release, reclaim, fee, terms: hex(p.terms_hash, 32, 'terms_hash'), salt: hex(p.salt, 16, 'salt') };
 }
 
-/** Canonical Arras JSON: field order, decimal-string timestamps, lowercase hex, no spaces. */
-export function buildEscrowMsg(p: EscrowMsgParams): string {
+/**
+ * Canonical Arras JSON: field order, decimal-string timestamps, lowercase hex, no spaces. Without the v2 fields it is
+ * the v1 msg, byte for byte; with them, the v2 canonical (escrow-v2 msg.rs:53-70, 87-104): the v1 keys, then
+ * `dispute_deadline` and `operator_ticket` (`{"expiry","sig"}`) when present.
+ */
+export function buildEscrowMsg(params: EscrowMsgParams): string {
+  const p = { ...params }; // read each field once: the values checked are the values written
   const v = msgValues(p);
-  return JSON.stringify({ v: 1, action: 'authorize', operator_id: p.operator_id, receiver: p.receiver,
+  const msg: Record<string, unknown> = { v: 1, action: 'authorize', operator_id: p.operator_id, receiver: p.receiver,
     release_deadline: v.release.toString(), reclaim_after: v.reclaim.toString(), fee_bps_max: Number(v.fee),
-    terms_hash: p.terms_hash, salt: p.salt });
+    terms_hash: p.terms_hash, salt: p.salt };
+  if (p.dispute_deadline != null) {
+    const dispute = uint(p.dispute_deadline, 64, 'dispute_deadline');
+    if (dispute < v.release || dispute > v.reclaim) {
+      throw new Error('dispute_deadline must satisfy release_deadline <= dispute_deadline <= reclaim_after');
+    }
+    msg.dispute_deadline = dispute.toString();
+  }
+  if (p.operator_ticket != null) msg.operator_ticket = canonicalOperatorTicket(p.operator_ticket);
+  return JSON.stringify(msg);
+}
+/** Whether a canonical msg carries an Arras v2 field. */
+function hasV2Fields(msg: string): boolean {
+  const parsed = JSON.parse(msg) as Record<string, unknown>;
+  return Object.hasOwn(parsed, 'dispute_deadline') || Object.hasOwn(parsed, 'operator_ticket');
 }
 /** Exact Rust Borsh preimage, exposed for cross-language conformance. */
 export function paymentIdPreimage(p: PaymentIdParams): Uint8Array {
@@ -152,16 +190,24 @@ function delegateNonce(o: Pick<NearEscrowDelegateOptions, 'nonce' | 'maxBlockHei
   if (nonce >= height * NONCE_RANGE_MULTIPLIER) throw new Error('nonce must be below maxBlockHeight * 10^6');
 }
 
-/** Build the one allowed FT action. The contract must be in NEAR_ESCROW_CONTRACTS; the operator comes from trusted /supported configuration. */
+/**
+ * Build the one allowed FT action. The contract must be in NEAR_ESCROW_CONTRACTS; the operator comes from trusted
+ * /supported configuration. A msg with v2 fields goes only to a contract in NEAR_ESCROW_V2_CONTRACTS: v1 refuses
+ * unknown msg fields (E03) and would hand the transfer back.
+ */
 export function buildEscrowAuthorizationDelegate(o: EscrowAuthorizationOptions): NearEscrowDelegate {
   delegateOptions(o);
   if (o.token !== NEAR_ESCROW_TOKENS[o.network]) throw new Error('token does not match network USDC');
   if (o.msg.receiver === o.senderId || o.msg.receiver === o.escrowContract) throw new Error('receiver equals payer or escrow');
   const amount = uint(o.amount, 128, 'amount');
   if (amount === 0n) throw new Error('amount must be positive');
+  const msg = buildEscrowMsg(o.msg);
+  if (hasV2Fields(msg) && !NEAR_ESCROW_V2_CONTRACTS[o.network].includes(o.escrowContract)) {
+    throw new Error('escrowContract: dispute_deadline and operator_ticket need an Arras v2 escrow (v1 answers E03)');
+  }
   return { senderId: o.senderId, receiverId: o.token, nonce: o.nonce, maxBlockHeight: o.maxBlockHeight,
     actions: [{ methodName: 'ft_transfer_call', args: JSON.stringify({ receiver_id: o.escrowContract,
-      amount: amount.toString(), msg: buildEscrowMsg(o.msg) }), gas: o.gas ?? NEAR_ESCROW_MAX_GAS, deposit: 1n }] };
+      amount: amount.toString(), msg }), gas: o.gas ?? NEAR_ESCROW_MAX_GAS, deposit: 1n }] };
 }
 /** Validate before signing, including strict byte binding to the expected canonical FT arguments. */
 export function validateEscrowAuthorizationDelegate(d: NearEscrowDelegate, o: EscrowAuthorizationOptions): void {
@@ -243,7 +289,10 @@ export const reclaim = (o: NearEscrowDelegateOptions, paymentId: string) => sign
 export const withdraw = (o: NearEscrowDelegateOptions) => signEscrowLifecycle(o, 'withdraw');
 export const withdrawFor = (o: NearEscrowDelegateOptions, account: string) => signEscrowLifecycle(o, 'withdraw_for', { account });
 
-/** v2 boundary only: no budget wire format or signing is defined until Arras v2 supplies its vectors. */
+/**
+ * v2 boundary only: this SDK does not sign budget deposits or `authorize_from_budget` yet. A budget payment's ID is
+ * `computePaymentId` with `payer` = the budget owner (arras vector VB-1), and its ticket subject is that payment.
+ */
 export interface AuthorizeFromBudget {
   authorizeFromBudget(request: unknown): Promise<NearEscrowPayment>;
 }

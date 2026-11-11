@@ -50,6 +50,7 @@ import { chainToCAIP2, encodeBase64Json } from '../../utils';
 import { toAtomicUnits } from '../../utils/amount';
 
 export * from './escrow';
+export * from './ticket';
 
 // NEAR configuration
 const NEAR_CONFIG = {

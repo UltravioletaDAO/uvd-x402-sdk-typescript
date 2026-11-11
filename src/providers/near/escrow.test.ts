@@ -6,7 +6,7 @@ import vectors from './vectors/arras-v1.json';
 import {
   buildEscrowMsg, computePaymentId, paymentIdPreimage, createNearLocalSigner, signEscrowAuthorization,
   buildEscrowAuthorizationDelegate, validateEscrowAuthorizationDelegate, signEscrowLifecycle,
-  release, refund, reclaim, withdraw, withdrawFor, NEAR_ESCROW_MIN_GAS, NEAR_ESCROW_MAX_GAS, NEAR_ESCROW_CONTRACTS,
+  release, refund, reclaim, withdraw, withdrawFor, NEAR_ESCROW_MIN_GAS, NEAR_ESCROW_MAX_GAS, NEAR_ESCROW_CONTRACTS, NEAR_ESCROW_V2_CONTRACTS,
   type EscrowAuthorizationOptions, type NearEscrowPayment, type NearEscrowLifecycleMethod,
 } from './escrow';
 
@@ -212,11 +212,20 @@ describe('per-network Arras escrow registry', () => {
   const mainnet: EscrowAuthorizationOptions = { ...options, network: 'near:mainnet', senderId: v3.payer, token: v3.token, amount: v3.amount, msg: v3 };
   const signedBy = (o: EscrowAuthorizationOptions) => [() => signEscrowAuthorization(o), () => release(o, v1.payment_id),
     () => refund(o, v1.payment_id), () => reclaim(o, v1.payment_id), () => withdraw(o), () => withdrawFor(o, v1.receiver)];
-  it('is frozen: only the deployed v1 contract on each network', () => {
-    expect(NEAR_ESCROW_CONTRACTS).toEqual({ 'near:testnet': ['arras-v1b-1101.testnet'], 'near:mainnet': ['v1.arras-escrow.near'] });
-    expect(() => { (NEAR_ESCROW_CONTRACTS['near:mainnet'] as string[]).push('evil-sink.near'); }).toThrow(TypeError);
-    expect(() => { (NEAR_ESCROW_CONTRACTS as Record<string, readonly string[]>)['near:mainnet'] = ['evil-sink.near']; }).toThrow(TypeError);
-    expect(NEAR_ESCROW_CONTRACTS['near:mainnet']).toEqual(['v1.arras-escrow.near']);
+  it('is frozen: the deployed v1 contract on each network, then v2 on mainnet', () => {
+    expect(NEAR_ESCROW_CONTRACTS).toEqual({ 'near:testnet': ['arras-v1b-1101.testnet'], 'near:mainnet': ['v1.arras-escrow.near', 'v2.arras-escrow.near'] });
+    expect(NEAR_ESCROW_V2_CONTRACTS).toEqual({ 'near:testnet': [], 'near:mainnet': ['v2.arras-escrow.near'] });
+    for (const registry of [NEAR_ESCROW_CONTRACTS, NEAR_ESCROW_V2_CONTRACTS]) {
+      expect(() => { (registry['near:mainnet'] as string[]).push('evil-sink.near'); }).toThrow(TypeError);
+      expect(() => { (registry['near:testnet'] as string[]).push('evil-sink.testnet'); }).toThrow(TypeError);
+      expect(() => { (registry as Record<string, readonly string[]>)['near:mainnet'] = ['evil-sink.near']; }).toThrow(TypeError);
+    }
+    expect(NEAR_ESCROW_CONTRACTS['near:mainnet']).toEqual(['v1.arras-escrow.near', 'v2.arras-escrow.near']);
+    expect(NEAR_ESCROW_V2_CONTRACTS['near:mainnet']).toEqual(['v2.arras-escrow.near']);
+    // Every v2 contract is a registered contract of the same network.
+    for (const network of ['near:testnet', 'near:mainnet'] as const) {
+      for (const c of NEAR_ESCROW_V2_CONTRACTS[network]) expect(NEAR_ESCROW_CONTRACTS[network]).toContain(c);
+    }
   });
   it('signs mainnet v1 authorization and release with independently verified wire bytes', async () => {
     const sign = vi.fn(signer.sign);
@@ -233,7 +242,8 @@ describe('per-network Arras escrow registry', () => {
       args: { payment_id: v3.payment_id, amount: null }, deposit: 0n, gas: 30_000_000_000_000n });
     expect(sign).toHaveBeenCalledTimes(2);
   });
-  it.each(['v2.arras-escrow.near', 'evil-sink.near', 'arras-v1b-1101.testnet', 'arras.near', 'escrow.example.near',
+  it.each(['V2.ARRAS-ESCROW.NEAR', 'v2.arras-escrow.near ', 'v3.arras-escrow.near', 'sub.v2.arras-escrow.near',
+    'evil-sink.near', 'arras-v1b-1101.testnet', 'arras.near', 'escrow.example.near',
     'V1.ARRAS-ESCROW.NEAR', ' v1.arras-escrow.near', 'v1.arras-escrow.near ', 'sub.v1.arras-escrow.near',
     'v1.arras-escrow.near.evil.near', 'v1.аrras-escrow.near', 'v1.arras-escrow.near\n',
     '0xv1.arras-escrow.near', '0Xv1.arras-escrow.near', '', null])(
