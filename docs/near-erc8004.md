@@ -35,7 +35,7 @@ The proof helpers accept any verifier of the table for the network: they cannot
 see which escrow a proof was paid in, so pick the verifier with
 `nearErc8004Verifier(network, escrow)` from the escrow the task was paid in. A
 v2 payment sent to the v1 verifier is rejected on chain (the v1 verifier reads
-v1 only), with its gas spent.
+v1 only): a wasted transaction.
 
 `client.getConfig(verifier)` and `client.getVerifierConfig(verifier)` read the
 `get_config` of that verifier (default: `NEAR_ERC8004_CONTRACTS[network].verifier`),

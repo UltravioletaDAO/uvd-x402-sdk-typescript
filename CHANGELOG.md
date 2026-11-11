@@ -15,6 +15,7 @@
 ### Changed
 
 - `buildEscrowMsg` writes `dispute_deadline` and `operator_ticket` when the object it gets carries them (before, it ignored any key outside the v1 msg), and reads the object's own properties once: a msg object with those keys, or with its fields on a prototype, now gives a v2 msg or an error instead of a v1 msg. Both fail closed: v1 and the facilitator refuse a v2 msg.
+- `NearErc8004Client.getConfig` and `getVerifierConfig` take an optional verifier account and refuse any value outside `NEAR_ERC8004_ESCROW_VERIFIERS`. Called without arguments they read the same account as before; passed as a callback that forwards an argument (for example a query context), they now throw instead of ignoring it.
 
 ### Unchanged
 
