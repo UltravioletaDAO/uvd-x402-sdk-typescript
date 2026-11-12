@@ -34,11 +34,11 @@ const body = { x402Version: 2, paymentPayload, paymentRequirements };
 
 The returned envelope has `x402Version: 2`, `scheme: 'escrow'`, the exact `near:mainnet` or `near:testnet` network and `payload.signedDelegateAction` (base64 Borsh). The current facilitator accepts it in `paymentPayload` together with `paymentRequirements` above. For a canonical x402 v2 `PAYMENT-SIGNATURE` to a resource server, wrap its inner payload in `{x402Version: 2, accepted: paymentRequirements, payload: paymentPayload.payload}` and base64-encode the JSON (include `resource` if required by that server).
 
-The delegate targets native USDC with one `ft_transfer_call` to the escrow's `receiver_id`. Deposit is one yocto; gas defaults to 100 TGas and must be 38..100 TGas. `buildEscrowAuthorizationDelegate` and `validateEscrowAuthorizationDelegate` expose those checks. The SDK signs only for the Arras deployments listed in `NEAR_ESCROW_CONTRACTS` and refuses any other `escrowContract` before calling the signer, for the authorization and for every lifecycle call: a signed delegate can be relayed by anyone, so a server must not be able to point it at its own account. Mainnet registers only [`v1.arras-escrow.near`](https://nearblocks.io/address/v1.arras-escrow.near); testnet registers only `arras-v1b-1101.testnet`.
+The delegate targets native USDC with one `ft_transfer_call` to the escrow's `receiver_id`. Deposit is one yocto; gas defaults to 100 TGas and must be 38..100 TGas. `buildEscrowAuthorizationDelegate` and `validateEscrowAuthorizationDelegate` expose those checks. The SDK signs only for the Arras deployments listed in `NEAR_ESCROW_CONTRACTS` and refuses any other `escrowContract` before calling the signer, for the authorization and for every lifecycle call: a signed delegate can be relayed by anyone, so a server must not be able to point it at its own account. Mainnet registers [`v1.arras-escrow.near`](https://nearblocks.io/address/v1.arras-escrow.near) and, since 2.115.0, [`v2.arras-escrow.near`](https://nearblocks.io/address/v2.arras-escrow.near) (Arras v2, also listed in `NEAR_ESCROW_V2_CONTRACTS`); testnet registers only `arras-v1b-1101.testnet`.
 
 As of 2026-11-08, [the production facilitator's `/supported`](https://facilitator.ultravioletadao.xyz/supported) advertises `scheme: 'escrow'` for `near` (x402 v1) and `near:mainnet` (x402 v2), with `extra.nearEscrow.contracts: ['v1.arras-escrow.near']` and `operatorIds: ['em']`. Testnet advertises `arras-v1b-1101.testnet` with the same operator. Here v1/v2 are x402 wire versions; both relay Arras v1. Select the operator from trusted configuration checked against `/supported`.
 
-As of 2026-11-08, Arras v2 (`v2.arras-escrow.near`) is [deployed on mainnet since 2026-11-08](https://nearblocks.io/address/v2.arras-escrow.near), but the SDK does not register or use it yet. Execution Market still uses Arras v1, and the facilitator does not advertise Arras v2.
+Arras v2 (`v2.arras-escrow.near`) is deployed on mainnet since 2026-11-08. From 2.115.0 the SDK signs for it, with the operator ticket and the dispute deadline: see [Arras v2](#arras-v2-operator-ticket-and-dispute-deadline-21150) below. The facilitator does not relay Arras v2 yet.
 
 Supply the exact signing key's next nonce and a recent block height with short expiry. The SDK refuses `nonce >= maxBlockHeight * 10^6`, which NEAR always rejects (`DelegateActionNonceTooLarge`); checking expiry against the current height is left to the facilitator, which has RPC. The SDK does not allocate nonces; concurrent calls require unique increasing nonces. No helper contacts RPC. Register escrow/recipients in USDC and pay Arras NEP-145 storage or arrange operator sponsorship first. Authorization requires a full-access key for the one-yocto transfer. Require the facilitator's confirmed escrow result and expected `arras` event/payment ID: a successful transaction alone does not prove funds were locked. Release credits claimable balances; withdrawal is separate.
 
@@ -59,7 +59,42 @@ const payout = await withdrawFor(nextCapturerContext, msg.receiver);
 // Also withdrawFor another fresh context, feeRecipient, to pay the fee leg.
 ```
 
-`AuthorizeFromBudget` is only an interface with `authorizeFromBudget(request: unknown): Promise<NearEscrowPayment>`. No budget signing format is implemented until Arras v2 supplies frozen vectors and the facilitator enables it. That adapter must use a function-call key limited to that method/contract and zero deposit.
+`AuthorizeFromBudget` is only an interface with `authorizeFromBudget(request: unknown): Promise<NearEscrowPayment>`. The SDK does not sign Arras v2 budget deposits or `authorize_from_budget` yet, and the facilitator does not relay them. That adapter must use a function-call key limited to that method/contract and zero deposit. A budget payment's ID is `computePaymentId` with `payer` set to the budget owner (vector VB-1), and its operator ticket has that payment as subject.
+
+## Arras v2: operator ticket and dispute deadline (2.115.0)
+
+`v2.arras-escrow.near` runs Arras v2 (arras `ddc5121`, keyless). For what this SDK signs, v2 differs from v1 only in the authorize msg; the five lifecycle methods have the same names and arguments (the SDK keeps their gas limits), and `parseArrasEvents` reads v2's v1-shaped events (v2-only events, such as `dispute_opened`, are skipped). The bytes are the only part that matches v1: v2 adds disputes. Until `dispute_deadline` (absent, `reclaim_after`), the payer or the receiver can open a dispute that freezes the payment (release, refund and reclaim answer E22), and the operator's arbiter splits it with `resolve_dispute`. Those funds move with `dispute_resolved`, which `parseArrasEvents` skips, so an indexer that reconciles amounts with it undercounts v2 payments. The rules below come from arras `contracts/escrow-v2/src` at `9f8332f`; `src/providers/near/vectors/arras-v2.json` is that commit's `docs/vectores.json`, byte for byte.
+
+- `dispute_deadline` (optional, nanoseconds): the last instant, exclusive, to open a dispute; absent, v2 uses `reclaim_after`. `buildEscrowMsg` refuses it outside `release_deadline <= dispute_deadline <= reclaim_after` (the contract's E67 and E11).
+- `operator_ticket` (optional): `{expiry, sig}`. **v2 requires it whenever the operator has a `ticket_pubkey`** (read `get_operator(operator_id).ticket_pubkey`): without a ticket the transfer comes back with `arras:rechazo:E53_TICKET_INVALIDO`, an expired one (`block_timestamp >= expiry`) with `E54_TICKET_VENCIDO`, and a ticket sent to an operator without a key is also E53. As of 2026-11-11, operator `em` on `v2.arras-escrow.near` has a ticket key. The contract owner can remove it (`update_operator` with `{"quitar_ticket_pubkey": true}`); from then on, payments to `em` in v2 must omit `operator_ticket`.
+- Neither field enters the payment ID: `computePaymentId` is unchanged. The canonical msg is the v1 msg followed by `dispute_deadline` and then `operator_ticket`, each only when present, so a v1 msg is a valid v2 msg.
+- The SDK signs a msg carrying either field only toward a contract in `NEAR_ESCROW_V2_CONTRACTS`: v1 refuses unknown msg fields (E03) and hands the transfer back.
+- Rating: a payment is rated with the ERC-8004 verifier of the escrow it was paid in, `nearErc8004Verifier(network, escrowContract)` ([NEAR ERC-8004](near-erc8004.md)). `v2.arras-escrow.near` has no verifier yet, so that call throws for v2 payments until a release registers one.
+
+The operator signs the ticket with its own key, injected: a key in memory through `createNearLocalSigner(seed)`, or any external signer `{ publicKey, sign(message) }` that Ed25519-signs the exact bytes. The SDK never reads a key from a file or the environment. The contract account must come from the operator's own configuration, never from the request: it is what keeps a ticket from serving in another contract that trusts the same key.
+
+```js
+import { computePaymentId, signOperatorTicket, signEscrowAuthorization, NEAR_ESCROW_TOKENS } from 'uvd-x402-sdk/near';
+
+const escrowContract = 'v2.arras-escrow.near';
+const token = NEAR_ESCROW_TOKENS['near:mainnet'];
+const msg = { operator_id: 'em', receiver: workerAccount, release_deadline, reclaim_after,
+  dispute_deadline: release_deadline, fee_bps_max: 1300, terms_hash, salt };
+
+// Operator (Execution Market): a short-lived ticket for this payment ID in this contract.
+const paymentId = computePaymentId({ ...msg, token, payer: payerAccount, amount });
+const now = BigInt(Date.now()) * 1_000_000n;
+const operator_ticket = await signOperatorTicket({ signer: emTicketSigner, contract: escrowContract,
+  subject: { payment: { payment_id: paymentId } }, expiry: now + 10n * 60n * 1_000_000_000n });
+
+// Payer: the same terms, with the ticket, to the v2 escrow.
+const payment = await signEscrowAuthorization({ network: 'near:mainnet', signer: payerSigner, senderId: payerAccount,
+  escrowContract, token, amount, msg: { ...msg, operator_ticket }, nonce, maxBlockHeight });
+```
+
+`signOperatorTicket({signer, contract, subject, expiry, now?})` builds `borsh("arras:v2:operator_ticket", contract, subject, expiry)`, refuses a ticket already expired at `now` (default: the wall clock) before signing, checks the signature against the signer's public key and returns `{expiry, sig}`: expiry as a decimal string, sig as canonical base58 of the 64 bytes. The subject is `{payment: {payment_id}}` for a payment, or `{budget: {operator_id, owner, agent}}` for budget deposits of that pair (valid for any number of deposits until expiry, so keep it short). `operatorTicketMessage` returns the signed bytes, the same as the contract views `ticket_message_payment` and `ticket_message_budget`. `checkOperatorTicket({ticketPubkey, contract, subject, ticket, now?})` answers as the contract's `check_ticket` for a well-formed ticket: `null` if it passes, else `E53_TICKET_INVALIDO` or `E54_TICKET_VENCIDO` (it is stricter on form: a ticket that is not exactly `{expiry, sig}` with a canonical decimal expiry is E53 here, E03 or a non-canonical parse in the contract); `verifyOperatorTicket` is its boolean for an operator that has a key. `parseTicketPubkey` reads the `ed25519:<base58>` form `get_operator` returns.
+
+The facilitator does not relay Arras v2 yet: as of x402-rs `665585e`, production serves `v1.arras-escrow.near` and `arras-v1b-1101.testnet` only, and its msg parser refuses unknown fields, so a msg with `operator_ticket` is refused before relay. A v2 authorization signed by this SDK needs a facilitator that serves `v2.arras-escrow.near` and reads the v2 msg.
 
 After building, run `node examples/near-escrow-agent.mjs` for deterministic offline requests with a deliberately public test seed. It submits nothing. No development key was available in this Windows worktree, so live testnet transactions were not run. To exercise testnet, supply development payer/capturer keys locally and fresh nonce/height/deadlines/salt, then verify/settle authorize → release → worker and fee withdrawals, and a second authorize → refund → payer withdrawal. Check `get_payment`, `get_claimable`, USDC balances and `arras` events after each transaction. Arras' `scripts/testnet.sh` documents setup.
 

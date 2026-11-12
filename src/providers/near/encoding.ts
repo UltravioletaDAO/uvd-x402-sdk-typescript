@@ -16,6 +16,9 @@ export function uint(value: NearUnsigned, bits: number, name: string): bigint {
   if (n < 0n || n >= 1n << BigInt(bits)) throw new Error(`${name}: out of u${bits} range`);
   return n;
 }
+export function operatorId(value: string, name: string): void {
+  if (typeof value !== 'string' || !fullMatch(/^[a-z0-9_-]{1,32}$/, value)) throw new Error(`${name}: expected [a-z0-9_-]{1,32}`);
+}
 export function account(value: string, name: string): void {
   if (typeof value !== 'string' || value.length < 2 || value.length > 64 ||
       !fullMatch(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/, value)) throw new Error(`${name}: invalid NEAR account`);

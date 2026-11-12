@@ -149,7 +149,8 @@ describe('payer-funded NEP-145 transactions', () => {
     expect(() => buildArrasStorageDeposit({ ...storage, escrowContract })).toThrow();
   });
   it.each([
-    ['near:mainnet', 'v2.arras-escrow.near'], ['near:mainnet', 'evil-sink.near'],
+    ['near:mainnet', 'V2.ARRAS-ESCROW.NEAR'], ['near:mainnet', 'v2.arras-escrow.near '], ['near:mainnet', 'v3.arras-escrow.near'],
+    ['near:mainnet', 'evil-sink.near'],
     ['near:mainnet', 'arras-v1b-1101.testnet'], ['near:testnet', 'v1.arras-escrow.near'],
     ['near:testnet', 'v2.arras-escrow.near'], ['near:testnet', 'evil-sink.testnet'],
     ['near:mainnet', 'V1.ARRAS-ESCROW.NEAR'], ['near:mainnet', ' v1.arras-escrow.near'],
@@ -174,6 +175,9 @@ describe('payer-funded NEP-145 transactions', () => {
   });
   it('accepts the registered mainnet v1 deployment', () => {
     expect(buildArrasStorageDeposit({ ...storage, network: 'near:mainnet', escrowContract: 'v1.arras-escrow.near' }).receiverId).toBe('v1.arras-escrow.near');
+  });
+  it('accepts the registered mainnet v2 deployment (NEP-145 storage is the same method in v2)', () => {
+    expect(buildArrasStorageDeposit({ ...storage, network: 'near:mainnet', escrowContract: 'v2.arras-escrow.near' }).receiverId).toBe('v2.arras-escrow.near');
   });
 });
 
