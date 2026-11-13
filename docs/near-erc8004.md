@@ -13,8 +13,8 @@ not exposed.
 `NEAR_ERC8004_CONTRACTS` freezes these targets and their `agentRegistry`
 identifiers, for example `near:mainnet:identity-registry.erc-8004.near`.
 Mainnet verification reads `v1.arras-escrow.near`; testnet reads
-`arras-v1b-1101.testnet`. This release's proof helpers accept the listed Arras
-verifier for the selected network.
+`arras-v1b-1101.testnet`. The proof helpers accept every verifier of
+`NEAR_ERC8004_ESCROW_VERIFIERS` (below) for the selected network.
 
 Each verifier reads one escrow, so a payment is rated with the verifier of the
 escrow it was paid in. `NEAR_ERC8004_ESCROW_VERIFIERS` has one row per Arras
@@ -24,18 +24,31 @@ returns that row's verifier:
 | Network | Escrow | Verifier |
 | --- | --- | --- |
 | `near:mainnet` | `v1.arras-escrow.near` | `erc8004-verifier.arras-escrow.near` |
-| `near:mainnet` | `v2.arras-escrow.near` | none yet (`null`) |
+| `near:mainnet` | `v2.arras-escrow.near` | `payment-proof.arras-escrow.near` |
 | `near:testnet` | `arras-v1b-1101.testnet` | `erc8004-verifier.arras-dev.testnet` |
 
-Arras v2 has no deployed verifier yet: `nearErc8004Verifier` throws for
-`v2.arras-escrow.near`, so the SDK hands out no verifier for v2 payments. A
-release fills the v2 row once its verifier account is deployed on mainnet.
+The Arras v2 verifier, `payment-proof.arras-escrow.near`, is keyless on mainnet
+since 2026-11-13; 2.116.0 registers it. Its `get_config` has the same fields as
+v1's (`contract` is `erc8004-arras-verifier` in both) and reads
+`v2.arras-escrow.near`. It fails with one code more, `ERC8004_ARV_E16`: money
+released by a dispute that expired in the receiver's favour is not a proof.
+Through `give_feedback_with_proof` that is a callback rejection
+(`VerifierFailed`), like any other failed proof. A verifier is trusted by its
+account in this table, never by what its `get_config` says. A row that is
+`null` (an escrow whose verifier is not deployed yet) makes
+`nearErc8004Verifier` throw, and the SDK hands out no verifier for its payments.
 
-The proof helpers accept any verifier of the table for the network: they cannot
-see which escrow a proof was paid in, so pick the verifier with
-`nearErc8004Verifier(network, escrow)` from the escrow the task was paid in. A
-v2 payment sent to the v1 verifier is rejected on chain (the v1 verifier reads
-v1 only): a wasted transaction.
+A payment ID does not say which escrow it was paid in, so the proof helpers
+accept any verifier of the table for the network. Pass the payment's escrow as
+`escrow` to `buildNearErc8004GiveFeedbackWithProof`,
+`buildNearErc8004VerifyFeedbackProof`, `buildNearErc8004Transaction` or
+`signNearErc8004Transaction`, and the call is refused before signing unless it
+goes through that escrow's verifier (for `verify_feedback_proof`, the verifier
+of its quoted config). `escrow` is not sent on chain, and any other call
+refuses it. Without it, pick the verifier with
+`nearErc8004Verifier(network, escrow)`: a payment sent to the other escrow's
+verifier is answered `E12` (no such payment), the registry returns the deposit,
+and the rating is lost without an error.
 
 `client.getConfig(verifier)` and `client.getVerifierConfig(verifier)` read the
 `get_config` of that verifier (default: `NEAR_ERC8004_CONTRACTS[network].verifier`),
@@ -97,10 +110,10 @@ import {
   parseNearErc8004GiveFeedbackOutcome,
 } from 'uvd-x402-sdk/near';
 
-// The verifier of the escrow the payment was made in: throws for v2 until its verifier is registered.
+// The verifier of the escrow the payment was made in; `escrow` refuses any other one before signing.
 const verifier = nearErc8004Verifier(network, paymentEscrowContract);
 const tx = buildNearErc8004GiveFeedbackWithProof({
-  network, config: await client.getConfig(), signerId: payerAccount,
+  network, config: await client.getConfig(), signerId: payerAccount, escrow: paymentEscrowContract,
   agent_id: workerAgentId, value: '90', value_decimals: 0,
   tag1: 'starred', verifier, proof: releasedPaymentId,
 });
@@ -145,6 +158,10 @@ const detail = await Promise.all(refs.map(async ref => ({
   proof: await client.readFeedbackProof(ref),
 })));
 ```
+
+Each call reads one verifier: an agent rated for payments of both Arras escrows
+has one summary per verifier, so add the two (same client filter and `context`)
+or show them apart.
 
 The summary excludes revoked feedback. The detail list includes revoked entries,
 so read `is_revoked`. `summary_value_decimals` scales the signed summary value;

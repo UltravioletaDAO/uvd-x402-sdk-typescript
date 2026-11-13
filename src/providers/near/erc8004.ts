@@ -17,7 +17,7 @@ export const NEAR_ERC8004_CONTRACTS = Object.freeze({
 export { NEAR_ERC8004_ESCROW_VERIFIERS };
 /**
  * The ERC-8004 verifier for payments made in `escrow`, an Arras contract of the network: rate each task with the verifier
- * of the escrow it was paid in. Throws for an escrow with no registered verifier yet (Arras v2 today).
+ * of the escrow it was paid in. Throws for an unregistered escrow, or one with no registered verifier yet.
  */
 export function nearErc8004Verifier(network: NearErc8004Network, escrow: string): string {
   targets(network);
@@ -167,6 +167,12 @@ export interface NearErc8004BuildOptions {
   deposit?: string; gas?: string;
   /** Clock in nanoseconds. Defaults to Date.now() * 1e6; rechecked when signing. */
   nowNs?: string;
+  /**
+   * The Arras escrow the proof's payment was made in; give_feedback_with_proof and verify_feedback_proof only. Given,
+   * the call must go through that escrow's verifier (`nearErc8004Verifier`): the other one answers E12 and the rating
+   * is lost without an error. Omitted: any verifier of the network, as before.
+   */
+  escrow?: string;
 }
 export interface NearErc8004Transaction {
   signerId: string; receiverId: string;
@@ -194,6 +200,12 @@ export function buildNearErc8004Transaction<M extends NearErc8004Method>(method:
   if (method === 'give_feedback_with_proof') {
     // This release rates with the registered verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS).
     if (!ratingVerifier(o.network, args.verifier)) throw new Error('Verifier is not registered for network');
+  }
+  if (o.escrow !== undefined) {
+    if (method !== 'give_feedback_with_proof' && method !== 'verify_feedback_proof') throw new Error('escrow applies only to payment-proof calls');
+    // The verifier this call goes through: the argument, or the one of the escrow its quoted config reads.
+    const through = method === 'give_feedback_with_proof' ? args.verifier : escrowVerifier(o.network, o.config.verifier.escrow);
+    if (through !== nearErc8004Verifier(o.network, o.escrow)) throw new Error("Verifier is not the one of the payment's escrow");
   }
   const c = o.config;
   let minimum = 1n, recommended = 1n, cap = 1n, minGas = 1n, gasDefault = 30n * TGAS;
@@ -230,8 +242,8 @@ export function buildNearErc8004Transaction<M extends NearErc8004Method>(method:
 }
 function builder<M extends NearErc8004Method>(method: M) {
   return (options: NearErc8004BuildOptions & NearErc8004MethodArgs[M]): NearErc8004Transaction => {
-    const { network, signerId, config, deposit, gas, nowNs, ...args } = options;
-    return buildNearErc8004Transaction(method, { network, signerId, config, deposit, gas, nowNs }, args as unknown as NearErc8004MethodArgs[M]);
+    const { network, signerId, config, deposit, gas, nowNs, escrow, ...args } = options;
+    return buildNearErc8004Transaction(method, { network, signerId, config, deposit, gas, nowNs, escrow }, args as unknown as NearErc8004MethodArgs[M]);
   };
 }
 export const buildNearErc8004Register = builder('register');
@@ -252,16 +264,19 @@ export const buildNearErc8004AppendResponse = builder('append_response');
 /** Async cross-contract call: costs gas, attaches zero deposit; it is not a query view. */
 export const buildNearErc8004VerifyFeedbackProof = builder('verify_feedback_proof');
 
-/** FullAccess key, next nonce and recent block hash are caller responsibilities. Does not broadcast. */
+/**
+ * FullAccess key, next nonce and recent block hash are caller responsibilities. Does not broadcast. `escrow`: as in
+ * the builders, the payment's escrow, checked again against the descriptor's verifier before the signer is reached.
+ */
 export async function signNearErc8004Transaction(descriptor: NearErc8004Transaction, signer: NearLocalSigner,
-  options: { network: NearErc8004Network; config: NearErc8004Config; nonce: NearUnsigned; blockHash: string; nowNs?: string }): Promise<string> {
+  options: { network: NearErc8004Network; config: NearErc8004Config; nonce: NearUnsigned; blockHash: string; nowNs?: string; escrow?: string }): Promise<string> {
   if (!s.object(descriptor) || !Array.isArray(descriptor.actions) || descriptor.actions.length !== 1) throw new Error('Expected one ERC-8004 action');
   const a = descriptor.actions[0];
   if (!s.object(a) || a.type !== 'FunctionCall' || !s.object(a.params)) throw new Error('Expected FunctionCall');
   const p = a.params;
   s.check(p.deposit, s.u128, 'descriptor deposit'); s.check(p.gas, s.u64, 'descriptor gas');
   const d = buildNearErc8004Transaction(p.methodName, { network: options.network, config: options.config,
-    signerId: descriptor.signerId, deposit: p.deposit, gas: p.gas, nowNs: options.nowNs }, p.args as never);
+    signerId: descriptor.signerId, deposit: p.deposit, gas: p.gas, nowNs: options.nowNs, escrow: options.escrow }, p.args as never);
   if (descriptor.receiverId !== d.receiverId) throw new Error('Descriptor receiver/network mismatch');
   const n = uint(options.nonce, 64, 'nonce'); if (n === 0n) throw new Error('nonce must be positive');
   const hash = unbase58(options.blockHash); if (hash.length !== 32) throw new Error('Expected 32-byte block hash');

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [2.116.0] - 2026-11-13
+
+### Added
+
+- NEAR ERC-8004: the verifier of Arras v2. `NEAR_ERC8004_ESCROW_VERIFIERS['near:mainnet']['v2.arras-escrow.near']` is `payment-proof.arras-escrow.near` (before, `null`): keyless on mainnet since 2026-11-13, its `get_config` reads `v2.arras-escrow.near` with the same fields and gas as v1's verifier. So `nearErc8004Verifier('near:mainnet', 'v2.arras-escrow.near')` returns it, and `give_feedback_with_proof`, `getConfig(verifier)` / `getVerifierConfig(verifier)`, `verify_feedback_proof` (with a config that reads v2), the views that take a `verifier` (`get_verified_summary`, `list_verified_feedback`, `get_proof_feedback`, `is_proof_pending`) and `parseNearErc8004GiveFeedbackOutcome` accept it. Its `get_config` is still bound to the account it came from: `payment-proof.arras-escrow.near` answering another escrow, or v1's verifier answering v2's, is refused. Testnet is unchanged.
+- An optional `escrow` for the payment-proof calls: the Arras escrow the proof's payment was made in. `buildNearErc8004GiveFeedbackWithProof`, `buildNearErc8004VerifyFeedbackProof`, `buildNearErc8004Transaction` and `signNearErc8004Transaction` refuse, before the signer is reached, a call that does not go through that escrow's verifier (`Verifier is not the one of the payment's escrow`): for `give_feedback_with_proof` its `verifier` argument, for `verify_feedback_proof` the verifier of its quoted config. That is the crossed rating, a v1 payment through v2's verifier or the other way around, which the other verifier answers with `E12` and the registry drops without an error. An escrow that is not registered, or has no verifier, is refused as `nearErc8004Verifier` refuses it; `escrow` on any other call is refused; it is never sent on chain. Without it, the calls accept any verifier of the network, as before.
+- Tests for `ERC8004_ARV_E16`, the code v2's verifier adds (money released by a dispute that expired in the receiver's favour is not a proof): through `give_feedback_with_proof` it is a `rejected` outcome with `VerifierFailed`, and a transaction failure that carries it is `failed` with code `ERC8004_ARV_E16`. The outcome parser already read any two-digit `ERC8004_ARV_` code; nothing changed there.
+
+### Unchanged
+
+- Arras v1: its row, `NEAR_ERC8004_CONTRACTS` (one verifier per network, v1's) and every descriptor built without `escrow`. With `escrow`, a correct pair builds the same descriptor as without it.
+- `src/providers/near/vectors/near-erc8004.json`, the fixture shared byte for byte with the Python SDK: recording a v2 view needs `scripts/record-near-erc8004-vectors.mjs --record` against mainnet. The v2 `get_config` and smoke-test payment the tests use are constants of `erc8004-v2-verifier.test.ts`.
+
 ## [2.115.0] - 2026-11-11
 
 ### Added
