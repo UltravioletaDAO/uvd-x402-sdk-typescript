@@ -5,9 +5,10 @@ import type { NearEscrowNetwork } from './escrow';
  * The ERC-8004 verifier that rates the payments of each registered Arras escrow, one row per contract of
  * NEAR_ESCROW_CONTRACTS: a verifier reads one escrow. null: no verifier is registered for that escrow yet, and rating
  * its payments is refused (fail closed) rather than sent to a verifier that reads another contract. A row is filled in
- * a release only after its verifier account is deployed on chain.
+ * a release only after its verifier account is deployed on chain: `payment-proof.arras-escrow.near` (Arras v2) is
+ * keyless since 2026-11-13 and its `get_config` reads `v2.arras-escrow.near`.
  */
 export const NEAR_ERC8004_ESCROW_VERIFIERS: Readonly<Record<NearEscrowNetwork, Readonly<Record<string, string | null>>>> = Object.freeze({
-  'near:mainnet': Object.freeze({ 'v1.arras-escrow.near': 'erc8004-verifier.arras-escrow.near', 'v2.arras-escrow.near': null }),
+  'near:mainnet': Object.freeze({ 'v1.arras-escrow.near': 'erc8004-verifier.arras-escrow.near', 'v2.arras-escrow.near': 'payment-proof.arras-escrow.near' }),
   'near:testnet': Object.freeze({ 'arras-v1b-1101.testnet': 'erc8004-verifier.arras-dev.testnet' }),
 });

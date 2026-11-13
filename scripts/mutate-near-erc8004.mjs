@@ -1,13 +1,13 @@
 /** Reproducible guard mutations. Clean tree required; each test gets a 120s timeout. */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-const main = 'src/providers/near/erc8004.ts', schema = 'src/providers/near/erc8004-schema.ts';
+const main = 'src/providers/near/erc8004.ts', schema = 'src/providers/near/erc8004-schema.ts', verifiers = 'src/providers/near/erc8004-verifiers.ts';
 function git(...args) {
   const p = spawnSync('git', args, { encoding: 'utf8', timeout: 30000 });
   if (p.status !== 0) throw new Error(p.stderr || 'git failed'); return p.stdout;
 }
 if (git('status','--porcelain').trim()) throw new Error('Commit changes before mutation testing');
-const source = new Map([main,schema].map(f => [f,readFileSync(f,'utf8').replace(/\r\n/g,'\n')]));
+const source = new Map([main,schema,verifiers].map(f => [f,readFileSync(f,'utf8').replace(/\r\n/g,'\n')]));
 const mutations = [];
 function add(label,before,after,file=main,id='M'+String(mutations.length+1).padStart(2,'0')) {
   if(source.get(file).split(before).length !== 2) throw new Error('Mutation must match once: '+label);
@@ -129,6 +129,19 @@ add('legacy outcome without finality', "!Object.hasOwn(outcome, 'final_execution
 add('URI storage bytes', 'BigInt(s.byteLength(args.new_uri as string))', '0n');
 add('metadata decoded bytes', 's.unbase64(args.metadata_value as string).length', '(args.metadata_value as string).length');
 add('storage safety yocto', 'recommended = 1n + byte * 256n', 'recommended = byte * 256n');
+// 2.116.0: the v2 row, and the payment's escrow of the payment-proof calls.
+add('v2 row registered', "'v2.arras-escrow.near': 'payment-proof.arras-escrow.near'", "'v2.arras-escrow.near': null", verifiers);
+add('v2 row is not v1 verifier', "'v2.arras-escrow.near': 'payment-proof.arras-escrow.near'", "'v2.arras-escrow.near': 'erc8004-verifier.arras-escrow.near'", verifiers);
+add('payment escrow checked', 'if (o.escrow !== undefined) {', 'if (false) {');
+add('empty or null payment escrow is not left out', 'if (o.escrow !== undefined) {', 'if (o.escrow) {');
+add('generic builder reads an inherited escrow', 'const o = { ...options, escrow: options.escrow }', 'const o = { ...options }');
+add('payment escrow only on proof calls', "if (method !== 'give_feedback_with_proof' && method !== 'verify_feedback_proof') throw new Error('escrow applies only to payment-proof calls');", '');
+add('rating goes through its verifier argument', "method === 'give_feedback_with_proof' ? args.verifier : escrowVerifier(o.network, o.config.verifier.escrow)", 'escrowVerifier(o.network, o.config.verifier.escrow)');
+add('precheck goes through its config verifier', "method === 'give_feedback_with_proof' ? args.verifier : escrowVerifier(o.network, o.config.verifier.escrow)", 'args.verifier');
+add('crossed verifier refused', 'if (through !== nearErc8004Verifier(o.network, o.escrow))', 'if (false)');
+add('payment escrow registered with a verifier', 'through !== nearErc8004Verifier(o.network, o.escrow)', 'through !== escrowVerifier(o.network, o.escrow)');
+add('builders forward escrow', 'deposit, gas, nowNs, escrow }, args', 'deposit, gas, nowNs }, args');
+add('signing forwards escrow', 'nowNs: options.nowNs, escrow: options.escrow }', 'nowNs: options.nowNs }');
 
 // Preserve the external review IDs so its formerly surviving mutants can be replayed verbatim.
 const review = (id, label, before, after) => add(label, before, after, main, id);
@@ -155,7 +168,8 @@ review('R20', 'transfer-call default 50 to 51 TGas', 'gasDefault = 50n * TGAS', 
 const chosen = process.argv.slice(2);
 const selected = mutations.filter(m=>!chosen.length||chosen.includes(m.id));
 const env={...process.env,HTTP_PROXY:'http://127.0.0.1:9',HTTPS_PROXY:'http://127.0.0.1:9',NO_PROXY:'127.0.0.1,localhost'};
-const test=()=>spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run','src/providers/near/erc8004.test.ts','src/providers/near/erc8004-escrow-verifiers.test.ts'],{encoding:'utf8',timeout:120000,env});
+const test=()=>spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run','src/providers/near/erc8004.test.ts','src/providers/near/erc8004-escrow-verifiers.test.ts',
+  'src/providers/near/erc8004-v2-verifier.test.ts','src/providers/near/erc8004-pending-verifier.test.ts'],{encoding:'utf8',timeout:120000,env});
 const baseline=test();if(baseline.status!==0)throw new Error('Unmutated tests failed: '+baseline.stdout+baseline.stderr);
 const failures=[];
 for(const m of selected){

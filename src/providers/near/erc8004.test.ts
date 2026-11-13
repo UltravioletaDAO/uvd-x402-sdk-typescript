@@ -694,16 +694,16 @@ describe('the verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS)', ()
       const t = r.NEAR_ERC8004_CONTRACTS[network];
       expect(r.NEAR_ERC8004_ESCROW_VERIFIERS[network][t.escrow]).toBe(t.verifier);
     }
-    // Filling the v2 row is the patch that turns on rating v2 payments, once that verifier is deployed.
+    // The v2 row (2.116.0): payment-proof.arras-escrow.near, keyless on mainnet since 2026-11-13.
     expect(r.NEAR_ERC8004_ESCROW_VERIFIERS).toEqual({
-      'near:mainnet': { 'v1.arras-escrow.near': 'erc8004-verifier.arras-escrow.near', 'v2.arras-escrow.near': null },
+      'near:mainnet': { 'v1.arras-escrow.near': 'erc8004-verifier.arras-escrow.near', 'v2.arras-escrow.near': 'payment-proof.arras-escrow.near' },
       'near:testnet': { 'arras-v1b-1101.testnet': 'erc8004-verifier.arras-dev.testnet' },
     });
     const rows = r.NEAR_ERC8004_ESCROW_VERIFIERS as Record<string, Record<string, string | null>>;
     expect(() => { rows['near:mainnet']['v2.arras-escrow.near'] = 'evil-verifier.near'; }).toThrow(TypeError);
     expect(() => { rows['near:testnet']['v2.arras-escrow.near'] = 'evil-verifier.near'; }).toThrow(TypeError);
     expect(() => { rows['near:mainnet'] = {}; }).toThrow(TypeError);
-    expect(rows['near:mainnet']['v2.arras-escrow.near']).toBeNull();
+    expect(rows['near:mainnet']['v2.arras-escrow.near']).toBe('payment-proof.arras-escrow.near');
   });
   it('rates each payment with the verifier of the escrow it was paid in, and fails closed without one', () => {
     for (const network of networks) {
@@ -719,7 +719,7 @@ describe('the verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS)', ()
     }
     expect(r.nearErc8004Verifier('near:mainnet', 'v1.arras-escrow.near')).toBe('erc8004-verifier.arras-escrow.near');
     expect(r.nearErc8004Verifier('near:testnet', 'arras-v1b-1101.testnet')).toBe('erc8004-verifier.arras-dev.testnet');
-    expect(() => r.nearErc8004Verifier('near:mainnet', 'v2.arras-escrow.near')).toThrow(/its payments cannot be rated/);
+    expect(r.nearErc8004Verifier('near:mainnet', 'v2.arras-escrow.near')).toBe('payment-proof.arras-escrow.near');
   });
   it.each([
     ['near:testnet', 'v1.arras-escrow.near'], ['near:testnet', 'v2.arras-escrow.near'], ['near:mainnet', 'arras-v1b-1101.testnet'],
@@ -734,9 +734,9 @@ describe('the verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS)', ()
   it('refuses an unknown network', () => {
     expect(() => r.nearErc8004Verifier('near:devnet' as r.NearErc8004Network, 'v1.arras-escrow.near')).toThrow('Unsupported NEAR ERC-8004 network');
   });
-  it('an unregistered v2 verifier account is refused in wallet calls, views, configs and outcomes', async () => {
-    // payment-proof.arras-escrow.near: the v2 verifier, not deployed yet, so its row is null.
-    for (const proposed of ['payment-proof.arras-escrow.near', 'erc8004-verifier-v2.arras-escrow.near']) {
+  it('an unregistered verifier account next to v2\'s is refused in wallet calls, views, configs and outcomes', async () => {
+    // Lookalikes of payment-proof.arras-escrow.near, the registered v2 verifier: only the account in the table counts.
+    for (const proposed of ['payment-proof2.arras-escrow.near', 'erc8004-verifier-v2.arras-escrow.near']) {
       for (const verifier of [proposed, 'v2.arras-escrow.near', null, 'null']) {
         expect(() => r.buildNearErc8004GiveFeedbackWithProof({ ...common(), ...feedback, verifier, proof: 'p' } as any)).toThrow();
       }
@@ -752,10 +752,10 @@ describe('the verifier of each Arras escrow (NEAR_ERC8004_ESCROW_VERIFIERS)', ()
       expect(() => r.parseNearErc8004GiveFeedbackOutcome(outcome, net)).toThrow('Verifier is not registered for network');
     }
   });
-  it('a verifier config that reads v2 is refused while v2 has no verifier: no quote, no verify_feedback_proof', async () => {
+  it('a verifier config that reads v2 quotes toward v2\'s verifier, and is refused from v1\'s account', async () => {
     const o = common(); o.config.verifier.escrow = 'v2.arras-escrow.near';
-    expect(() => r.buildNearErc8004VerifyFeedbackProof({ ...o, client: 'payer.near', proof: 'p' })).toThrow('Config contract binding mismatch');
-    expect(() => r.buildNearErc8004Register(o)).toThrow('Config contract binding mismatch');
+    expect(r.buildNearErc8004VerifyFeedbackProof({ ...o, client: 'payer.near', proof: 'p' }).receiverId).toBe('payment-proof.arras-escrow.near');
+    expect(r.buildNearErc8004Register(o).receiverId).toBe(targets.identity);
     const c = new r.NearErc8004Client({ network: net, rpc: async () => bytes({ ...config().verifier, escrow: 'v2.arras-escrow.near' }) });
     await expect(c.getVerifierConfig()).rejects.toThrow('Config contract binding mismatch');
   });

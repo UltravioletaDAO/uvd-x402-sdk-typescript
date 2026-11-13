@@ -3,8 +3,8 @@ import * as r from './erc8004';
 import fixture from './vectors/near-erc8004.json';
 
 /*
- * The state after a release fills the v2 row: the same SDK code, with the verifier table of this file. The account is
- * fictitious on purpose (no release depends on an undeployed verifier); the real row is filled only after it exists.
+ * The mechanism with a filled v2 row: the same SDK code, with the verifier table of this file. The account is
+ * fictitious on purpose, so these tests do not depend on the real row (erc8004-v2-verifier.test.ts pins that one).
  */
 vi.mock('./erc8004-verifiers', () => ({
   NEAR_ERC8004_ESCROW_VERIFIERS: Object.freeze({
