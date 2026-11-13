@@ -51,7 +51,7 @@ descriptor a server built that the client rebuilds before the wallet signs:
 take `escrow` from your own record of the payment. Without it, pick the verifier
 with `nearErc8004Verifier(network, escrow)`. A payment sent to the other
 escrow's verifier normally gets `E12` (that verifier does not know it): the
-outcome is `rejected` with `VerifierFailed`, the registry records nothing and
+outcome is `rejected` with `VerifierFailed`, the registry records no feedback and
 returns the deposit, and the gas is spent. Nothing on chain says the verifier
 was the wrong one.
 
@@ -171,7 +171,10 @@ but `summary_value` is an average, so the combined value is the average of the
 two weighted by `count`, after bringing both to the same
 `summary_value_decimals`. Each summary carries only the precision its
 `summary_value_decimals` gives it, so that combination can differ from the
-exact one, which comes from the individual feedback of `listVerifiedFeedback`.
+exact one. That one comes from the individual feedback of `listVerifiedFeedback`,
+which has no client, tag or `context` filter and lists revoked entries: apply the
+summary's filters yourself (`readFeedback`, `readFeedbackProof`) and skip the
+revoked ones.
 
 The summary excludes revoked feedback. The detail list includes revoked entries,
 so read `is_revoked`. `summary_value_decimals` scales the signed summary value;

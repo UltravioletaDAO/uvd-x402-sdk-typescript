@@ -169,8 +169,8 @@ export interface NearErc8004BuildOptions {
   nowNs?: string;
   /**
    * The Arras escrow the proof's payment was made in; give_feedback_with_proof and verify_feedback_proof only. Given,
-   * the call must go through that escrow's verifier (`nearErc8004Verifier`): the other one does not know the payment
-   * (E12), so the registry records nothing and returns the deposit. Omitted: any verifier of the network, as before.
+   * the call must go through that escrow's verifier (`nearErc8004Verifier`): the other one normally does not know the
+   * payment (E12), so the registry records no feedback and returns the deposit. Omitted: any verifier of the network.
    */
   escrow?: string;
 }
