@@ -5,16 +5,17 @@ contracts, with an Arras verifier for payment-backed feedback. The older Arras
 registry API remains available under its existing names. Validation Registry is
 not exposed.
 
-| Network | Identity | Reputation | Arras verifier |
+| Network | Identity | Reputation | Default Arras verifier (v1) |
 | --- | --- | --- | --- |
 | `near:mainnet` | `identity-registry.erc-8004.near` | `reputation-registry.erc-8004.near` | `erc8004-verifier.arras-escrow.near` |
 | `near:testnet` | `identity-registry.erc-8004.testnet` | `reputation-registry.erc-8004.testnet` | `erc8004-verifier.arras-dev.testnet` |
 
 `NEAR_ERC8004_CONTRACTS` freezes these targets and their `agentRegistry`
 identifiers, for example `near:mainnet:identity-registry.erc-8004.near`.
-Mainnet verification reads `v1.arras-escrow.near`; testnet reads
-`arras-v1b-1101.testnet`. The proof helpers accept every verifier of
-`NEAR_ERC8004_ESCROW_VERIFIERS` (below) for the selected network.
+That default verifier, the one `getConfig()` reads without an argument, reads
+`v1.arras-escrow.near` on mainnet and `arras-v1b-1101.testnet` on testnet. The
+proof helpers accept every verifier of `NEAR_ERC8004_ESCROW_VERIFIERS` (below)
+for the selected network, v2's included.
 
 Each verifier reads one escrow, so a payment is rated with the verifier of the
 escrow it was paid in. `NEAR_ERC8004_ESCROW_VERIFIERS` has one row per Arras
@@ -45,10 +46,14 @@ accept any verifier of the table for the network. Pass the payment's escrow as
 `signNearErc8004Transaction`, and the call is refused before signing unless it
 goes through that escrow's verifier (for `verify_feedback_proof`, the verifier
 of its quoted config). `escrow` is not sent on chain, and any other call
-refuses it. Without it, pick the verifier with
-`nearErc8004Verifier(network, escrow)`: a payment sent to the other escrow's
-verifier is answered `E12` (no such payment), the registry returns the deposit,
-and the rating is lost without an error.
+refuses it. It matters when the verifier comes from someone else, such as a
+descriptor a server built that the client rebuilds before the wallet signs:
+take `escrow` from your own record of the payment. Without it, pick the verifier
+with `nearErc8004Verifier(network, escrow)`. A payment sent to the other
+escrow's verifier normally gets `E12` (that verifier does not know it): the
+outcome is `rejected` with `VerifierFailed`, the registry records nothing and
+returns the deposit, and the gas is spent. Nothing on chain says the verifier
+was the wrong one.
 
 `client.getConfig(verifier)` and `client.getVerifierConfig(verifier)` read the
 `get_config` of that verifier (default: `NEAR_ERC8004_CONTRACTS[network].verifier`),
@@ -160,8 +165,13 @@ const detail = await Promise.all(refs.map(async ref => ({
 ```
 
 Each call reads one verifier: an agent rated for payments of both Arras escrows
-has one summary per verifier, so add the two (same client filter and `context`)
-or show them apart.
+has one summary per verifier (read both with the same client filter and
+`context`). Show them apart, or combine them: `count` and `weight_sum` add up,
+but `summary_value` is an average, so the combined value is the average of the
+two weighted by `count`, after bringing both to the same
+`summary_value_decimals`. Each summary carries only the precision its
+`summary_value_decimals` gives it, so that combination can differ from the
+exact one, which comes from the individual feedback of `listVerifiedFeedback`.
 
 The summary excludes revoked feedback. The detail list includes revoked entries,
 so read `is_revoked`. `summary_value_decimals` scales the signed summary value;

@@ -183,10 +183,23 @@ describe('Arras v2 rates through payment-proof.arras-escrow.near (2.116.0)', () 
       .actions[0].params.args.verifier).toBe(V2);
   });
 
+  it('the generic builder reads escrow from a prototype or an accessor, as the wrappers and the signer do', () => {
+    class Options {
+      network = net; signerId = 'payer.near'; config = config(); nowNs = nowNs;
+      get escrow() { return E1; }
+    }
+    const inherited = Object.assign(Object.create({ escrow: E1 }), options());
+    for (const o of [new Options(), inherited]) {
+      expect(() => r.buildNearErc8004Transaction('give_feedback_with_proof', o, { ...feedback, verifier: V2, proof: V2_PAYMENT })).toThrow(CROSSED);
+      expect(r.buildNearErc8004Transaction('give_feedback_with_proof', o, { ...feedback, verifier: V1, proof: V2_PAYMENT }).receiverId).toBe(t.reputation);
+    }
+  });
+
   it('E16 (expired dispute paid to the receiver): a rejected proof, never an unknown failure', () => {
     const panic = 'ERC8004_ARV_E16: el receiver cobro por una disputa vencida, sin capturer ni arbitro: no es prueba';
     // Through give_feedback_with_proof the registry logs its E45 rejection and returns the deposit; the verifier's
-    // receipt keeps the E16 panic.
+    // receipt keeps the E16 panic. The SDK reads it as every failed proof (VerifierFailed): it does not tell the
+    // verifier's codes apart there, so this pins the classification, not E16 against another code.
     const rejected = v2Rating();
     rejected.status = { SuccessValue: b64(null) };
     rejected.receipts_outcome = [
@@ -195,6 +208,7 @@ describe('Arras v2 rates through payment-proof.arras-escrow.near (2.116.0)', () 
     ];
     expect(r.parseNearErc8004GiveFeedbackOutcome(rejected, net)).toEqual({ status: 'rejected', code: r.NearErc8004RejectionCode.VerifierFailed });
     // A transaction failure that carries a verifier code is read with that code (null would be an unknown failure).
+    // The registry catches the verifier's failure, so a real rating does not fail this way; the shape pins the regex.
     const failed = v2Rating();
     failed.status = panicked(panic);
     expect(r.parseNearErc8004GiveFeedbackOutcome(failed, net)).toEqual({ status: 'failed', code: 'ERC8004_ARV_E16', message: JSON.stringify(failed.status.Failure) });

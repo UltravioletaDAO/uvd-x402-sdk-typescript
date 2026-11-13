@@ -169,8 +169,8 @@ export interface NearErc8004BuildOptions {
   nowNs?: string;
   /**
    * The Arras escrow the proof's payment was made in; give_feedback_with_proof and verify_feedback_proof only. Given,
-   * the call must go through that escrow's verifier (`nearErc8004Verifier`): the other one answers E12 and the rating
-   * is lost without an error. Omitted: any verifier of the network, as before.
+   * the call must go through that escrow's verifier (`nearErc8004Verifier`): the other one does not know the payment
+   * (E12), so the registry records nothing and returns the deposit. Omitted: any verifier of the network, as before.
    */
   escrow?: string;
 }
@@ -186,7 +186,8 @@ export function normalizeNearErc8004Uri(uri: string): string {
 }
 export function buildNearErc8004Transaction<M extends NearErc8004Method>(method: M, options: NearErc8004BuildOptions,
   input: NearErc8004MethodArgs[M]): NearErc8004Transaction {
-  const o = { ...options }, t = targets(o.network);
+  // escrow read like the wrappers and the signer read it, also from a prototype or an accessor: dropping it fails open.
+  const o = { ...options, escrow: options.escrow }, t = targets(o.network);
   o.config = JSON.parse(JSON.stringify(o.config)) as NearErc8004Config;
   validateConfig(o.config, o.network); account(o.signerId, 'signerId');
   if (!Object.hasOwn(methods, method)) throw new Error('Unknown ERC-8004 method');

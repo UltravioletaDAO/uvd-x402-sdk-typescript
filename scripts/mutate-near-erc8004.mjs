@@ -133,6 +133,8 @@ add('storage safety yocto', 'recommended = 1n + byte * 256n', 'recommended = byt
 add('v2 row registered', "'v2.arras-escrow.near': 'payment-proof.arras-escrow.near'", "'v2.arras-escrow.near': null", verifiers);
 add('v2 row is not v1 verifier', "'v2.arras-escrow.near': 'payment-proof.arras-escrow.near'", "'v2.arras-escrow.near': 'erc8004-verifier.arras-escrow.near'", verifiers);
 add('payment escrow checked', 'if (o.escrow !== undefined) {', 'if (false) {');
+add('empty or null payment escrow is not left out', 'if (o.escrow !== undefined) {', 'if (o.escrow) {');
+add('generic builder reads an inherited escrow', 'const o = { ...options, escrow: options.escrow }', 'const o = { ...options }');
 add('payment escrow only on proof calls', "if (method !== 'give_feedback_with_proof' && method !== 'verify_feedback_proof') throw new Error('escrow applies only to payment-proof calls');", '');
 add('rating goes through its verifier argument', "method === 'give_feedback_with_proof' ? args.verifier : escrowVerifier(o.network, o.config.verifier.escrow)", 'escrowVerifier(o.network, o.config.verifier.escrow)');
 add('precheck goes through its config verifier', "method === 'give_feedback_with_proof' ? args.verifier : escrowVerifier(o.network, o.config.verifier.escrow)", 'args.verifier');
